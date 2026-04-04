@@ -1,0 +1,56 @@
+name: Notify Deploy Telegram
+
+on:
+  workflow_run:
+    workflows:
+      - Deploy EC2
+    types:
+      - completed
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send Telegram notification
+        env:
+          BOT_TOKEN: ${{ secrets.DEPLOY_NOTIFY_TELEGRAM_BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.DEPLOY_NOTIFY_TELEGRAM_CHAT_ID }}
+          STATUS: ${{ github.event.workflow_run.conclusion }}
+          BRANCH: ${{ github.event.workflow_run.head_branch }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+          REPO: ${{ github.repository }}
+          WORKFLOW_NAME: ${{ github.event.workflow_run.name }}
+        run: |
+          if [ -z "$BOT_TOKEN" ] || [ -z "$CHAT_ID" ]; then
+            echo "Telegram deploy notification skipped: GitHub secrets ausentes."
+            exit 0
+          fi
+
+          SHORT_SHA="${HEAD_SHA:0:7}"
+          ICON="✅"
+          if [ "$STATUS" != "success" ]; then
+            ICON="❌"
+          fi
+
+          MESSAGE="$(printf '%s\n' \
+            "$ICON Deploy Atlas" \
+            "Repo: $REPO" \
+            "Workflow: $WORKFLOW_NAME" \
+            "Branch: $BRANCH" \
+            "Status: $STATUS" \
+            "Commit: $SHORT_SHA" \
+            "Run: $RUN_URL")"
+
+          RESPONSE="$(curl -sS --max-time 20 \
+            --data-urlencode "chat_id=$CHAT_ID" \
+            --data-urlencode "text=$MESSAGE" \
+            "https://api.telegram.org/bot$BOT_TOKEN/sendMessage" || true)"
+
+          if ! printf '%s' "$RESPONSE" | grep -q '"ok":true'; then
+            echo "Telegram deploy notification failed."
+            echo "$RESPONSE"
+            exit 1
+          fi
+
+          echo "Telegram deploy notification sent."

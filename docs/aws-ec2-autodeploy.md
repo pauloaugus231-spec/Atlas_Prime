@@ -29,12 +29,16 @@ eles podem ficar cadastrados por enquanto, mas **nao sao mais necessarios** para
 
 ## Notificacao no Telegram
 
-Se o arquivo `/srv/atlas/app/.env.production` tiver:
+O deploy usa um segundo workflow dedicado:
 
-- `TELEGRAM_BOT_TOKEN`
-- `TELEGRAM_ALLOWED_USER_IDS`
+- [deploy-telegram-notify.yml](/Users/user/Documents/agente_ai/.github/workflows/deploy-telegram-notify.yml)
 
-o workflow envia uma mensagem para o primeiro chat id permitido com:
+Esse workflow roda quando `Deploy EC2` termina e usa os secrets do GitHub:
+
+- `DEPLOY_NOTIFY_TELEGRAM_BOT_TOKEN`
+- `DEPLOY_NOTIFY_TELEGRAM_CHAT_ID`
+
+Quando esses secrets existem, ele envia uma mensagem com:
 
 - status do deploy
 - branch
