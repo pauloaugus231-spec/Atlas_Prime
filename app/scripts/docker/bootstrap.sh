@@ -44,7 +44,7 @@ ensure_dir() {
 }
 
 log "Validating mounted directories"
-ensure_dir "$APP_HOME" rw
+ensure_dir "$APP_HOME" ro
 ensure_dir "$WORKSPACE_DIR" rw
 ensure_dir "$PLUGINS_DIR" rw
 ensure_dir "$LOGS_DIR" rw
