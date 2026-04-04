@@ -27,14 +27,14 @@ Se voce ja criou secrets como:
 
 eles podem ficar cadastrados por enquanto, mas **nao sao mais necessarios** para este deploy.
 
-## Secrets opcionais para notificacao no Telegram
+## Notificacao no Telegram
 
-Se quiser receber aviso de deploy no Telegram, cadastre:
+Se o arquivo `/srv/atlas/app/.env.production` tiver:
 
-- `DEPLOY_NOTIFY_TELEGRAM_BOT_TOKEN`
-- `DEPLOY_NOTIFY_TELEGRAM_CHAT_ID`
+- `TELEGRAM_BOT_TOKEN`
+- `TELEGRAM_ALLOWED_USER_IDS`
 
-Quando esses secrets existem, o workflow envia uma mensagem com:
+o workflow envia uma mensagem para o primeiro chat id permitido com:
 
 - status do deploy
 - branch

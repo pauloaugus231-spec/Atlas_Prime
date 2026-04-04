@@ -49,12 +49,12 @@ jobs:
 
       - name: Notify Telegram success
         if: ${{ success() }}
-        env:
-          DEPLOY_NOTIFY_TELEGRAM_BOT_TOKEN: ${{ secrets.DEPLOY_NOTIFY_TELEGRAM_BOT_TOKEN }}
-          DEPLOY_NOTIFY_TELEGRAM_CHAT_ID: ${{ secrets.DEPLOY_NOTIFY_TELEGRAM_CHAT_ID }}
         run: |
-          if [ -z "$DEPLOY_NOTIFY_TELEGRAM_BOT_TOKEN" ] || [ -z "$DEPLOY_NOTIFY_TELEGRAM_CHAT_ID" ]; then
-            echo "Telegram deploy notification skipped: secrets ausentes."
+          BOT_TOKEN="$(awk -F= '/^TELEGRAM_BOT_TOKEN=/{print substr($0, index($0, $2)); exit}' "$DEPLOY_PATH/.env.production")"
+          CHAT_ID="$(awk -F= '/^TELEGRAM_ALLOWED_USER_IDS=/{print $2; exit}' "$DEPLOY_PATH/.env.production" | cut -d',' -f1 | tr -d '[:space:]')"
+
+          if [ -z "$BOT_TOKEN" ] || [ -z "$CHAT_ID" ]; then
+            echo "Telegram deploy notification skipped: config ausente no .env.production."
             exit 0
           fi
 
@@ -72,9 +72,9 @@ EOF
 )
 
           RESPONSE="$(curl -sS --max-time 20 \
-            --data-urlencode "chat_id=$DEPLOY_NOTIFY_TELEGRAM_CHAT_ID" \
+            --data-urlencode "chat_id=$CHAT_ID" \
             --data-urlencode "text=$MESSAGE" \
-            "https://api.telegram.org/bot$DEPLOY_NOTIFY_TELEGRAM_BOT_TOKEN/sendMessage" || true)"
+            "https://api.telegram.org/bot$BOT_TOKEN/sendMessage" || true)"
 
           if ! printf '%s' "$RESPONSE" | grep -q '"ok":true'; then
             echo "Telegram deploy notification failed."
@@ -86,12 +86,12 @@ EOF
 
       - name: Notify Telegram failure
         if: ${{ failure() }}
-        env:
-          DEPLOY_NOTIFY_TELEGRAM_BOT_TOKEN: ${{ secrets.DEPLOY_NOTIFY_TELEGRAM_BOT_TOKEN }}
-          DEPLOY_NOTIFY_TELEGRAM_CHAT_ID: ${{ secrets.DEPLOY_NOTIFY_TELEGRAM_CHAT_ID }}
         run: |
-          if [ -z "$DEPLOY_NOTIFY_TELEGRAM_BOT_TOKEN" ] || [ -z "$DEPLOY_NOTIFY_TELEGRAM_CHAT_ID" ]; then
-            echo "Telegram deploy notification skipped: secrets ausentes."
+          BOT_TOKEN="$(awk -F= '/^TELEGRAM_BOT_TOKEN=/{print substr($0, index($0, $2)); exit}' "$DEPLOY_PATH/.env.production")"
+          CHAT_ID="$(awk -F= '/^TELEGRAM_ALLOWED_USER_IDS=/{print $2; exit}' "$DEPLOY_PATH/.env.production" | cut -d',' -f1 | tr -d '[:space:]')"
+
+          if [ -z "$BOT_TOKEN" ] || [ -z "$CHAT_ID" ]; then
+            echo "Telegram deploy notification skipped: config ausente no .env.production."
             exit 0
           fi
 
@@ -109,9 +109,9 @@ EOF
 )
 
           RESPONSE="$(curl -sS --max-time 20 \
-            --data-urlencode "chat_id=$DEPLOY_NOTIFY_TELEGRAM_CHAT_ID" \
+            --data-urlencode "chat_id=$CHAT_ID" \
             --data-urlencode "text=$MESSAGE" \
-            "https://api.telegram.org/bot$DEPLOY_NOTIFY_TELEGRAM_BOT_TOKEN/sendMessage" || true)"
+            "https://api.telegram.org/bot$BOT_TOKEN/sendMessage" || true)"
 
           if ! printf '%s' "$RESPONSE" | grep -q '"ok":true'; then
             echo "Telegram deploy notification failed."
