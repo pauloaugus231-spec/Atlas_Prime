@@ -4892,13 +4892,36 @@ function buildContentScriptReply(input: {
     callToAction: string | null;
     notes: string | null;
   };
+  mode: string;
+  targetDurationSeconds: number;
   headlineOptions: string[];
   script: string;
   description: string;
+  scenes: Array<{
+    order: number;
+    durationSeconds: number;
+    voiceover: string;
+    overlay: string;
+    visualDirection: string;
+  }>;
+  platformVariants: {
+    youtubeShort: {
+      title: string;
+      caption: string;
+      coverText: string;
+    };
+    tiktok: {
+      caption: string;
+      coverText: string;
+      hook: string;
+    };
+  };
 }): string {
   return [
     `Roteiro pronto para o item #${input.item.id}.`,
     `- Título de trabalho: ${input.item.title}`,
+    `- Modo: ${input.mode}`,
+    `- Duração alvo: ${input.targetDurationSeconds}s`,
     ...(input.item.hook ? [`- Hook final: ${input.item.hook}`] : []),
     ...(input.item.callToAction ? [`- CTA: ${input.item.callToAction}`] : []),
     "",
@@ -4908,11 +4931,165 @@ function buildContentScriptReply(input: {
     "Roteiro:",
     input.script,
     "",
+    "Plano por cena:",
+    ...input.scenes.map((scene) =>
+      `- Cena ${scene.order} | ${scene.durationSeconds}s | VO: ${scene.voiceover} | overlay: ${scene.overlay} | visual: ${scene.visualDirection}`,
+    ),
+    "",
+    "Variações por plataforma:",
+    `- YouTube Shorts | título: ${input.platformVariants.youtubeShort.title} | capa: ${input.platformVariants.youtubeShort.coverText} | caption: ${input.platformVariants.youtubeShort.caption}`,
+    `- TikTok | hook: ${input.platformVariants.tiktok.hook} | capa: ${input.platformVariants.tiktok.coverText} | caption: ${input.platformVariants.tiktok.caption}`,
+    "",
     "Descrição curta:",
     input.description,
     "",
     "O pacote foi salvo no próprio item editorial.",
   ].join("\n");
+}
+
+type ShortScenePlan = {
+  order: number;
+  durationSeconds: number;
+  voiceover: string;
+  overlay: string;
+  visualDirection: string;
+};
+
+type ShortPlatformVariants = {
+  youtubeShort: {
+    title: string;
+    caption: string;
+    coverText: string;
+  };
+  tiktok: {
+    caption: string;
+    coverText: string;
+    hook: string;
+  };
+};
+
+function clampShortDuration(value: number | undefined, fallback = 42): number {
+  if (typeof value !== "number" || Number.isNaN(value)) {
+    return fallback;
+  }
+  return Math.max(28, Math.min(55, Math.round(value)));
+}
+
+function normalizeScenePlan(scenes: ShortScenePlan[] | undefined, fallbackScenes: ShortScenePlan[]): ShortScenePlan[] {
+  if (!Array.isArray(scenes) || scenes.length === 0) {
+    return fallbackScenes;
+  }
+
+  return scenes
+    .filter((scene) =>
+      scene
+      && typeof scene.voiceover === "string"
+      && scene.voiceover.trim().length > 0
+      && typeof scene.overlay === "string"
+      && scene.overlay.trim().length > 0
+      && typeof scene.visualDirection === "string"
+      && scene.visualDirection.trim().length > 0,
+    )
+    .slice(0, 5)
+    .map((scene, index) => ({
+      order: index + 1,
+      durationSeconds: clampShortDuration(scene.durationSeconds, 8),
+      voiceover: scene.voiceover.trim(),
+      overlay: scene.overlay.trim(),
+      visualDirection: scene.visualDirection.trim(),
+    }));
+}
+
+function buildShortFormFallbackPackage(input: {
+  item: {
+    title: string;
+    pillar: string | null;
+    hook: string | null;
+  };
+  platform: string;
+}): {
+  mode: string;
+  targetDurationSeconds: number;
+  hook: string;
+  script: string;
+  cta: string;
+  description: string;
+  titleOptions: string[];
+  scenes: ShortScenePlan[];
+  platformVariants: ShortPlatformVariants;
+} {
+  const hook = input.item.hook?.trim()
+    || `Se você errar isso em ${input.item.title.toLowerCase()}, vai perder dinheiro sem perceber.`;
+  const cta = "Comente \"parte 2\" se quiser a continuação prática.";
+  const titleBase = input.item.title.trim();
+  const titleOptions = [
+    titleBase,
+    `O erro por trás de ${titleBase.toLowerCase()}`,
+    `${titleBase}: o que quase ninguém explica`,
+  ];
+  const scenes: ShortScenePlan[] = [
+    {
+      order: 1,
+      durationSeconds: 7,
+      voiceover: hook,
+      overlay: "ERRO QUE CUSTA CARO",
+      visualDirection: "texto forte em tela + corte rápido + destaque visual no problema",
+    },
+    {
+      order: 2,
+      durationSeconds: 8,
+      voiceover: `A maioria olha só para ${input.item.pillar ?? "o resultado"} e ignora o mecanismo que gera caixa.`,
+      overlay: "OLHAR SÓ O RESULTADO É ARMADILHA",
+      visualDirection: "b-roll de dashboard, vendas, computador ou rotina de trabalho",
+    },
+    {
+      order: 3,
+      durationSeconds: 10,
+      voiceover: `A regra prática aqui é simples: ${titleBase.toLowerCase()} precisa aumentar valor percebido sem travar conversão.`,
+      overlay: "REGRA PRÁTICA",
+      visualDirection: "close em planilha, pricing page, números ou cards de oferta",
+    },
+    {
+      order: 4,
+      durationSeconds: 9,
+      voiceover: "Se não melhorar retenção, margem ou conversão, não é estratégia. É só ruído.",
+      overlay: "SEM RETENÇÃO, MARGEM OU CONVERSÃO = RUÍDO",
+      visualDirection: "comparação antes/depois, gráficos simples, setas e cortes secos",
+    },
+    {
+      order: 5,
+      durationSeconds: 6,
+      voiceover: cta,
+      overlay: "QUER A PARTE 2?",
+      visualDirection: "encerramento com texto forte e tela limpa para CTA",
+    },
+  ];
+  const script = scenes.map((scene) => scene.voiceover).join(" ");
+  const description = `${titleBase}. Short direto do Riqueza Despertada com uma ideia central, mecanismo claro e aplicação prática.`;
+  const platformVariants: ShortPlatformVariants = {
+    youtubeShort: {
+      title: titleOptions[0],
+      coverText: "ERRO QUE CUSTA CARO",
+      caption: `${titleBase}. Ideia prática para quem quer riqueza com execução.`,
+    },
+    tiktok: {
+      hook,
+      coverText: "PARE DE PERDER DINHEIRO NISSO",
+      caption: `${titleBase}. Sem enrolação, sem fórmula mágica, só mecanismo real.`,
+    },
+  };
+
+  return {
+    mode: "viral_short",
+    targetDurationSeconds: 40,
+    hook,
+    script,
+    cta,
+    description,
+    titleOptions,
+    scenes,
+    platformVariants,
+  };
 }
 
 function formatDateForTimezone(date: Date, timezone: string): string {
@@ -9239,30 +9416,12 @@ export class AgentCore {
       ? this.contentOps.listSeries({ channelKey: item.channelKey ?? undefined, limit: 20 }).find((entry) => entry.key === item.seriesKey)
       : undefined;
 
-    const fallbackHook = item.hook ?? "Existe um erro comum aqui que quase todo mundo ignora.";
-    const fallbackCta = "Se isso te ajudou, salve este vídeo para revisar depois.";
-    const fallbackTitles = [
-      item.title,
-      `O erro por trás de ${item.title.toLowerCase()}`,
-      `A verdade sobre ${item.title.toLowerCase()}`,
-    ];
-    const fallbackScript = [
-      fallbackHook,
-      "",
-      `Hoje o ponto central é simples: ${item.title}.`,
-      `O mecanismo por trás disso passa por ${item.pillar ?? "execução, clareza e modelo de negócio"}.`,
-      "Se você quer resultado, pare de olhar só para a promessa e olhe para o mecanismo que gera caixa ou crescimento.",
-      fallbackCta,
-    ].join("\n");
-    const fallbackDescription = `${item.title}. Conteúdo do Riqueza Despertada sobre riqueza, negócios e execução.`;
+    const fallbackPayload = buildShortFormFallbackPackage({
+      item,
+      platform: item.platform,
+    });
 
-    let payload = {
-      hook: fallbackHook,
-      script: fallbackScript,
-      cta: fallbackCta,
-      description: fallbackDescription,
-      titleOptions: fallbackTitles,
-    };
+    let payload = { ...fallbackPayload };
 
     try {
       const response = await this.client.chat({
@@ -9271,10 +9430,16 @@ export class AgentCore {
             role: "system",
             content: [
               "Você é roteirista de short-form content para o canal Riqueza Despertada.",
+              "Sua tarefa é gerar um short com retenção forte para YouTube Shorts e TikTok.",
               "Responda somente JSON válido.",
-              "Formato: hook, script, cta, description, titleOptions.",
+              "Formato: mode, targetDurationSeconds, hook, script, cta, description, titleOptions, scenes, platformVariants.",
+              "mode deve ser viral_short.",
+              "targetDurationSeconds entre 35 e 50.",
               "titleOptions deve ser array com 3 títulos curtos.",
-              "O script deve ser enxuto, falado, direto e pensado para vídeo curto.",
+              "Crie cenas curtas com os campos order, durationSeconds, voiceover, overlay, visualDirection.",
+              "Cada vídeo deve ter UMA ideia central. Sem lista longa, sem densidade excessiva, sem jargão demais.",
+              "O hook precisa abrir tensão real em até 2 segundos.",
+              "O CTA deve ser curto. Não invente link, checklist ou oferta que ainda não existem.",
               "Mantenha tom pragmático, sem promessa milagrosa.",
             ].join(" "),
           },
@@ -9289,20 +9454,28 @@ export class AgentCore {
               `Notas: ${item.notes ?? ""}`,
               `Formato editorial: ${formatTemplate ? `${formatTemplate.label} | ${formatTemplate.structure}` : item.formatTemplateKey ?? ""}`,
               `Série: ${series ? `${series.title} | ${series.premise ?? ""}` : item.seriesKey ?? ""}`,
+              `Plataforma principal: ${item.platform}`,
+              "Objetivo: retenção forte, clareza, 1 mecanismo central, alto potencial de replay e comentário.",
             ].join("\n"),
           },
         ],
       });
 
       const parsed = JSON.parse(stripCodeFences(response.message.content ?? "")) as {
+        mode?: string;
+        targetDurationSeconds?: number;
         hook?: string;
         script?: string;
         cta?: string;
         description?: string;
         titleOptions?: string[];
+        scenes?: ShortScenePlan[];
+        platformVariants?: Partial<ShortPlatformVariants>;
       };
 
       payload = {
+        mode: parsed.mode === "viral_short" ? parsed.mode : payload.mode,
+        targetDurationSeconds: clampShortDuration(parsed.targetDurationSeconds, payload.targetDurationSeconds),
         hook: typeof parsed.hook === "string" && parsed.hook.trim() ? parsed.hook.trim() : payload.hook,
         script: typeof parsed.script === "string" && parsed.script.trim() ? parsed.script.trim() : payload.script,
         cta: typeof parsed.cta === "string" && parsed.cta.trim() ? parsed.cta.trim() : payload.cta,
@@ -9313,6 +9486,37 @@ export class AgentCore {
         titleOptions: Array.isArray(parsed.titleOptions) && parsed.titleOptions.length > 0
           ? parsed.titleOptions.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0).slice(0, 3)
           : payload.titleOptions,
+        scenes: normalizeScenePlan(parsed.scenes, payload.scenes),
+        platformVariants: {
+          youtubeShort: {
+            title:
+              typeof parsed.platformVariants?.youtubeShort?.title === "string" && parsed.platformVariants.youtubeShort.title.trim()
+                ? parsed.platformVariants.youtubeShort.title.trim()
+                : payload.platformVariants.youtubeShort.title,
+            caption:
+              typeof parsed.platformVariants?.youtubeShort?.caption === "string" && parsed.platformVariants.youtubeShort.caption.trim()
+                ? parsed.platformVariants.youtubeShort.caption.trim()
+                : payload.platformVariants.youtubeShort.caption,
+            coverText:
+              typeof parsed.platformVariants?.youtubeShort?.coverText === "string" && parsed.platformVariants.youtubeShort.coverText.trim()
+                ? parsed.platformVariants.youtubeShort.coverText.trim()
+                : payload.platformVariants.youtubeShort.coverText,
+          },
+          tiktok: {
+            hook:
+              typeof parsed.platformVariants?.tiktok?.hook === "string" && parsed.platformVariants.tiktok.hook.trim()
+                ? parsed.platformVariants.tiktok.hook.trim()
+                : payload.platformVariants.tiktok.hook,
+            caption:
+              typeof parsed.platformVariants?.tiktok?.caption === "string" && parsed.platformVariants.tiktok.caption.trim()
+                ? parsed.platformVariants.tiktok.caption.trim()
+                : payload.platformVariants.tiktok.caption,
+            coverText:
+              typeof parsed.platformVariants?.tiktok?.coverText === "string" && parsed.platformVariants.tiktok.coverText.trim()
+                ? parsed.platformVariants.tiktok.coverText.trim()
+                : payload.platformVariants.tiktok.coverText,
+          },
+        },
       };
     } catch (error) {
       requestLogger.warn("Content script generation fell back to deterministic package", {
@@ -9322,19 +9526,34 @@ export class AgentCore {
     }
 
     const scriptPackage = [
-      "SCRIPT_PACKAGE",
+      "SHORT_PACKAGE_V2",
+      `mode: ${payload.mode}`,
+      `target_duration_seconds: ${payload.targetDurationSeconds}`,
       `hook: ${payload.hook}`,
       `cta: ${payload.cta}`,
       "",
       "title_options:",
       ...payload.titleOptions.map((title, index) => `${index + 1}. ${title}`),
       "",
+      "scene_plan:",
+      ...payload.scenes.map((scene) =>
+        `${scene.order}. ${scene.durationSeconds}s | VO=${scene.voiceover} | overlay=${scene.overlay} | visual=${scene.visualDirection}`,
+      ),
+      "",
+      "platform_variants:",
+      `youtube_short.title: ${payload.platformVariants.youtubeShort.title}`,
+      `youtube_short.cover_text: ${payload.platformVariants.youtubeShort.coverText}`,
+      `youtube_short.caption: ${payload.platformVariants.youtubeShort.caption}`,
+      `tiktok.hook: ${payload.platformVariants.tiktok.hook}`,
+      `tiktok.cover_text: ${payload.platformVariants.tiktok.coverText}`,
+      `tiktok.caption: ${payload.platformVariants.tiktok.caption}`,
+      "",
       "script:",
       payload.script,
       "",
       "description:",
       payload.description,
-      "END_SCRIPT_PACKAGE",
+      "END_SHORT_PACKAGE_V2",
     ].join("\n");
 
     const updated = this.contentOps.updateItem({
@@ -9349,9 +9568,13 @@ export class AgentCore {
       requestId,
       reply: buildContentScriptReply({
         item: updated,
+        mode: payload.mode,
+        targetDurationSeconds: payload.targetDurationSeconds,
         headlineOptions: payload.titleOptions,
         script: payload.script,
         description: payload.description,
+        scenes: payload.scenes,
+        platformVariants: payload.platformVariants,
       }),
       messages: buildBaseMessages(userPrompt, orchestration),
       toolExecutions: [
