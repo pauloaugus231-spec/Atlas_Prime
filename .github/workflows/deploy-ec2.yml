@@ -12,7 +12,6 @@ concurrency:
 
 jobs:
   deploy:
-    if: ${{ secrets.AWS_EC2_HOST != '' && secrets.AWS_EC2_SSH_KEY != '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:

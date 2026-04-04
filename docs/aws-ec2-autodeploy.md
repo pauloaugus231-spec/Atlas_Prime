@@ -2,7 +2,7 @@
 
 O fluxo de producao atual faz deploy do `atlas-core` na EC2 sempre que houver push na branch `main`.
 
-Se os secrets obrigatorios ainda nao estiverem cadastrados, o workflow fica `skipped` e nao tenta publicar nada.
+Se os secrets obrigatorios ainda nao estiverem cadastrados, o workflow falha na etapa de validacao e nao tenta publicar nada.
 
 ## O que o workflow faz
 
