@@ -155,6 +155,14 @@ async function readJsonBody(request: http.IncomingMessage): Promise<unknown> {
   return raw ? JSON.parse(raw) : {};
 }
 
+function isSupportedWebhookEvent(event: string | undefined): boolean {
+  const normalized = (event ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[_\s-]+/g, ".");
+  return normalized === "messages.upsert";
+}
+
 async function ensureConfiguredWebhooks(
   evolution: EvolutionApiClient,
   config: AppConfig,
@@ -248,7 +256,7 @@ async function main(): Promise<void> {
         return;
       }
 
-      if (payload.event !== "messages.upsert") {
+      if (!isSupportedWebhookEvent(payload.event)) {
         response.writeHead(202, { "Content-Type": "application/json" });
         response.end(JSON.stringify({ ok: true, ignored: true, reason: "event_not_supported" }));
         return;
@@ -281,6 +289,13 @@ async function main(): Promise<void> {
         direction: "inbound",
         text: inboundText,
         createdAt: payload.date_time,
+      });
+      logger.info("WhatsApp webhook ingested inbound message", {
+        instanceName: route.instanceName,
+        account: route.accountAlias,
+        number,
+        pushName: message.pushName,
+        event: payload.event,
       });
 
       const classification = communicationRouter.classify({
