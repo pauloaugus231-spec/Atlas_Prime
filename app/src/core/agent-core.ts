@@ -3010,7 +3010,8 @@ function buildWhatsAppScopedRecentMessagesReply(label: string, messages: WhatsAp
 }
 
 function buildWhatsAppScopedRecentChatsReply(label: string, chats: EvolutionRecentChatRecord[]): string {
-  if (chats.length === 0) {
+  const filteredChats = chats.filter((item) => !item.isSystem).slice(0, 8);
+  if (filteredChats.length === 0) {
     return [
       `Não encontrei conversas recentes no WhatsApp da conta ${label}.`,
       "Se a instância acabou de conectar, tente de novo em alguns instantes.",
@@ -3025,14 +3026,44 @@ function buildWhatsAppScopedRecentChatsReply(label: string, chats: EvolutionRece
     minute: "2-digit",
   });
 
+  const summarize = (value: string | undefined): string => {
+    const compact = (value ?? "sem texto").replace(/\s+/g, " ").trim();
+    return compact.length > 180 ? `${compact.slice(0, 177)}...` : compact;
+  };
+  const hasUrgencySignal = (value: string | undefined): boolean => {
+    const normalized = normalizeEmailAnalysisText(value ?? "");
+    return includesAny(normalized, [
+      "urgente",
+      "urgencia",
+      "urgência",
+      "agora",
+      "hoje ainda",
+      "assim que puder",
+      "me liga",
+      "me ligue",
+      "responde",
+      "preciso de ti",
+      "preciso de voce",
+      "preciso de você",
+    ]);
+  };
+
   return [
-    `Conversas recentes do WhatsApp ${label}: ${chats.length}.`,
-    ...chats.map((item) => {
+    `Conversas recentes do WhatsApp ${label}: ${filteredChats.length}.`,
+    ...filteredChats.map((item) => {
       const when = item.updatedAt ? formatter.format(new Date(item.updatedAt)) : "sem horário";
-      const who = item.pushName ?? item.remoteJidAlt ?? item.remoteJid;
+      const priority = item.mentionedJids.length > 0 || hasUrgencySignal(item.lastMessageText);
+      const groupLabel = item.chatName ?? item.remoteJid;
+      const directLabel = item.senderName ?? item.remoteJidAlt ?? item.remoteJid;
       const direction = item.fromMe ? "enviada" : "recebida";
-      const text = item.lastMessageText?.trim() || "sem texto";
-      return `- ${direction} | ${when} | ${who} | ${text}`;
+      const text = summarize(item.lastMessageText);
+      if (item.isGroup) {
+        const sender = item.senderName && item.senderName !== item.chatName
+          ? item.senderName
+          : "autor não identificado";
+        return `- ${priority ? "[PRIORIDADE] " : ""}${when} | grupo: ${groupLabel} | autor: ${sender} | ${direction} | ${text}`;
+      }
+      return `- ${priority ? "[PRIORIDADE] " : ""}${when} | direto: ${directLabel} | ${direction} | ${text}`;
     }),
   ].join("\n");
 }

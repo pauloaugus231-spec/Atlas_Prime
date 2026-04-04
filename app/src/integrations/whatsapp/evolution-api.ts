@@ -35,10 +35,15 @@ export interface EvolutionInstanceWebhookConfig {
 export interface EvolutionRecentChatRecord {
   remoteJid: string;
   remoteJidAlt?: string;
+  chatName?: string;
+  senderName?: string;
   pushName?: string;
   updatedAt?: string;
   lastMessageText?: string;
   fromMe?: boolean;
+  isGroup: boolean;
+  isSystem: boolean;
+  mentionedJids: string[];
 }
 
 function stripTrailingSlashes(value: string): string {
@@ -311,9 +316,22 @@ export class EvolutionApiClient {
         const key = lastMessage?.key && typeof lastMessage.key === "object"
           ? lastMessage.key as Record<string, unknown>
           : undefined;
+        const contextInfo = lastMessage?.contextInfo && typeof lastMessage.contextInfo === "object"
+          ? lastMessage.contextInfo as Record<string, unknown>
+          : undefined;
+        const remoteJid = typeof item.remoteJid === "string" ? item.remoteJid : "";
+        const mentionedJids = Array.isArray(contextInfo?.mentionedJid)
+          ? contextInfo.mentionedJid.filter((value): value is string => typeof value === "string")
+          : [];
         return {
-          remoteJid: typeof item.remoteJid === "string" ? item.remoteJid : "",
+          remoteJid,
           remoteJidAlt: typeof key?.remoteJidAlt === "string" ? key.remoteJidAlt : undefined,
+          chatName: typeof item.pushName === "string" ? item.pushName : undefined,
+          senderName: typeof lastMessage?.pushName === "string"
+            ? lastMessage.pushName
+            : typeof lastMessage?.participant === "string"
+              ? lastMessage.participant
+              : undefined,
           pushName: typeof item.pushName === "string"
             ? item.pushName
             : typeof lastMessage?.pushName === "string"
@@ -322,6 +340,9 @@ export class EvolutionApiClient {
           updatedAt: typeof item.updatedAt === "string" ? item.updatedAt : undefined,
           lastMessageText: extractTextFromAnyMessage(lastMessage?.message),
           fromMe: key?.fromMe === true,
+          isGroup: remoteJid.endsWith("@g.us"),
+          isSystem: remoteJid === "status@broadcast" || remoteJid === "0@s.whatsapp.net",
+          mentionedJids,
         };
       })
       .filter((item) => item.remoteJid);
