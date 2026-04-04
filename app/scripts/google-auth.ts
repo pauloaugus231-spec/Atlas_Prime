@@ -3,6 +3,7 @@ import { once } from "node:events";
 import { URL } from "node:url";
 import { loadConfig } from "../src/config/load-config.js";
 import { GoogleWorkspaceAccountsService } from "../src/integrations/google/google-workspace-accounts.js";
+import { GOOGLE_YOUTUBE_UPLOAD_SCOPES } from "../src/integrations/google/google-auth.js";
 import { createLogger } from "../src/utils/logger.js";
 
 function readFlagValue(args: string[], flag: string): string | undefined {
@@ -21,6 +22,7 @@ async function main(): Promise<void> {
   );
   const auth = googleAccounts.getAuth(account);
   const workspace = googleAccounts.getWorkspace(account);
+  const scopeProfile = readFlagValue(args, "--profile")?.trim();
 
   const status = auth.getStatus();
   if (!status.enabled) {
@@ -30,7 +32,10 @@ async function main(): Promise<void> {
     throw new Error(status.message);
   }
 
-  const authUrl = auth.createAuthUrl();
+  const scopes = scopeProfile === "youtube"
+    ? [...auth.getRequestedScopes(), ...GOOGLE_YOUTUBE_UPLOAD_SCOPES]
+    : auth.getRequestedScopes();
+  const authUrl = auth.createAuthUrl(scopes);
   const callbackUrl = new URL(status.redirectUri as string);
   const listenPort = callbackUrl.port ? Number.parseInt(callbackUrl.port, 10) : status.oauthPort;
   const server = createServer(async (request, response) => {
@@ -78,6 +83,7 @@ async function main(): Promise<void> {
     "",
     `Callback esperado em: ${status.redirectUri}`,
     `Token sera salvo em: ${workspace.getStatus().tokenPath}`,
+    `Perfil de escopo: ${scopeProfile ?? "default"}`,
     "",
     "Quando a autenticacao terminar, a janela do navegador mostrara uma confirmacao simples e o processo encerrara.",
   ].join("\n"));

@@ -345,6 +345,7 @@ function buildGoogleConfig(
     oauthPort,
     credentialsPath,
     tokenPath,
+    extraScopes: parseStringList(env[`${prefix}EXTRA_SCOPES`] ?? fallback?.extraScopes?.join(",")),
     calendarId: env[`${prefix}CALENDAR_ID`]?.trim() || fallback?.calendarId || "primary",
     calendarAliases: parseAliasMap(
       env[`${prefix}CALENDAR_ALIASES`],

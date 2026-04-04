@@ -9,7 +9,9 @@ export interface GoogleAuthStatus {
   authenticated: boolean;
   ready: boolean;
   writeReady?: boolean;
+  extraScopesReady?: boolean;
   grantedScopes?: string[];
+  requiredScopes?: string[];
   redirectUri?: string;
   credentialsPath: string;
   tokenPath: string;
@@ -41,6 +43,8 @@ export const GOOGLE_GMAIL_READ_SCOPES = ["https://www.googleapis.com/auth/gmail.
 
 export const GOOGLE_GMAIL_SEND_SCOPES = ["https://www.googleapis.com/auth/gmail.send"];
 
+export const GOOGLE_YOUTUBE_UPLOAD_SCOPES = ["https://www.googleapis.com/auth/youtube.upload"];
+
 function uniqueScopes(scopes: string[]): string[] {
   return [...new Set(scopes)];
 }
@@ -70,6 +74,13 @@ export class GoogleWorkspaceAuthService {
     private readonly config: GoogleWorkspaceConfig,
     private readonly logger: Logger,
   ) {}
+
+  getRequestedScopes(): string[] {
+    return uniqueScopes([
+      ...GOOGLE_WORKSPACE_SCOPES,
+      ...this.config.extraScopes,
+    ]);
+  }
 
   getStatus(): GoogleAuthStatus {
     if (!this.config.enabled) {
@@ -116,6 +127,7 @@ export class GoogleWorkspaceAuthService {
 
     const grantedScopes = this.getGrantedScopes(tokens);
     const writeReady = this.hasGrantedScopes(GOOGLE_WORKSPACE_WRITE_SCOPES, tokens);
+    const extraScopesReady = this.hasGrantedScopes(this.config.extraScopes, tokens);
 
     return {
       enabled: true,
@@ -123,17 +135,21 @@ export class GoogleWorkspaceAuthService {
       authenticated: true,
       ready: true,
       writeReady,
+      extraScopesReady,
       grantedScopes,
+      requiredScopes: this.getRequestedScopes(),
       redirectUri: clientConfig.redirectUri,
       credentialsPath: this.config.credentialsPath,
       tokenPath: this.config.tokenPath,
-      message: writeReady
-        ? "Google Workspace integration ready in controlled secretary mode."
-        : "Google Workspace integration ready in read-only secretary mode. Re-run npm run google:auth to grant write scopes for task and event creation.",
+      message: !writeReady
+        ? "Google Workspace integration ready in read-only secretary mode. Re-run npm run google:auth to grant write scopes for task and event creation."
+        : extraScopesReady
+          ? "Google Workspace integration ready with requested extra scopes."
+          : "Google Workspace integration ready, but configured extra scopes are still missing. Re-run npm run google:auth.",
     };
   }
 
-  createAuthUrl(scopes = GOOGLE_WORKSPACE_SCOPES): string {
+  createAuthUrl(scopes = this.getRequestedScopes()): string {
     const clientConfig = this.requireClientConfig();
     const params = new URLSearchParams({
       client_id: clientConfig.clientId,

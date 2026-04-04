@@ -64,6 +64,7 @@ export interface GoogleWorkspaceConfig {
   oauthPort: number;
   credentialsPath: string;
   tokenPath: string;
+  extraScopes: string[];
   calendarId: string;
   calendarAliases: Record<string, string>;
   defaultTimezone: string;

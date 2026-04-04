@@ -1309,6 +1309,22 @@ function isContentReviewPrompt(prompt: string): boolean {
   );
 }
 
+function isContentScriptGenerationPrompt(prompt: string): boolean {
+  const normalized = normalizeEmailAnalysisText(prompt);
+  return (
+    includesAny(normalized, [
+      "gere roteiro",
+      "gerar roteiro",
+      "roteirize",
+      "roteirizar",
+      "escreva o roteiro",
+      "script do item",
+      "roteiro do item",
+    ]) &&
+    includesAny(normalized, ["item", "conteudo", "conteúdo", "pauta", "#", "primeiro", "segundo", "terceiro"])
+  );
+}
+
 function isCaseNotesPrompt(prompt: string): boolean {
   const normalized = normalizeEmailAnalysisText(prompt);
   return [
@@ -1550,6 +1566,63 @@ function classifyContentReviewFeedback(reason: string | undefined): string | und
     return "longo_demais";
   }
   return "reprovado_manual";
+}
+
+function buildFallbackEditorialIdeas(input: {
+  channelName: string;
+  seed?: string;
+  formatKeys: string[];
+  seriesKeys: string[];
+  limit: number;
+}): Array<{
+  title: string;
+  hook: string;
+  pillar: string;
+  audience: string;
+  formatTemplateKey?: string;
+  seriesKey?: string | null;
+  notes: string;
+}> {
+  const topic = input.seed?.trim() || "dinheiro e renda";
+  const ideas = [
+    {
+      title: `3 formas reais de aumentar renda com ${topic} sem prometer milagre`,
+      hook: "A maioria fala em enriquecer rápido, mas estas 3 vias geram caixa no mundo real.",
+      pillar: "formas de fazer dinheiro",
+      notes: "Fallback editorial focado em utilidade e retenção.",
+    },
+    {
+      title: `O erro que te impede de transformar habilidade em dinheiro com ${topic}`,
+      hook: "Quase todo mundo trava no mesmo ponto quando tenta ganhar dinheiro com o que sabe fazer.",
+      pillar: "erros sobre riqueza",
+      notes: "Fallback editorial focado em dor + mecanismo.",
+    },
+    {
+      title: `${topic}: serviço, produto ou SaaS? O que gera caixa primeiro`,
+      hook: "Antes de pensar em escalar, você precisa escolher o mecanismo certo para gerar caixa.",
+      pillar: "modelos de negocio",
+      notes: "Fallback editorial comparativo com clareza de mecanismo.",
+    },
+    {
+      title: `Por que disciplina operacional vale mais que motivação para crescer com ${topic}`,
+      hook: "Se você depende de motivação, vai quebrar o ritmo antes de ver resultado.",
+      pillar: "execucao e disciplina",
+      notes: "Fallback editorial com tom contrarian e aplicável.",
+    },
+    {
+      title: `A mentira sobre ${topic} que deixa muita gente presa no zero`,
+      hook: "Existe uma crença repetida o tempo todo sobre dinheiro que atrasa qualquer resultado sério.",
+      pillar: "erros sobre riqueza",
+      notes: "Fallback editorial para série de crenças e mitos.",
+    },
+  ];
+
+  return ideas.slice(0, Math.max(1, Math.min(input.limit, ideas.length))).map((idea, index) => ({
+    ...idea,
+    audience: "pessoas buscando riqueza por execução, internet ou negócios",
+    formatTemplateKey: input.formatKeys[index % Math.max(input.formatKeys.length, 1)],
+    seriesKey: input.seriesKeys.length > 0 ? input.seriesKeys[index % input.seriesKeys.length] : null,
+  }));
 }
 
 function extractProjectRoot(prompt: string): ReadableRootKey {
@@ -4611,6 +4684,37 @@ function buildContentReviewNotFoundReply(input: {
   return lines.join("\n");
 }
 
+function buildContentScriptReply(input: {
+  item: {
+    id: number;
+    title: string;
+    hook: string | null;
+    callToAction: string | null;
+    notes: string | null;
+  };
+  headlineOptions: string[];
+  script: string;
+  description: string;
+}): string {
+  return [
+    `Roteiro pronto para o item #${input.item.id}.`,
+    `- Título de trabalho: ${input.item.title}`,
+    ...(input.item.hook ? [`- Hook final: ${input.item.hook}`] : []),
+    ...(input.item.callToAction ? [`- CTA: ${input.item.callToAction}`] : []),
+    "",
+    "Sugestões de título:",
+    ...input.headlineOptions.slice(0, 3).map((title) => `- ${title}`),
+    "",
+    "Roteiro:",
+    input.script,
+    "",
+    "Descrição curta:",
+    input.description,
+    "",
+    "O pacote foi salvo no próprio item editorial.",
+  ].join("\n");
+}
+
 function buildCaseNotesReply(notes: Array<{
   id: number;
   title: string;
@@ -5177,6 +5281,15 @@ export class AgentCore {
     );
     if (directContentReviewResult) {
       return directContentReviewResult;
+    }
+    const directContentScriptResult = await this.tryRunDirectContentScriptGeneration(
+      activeUserPrompt,
+      requestId,
+      requestLogger,
+      orchestration,
+    );
+    if (directContentScriptResult) {
+      return directContentScriptResult;
     }
     const directContentChannelsResult = await this.tryRunDirectContentChannels(
       activeUserPrompt,
@@ -8222,14 +8335,15 @@ export class AgentCore {
       seed,
     });
 
-    const fallbackIdeas = Array.from({ length: Math.min(limit, 5) }).map((_, index) => ({
-      title: `${seed ? `${seed}: ` : ""}${index + 1}. Ideia para ${channel.name}`,
-      hook: hooks[index % Math.max(hooks.length, 1)]?.template ?? "O erro que quase todo mundo comete sobre dinheiro é este:",
-      pillar: ["formas de fazer dinheiro", "modelos de negocio", "erros sobre riqueza", "execucao e disciplina"][index % 4],
-      audience: channel.persona ?? "público geral interessado em riqueza e renda",
-      formatTemplateKey: formats[index % Math.max(formats.length, 1)]?.key ?? "direct_educational",
-      seriesKey: series[index % Math.max(series.length, 1)]?.key ?? null,
-      notes: "Fallback determinístico por falha de geração do modelo.",
+    const fallbackIdeas = buildFallbackEditorialIdeas({
+      channelName: channel.name,
+      seed,
+      formatKeys: formats.map((item) => item.key),
+      seriesKeys: series.map((item) => item.key),
+      limit,
+    }).map((idea) => ({
+      ...idea,
+      audience: channel.persona ?? idea.audience,
     }));
 
     type GeneratedIdea = {
@@ -8288,11 +8402,18 @@ export class AgentCore {
         ],
       });
 
-      const parsed = JSON.parse(stripCodeFences(response.message.content ?? "")) as {
-        ideas?: GeneratedIdea[];
-      };
-      if (Array.isArray(parsed.ideas) && parsed.ideas.length > 0) {
-        generatedIdeas = parsed.ideas
+      const parsed = JSON.parse(stripCodeFences(response.message.content ?? "")) as
+        | { ideas?: GeneratedIdea[]; items?: GeneratedIdea[] }
+        | GeneratedIdea[];
+      const rawIdeas = Array.isArray(parsed)
+        ? parsed
+        : Array.isArray(parsed.ideas)
+          ? parsed.ideas
+          : Array.isArray(parsed.items)
+            ? parsed.items
+            : [];
+      if (rawIdeas.length > 0) {
+        generatedIdeas = rawIdeas
           .filter((item) => item && typeof item.title === "string" && item.title.trim().length > 0)
           .slice(0, limit);
       }
@@ -8434,6 +8555,185 @@ export class AgentCore {
               id: item.id,
               status: item.status,
               reviewFeedbackCategory: item.reviewFeedbackCategory,
+            },
+            null,
+            2,
+          ),
+        },
+      ],
+    };
+  }
+
+  private async tryRunDirectContentScriptGeneration(
+    userPrompt: string,
+    requestId: string,
+    requestLogger: Logger,
+    orchestration: OrchestrationContext,
+  ): Promise<AgentRunResult | null> {
+    if (!isContentScriptGenerationPrompt(userPrompt)) {
+      return null;
+    }
+
+    const requestedItemId = extractContentItemId(userPrompt);
+    const requestedOrdinal = extractContentQueueOrdinal(userPrompt);
+    const channelKey = extractContentChannelKey(userPrompt) ?? inferDefaultContentChannelKey(userPrompt);
+    const queueItems = this.contentOps.listItems({
+      channelKey,
+      limit: 20,
+    });
+
+    let item = requestedItemId ? this.contentOps.getItemById(requestedItemId) : null;
+    if (!item && requestedOrdinal && requestedOrdinal >= 1 && requestedOrdinal <= queueItems.length) {
+      item = queueItems[requestedOrdinal - 1] ?? null;
+    }
+
+    if (!item) {
+      return {
+        requestId,
+        reply: buildContentReviewNotFoundReply({
+          requestedId: requestedItemId ?? requestedOrdinal ?? 0,
+          channelKey,
+          queue: queueItems.map((entry) => ({ id: entry.id, title: entry.title })),
+        }),
+        messages: buildBaseMessages(userPrompt, orchestration),
+        toolExecutions: [],
+      };
+    }
+
+    requestLogger.info("Using direct content script generation route", {
+      itemId: item.id,
+      channelKey: item.channelKey,
+    });
+
+    const formatTemplates = this.contentOps.listFormatTemplates({ activeOnly: true, limit: 20 });
+    const formatTemplate = formatTemplates.find((entry) => entry.key === item.formatTemplateKey);
+    const series = item.seriesKey
+      ? this.contentOps.listSeries({ channelKey: item.channelKey ?? undefined, limit: 20 }).find((entry) => entry.key === item.seriesKey)
+      : undefined;
+
+    const fallbackHook = item.hook ?? "Existe um erro comum aqui que quase todo mundo ignora.";
+    const fallbackCta = "Se isso te ajudou, salve este vídeo para revisar depois.";
+    const fallbackTitles = [
+      item.title,
+      `O erro por trás de ${item.title.toLowerCase()}`,
+      `A verdade sobre ${item.title.toLowerCase()}`,
+    ];
+    const fallbackScript = [
+      fallbackHook,
+      "",
+      `Hoje o ponto central é simples: ${item.title}.`,
+      `O mecanismo por trás disso passa por ${item.pillar ?? "execução, clareza e modelo de negócio"}.`,
+      "Se você quer resultado, pare de olhar só para a promessa e olhe para o mecanismo que gera caixa ou crescimento.",
+      fallbackCta,
+    ].join("\n");
+    const fallbackDescription = `${item.title}. Conteúdo do Riqueza Despertada sobre riqueza, negócios e execução.`;
+
+    let payload = {
+      hook: fallbackHook,
+      script: fallbackScript,
+      cta: fallbackCta,
+      description: fallbackDescription,
+      titleOptions: fallbackTitles,
+    };
+
+    try {
+      const response = await this.client.chat({
+        messages: [
+          {
+            role: "system",
+            content: [
+              "Você é roteirista de short-form content para o canal Riqueza Despertada.",
+              "Responda somente JSON válido.",
+              "Formato: hook, script, cta, description, titleOptions.",
+              "titleOptions deve ser array com 3 títulos curtos.",
+              "O script deve ser enxuto, falado, direto e pensado para vídeo curto.",
+              "Mantenha tom pragmático, sem promessa milagrosa.",
+            ].join(" "),
+          },
+          {
+            role: "user",
+            content: [
+              `Título atual: ${item.title}`,
+              `Plataforma: ${item.platform}`,
+              `Pilar: ${item.pillar ?? ""}`,
+              `Audience: ${item.audience ?? ""}`,
+              `Hook atual: ${item.hook ?? ""}`,
+              `Notas: ${item.notes ?? ""}`,
+              `Formato editorial: ${formatTemplate ? `${formatTemplate.label} | ${formatTemplate.structure}` : item.formatTemplateKey ?? ""}`,
+              `Série: ${series ? `${series.title} | ${series.premise ?? ""}` : item.seriesKey ?? ""}`,
+            ].join("\n"),
+          },
+        ],
+      });
+
+      const parsed = JSON.parse(stripCodeFences(response.message.content ?? "")) as {
+        hook?: string;
+        script?: string;
+        cta?: string;
+        description?: string;
+        titleOptions?: string[];
+      };
+
+      payload = {
+        hook: typeof parsed.hook === "string" && parsed.hook.trim() ? parsed.hook.trim() : payload.hook,
+        script: typeof parsed.script === "string" && parsed.script.trim() ? parsed.script.trim() : payload.script,
+        cta: typeof parsed.cta === "string" && parsed.cta.trim() ? parsed.cta.trim() : payload.cta,
+        description:
+          typeof parsed.description === "string" && parsed.description.trim()
+            ? parsed.description.trim()
+            : payload.description,
+        titleOptions: Array.isArray(parsed.titleOptions) && parsed.titleOptions.length > 0
+          ? parsed.titleOptions.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0).slice(0, 3)
+          : payload.titleOptions,
+      };
+    } catch (error) {
+      requestLogger.warn("Content script generation fell back to deterministic package", {
+        itemId: item.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    const scriptPackage = [
+      "SCRIPT_PACKAGE",
+      `hook: ${payload.hook}`,
+      `cta: ${payload.cta}`,
+      "",
+      "title_options:",
+      ...payload.titleOptions.map((title, index) => `${index + 1}. ${title}`),
+      "",
+      "script:",
+      payload.script,
+      "",
+      "description:",
+      payload.description,
+      "END_SCRIPT_PACKAGE",
+    ].join("\n");
+
+    const updated = this.contentOps.updateItem({
+      id: item.id,
+      hook: payload.hook,
+      callToAction: payload.cta,
+      notes: item.notes ? `${item.notes}\n\n${scriptPackage}` : scriptPackage,
+      status: "draft",
+    });
+
+    return {
+      requestId,
+      reply: buildContentScriptReply({
+        item: updated,
+        headlineOptions: payload.titleOptions,
+        script: payload.script,
+        description: payload.description,
+      }),
+      messages: buildBaseMessages(userPrompt, orchestration),
+      toolExecutions: [
+        {
+          toolName: "update_content_item",
+          resultPreview: JSON.stringify(
+            {
+              id: updated.id,
+              status: updated.status,
+              hasScriptPackage: true,
             },
             null,
             2,
