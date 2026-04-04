@@ -105,7 +105,6 @@ services:
       DATABASE_CONNECTION_URI: postgresql://${EVOLUTION_POSTGRES_USER:-evolution}:${EVOLUTION_POSTGRES_PASSWORD:-evolution_password}@evolution-postgres:5432/${EVOLUTION_POSTGRES_DB:-evolution_api}
       CACHE_REDIS_ENABLED: "true"
       CACHE_REDIS_URI: redis://evolution-redis:6379
-      AUTHENTICATION_API_KEY: ${EVOLUTION_API_KEY:-change_me}
       WEBHOOK_GLOBAL_ENABLED: ${EVOLUTION_WEBHOOK_ENABLED:-true}
       WEBHOOK_GLOBAL_URL: ${EVOLUTION_WEBHOOK_URL:-http://whatsapp-sidecar:8790/webhooks/evolution}
       CHATWOOT_ENABLED: "false"
