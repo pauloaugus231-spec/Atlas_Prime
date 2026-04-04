@@ -1642,6 +1642,189 @@ function buildFallbackEditorialIdeas(input: {
   }));
 }
 
+const RIQUEZA_ALLOWED_TREND_KEYWORDS = [
+  "dinheiro",
+  "renda",
+  "financa",
+  "finanças",
+  "economia",
+  "negocio",
+  "negócio",
+  "negocios",
+  "negócios",
+  "empreendedor",
+  "empreendedorismo",
+  "empresa",
+  "empresas",
+  "vendas",
+  "vender",
+  "cliente",
+  "lucro",
+  "caixa",
+  "salario",
+  "salário",
+  "trabalho",
+  "emprego",
+  "imposto",
+  "taxa",
+  "juros",
+  "selic",
+  "credito",
+  "crédito",
+  "divida",
+  "dívida",
+  "cartao",
+  "cartão",
+  "pix",
+  "banco",
+  "nubank",
+  "inter",
+  "mercado livre",
+  "shopee",
+  "amazon",
+  "saas",
+  "startup",
+  "produto digital",
+  "infoproduto",
+  "afiliado",
+  "marketing",
+  "trafego",
+  "tráfego",
+  "anuncio",
+  "anúncio",
+  "investimento",
+  "investir",
+  "acoes",
+  "ações",
+  "ibovespa",
+  "dolar",
+  "dólar",
+  "bitcoin",
+  "btc",
+  "ethereum",
+  "cripto",
+  "fgts",
+  "inss",
+  "mei",
+];
+
+const RIQUEZA_BLOCKED_TREND_KEYWORDS = [
+  "futebol",
+  "jogo",
+  "partida",
+  "campeonato",
+  "gol",
+  "rodada",
+  "cartola",
+  "ufc",
+  "luta",
+  "atleta",
+  "jogador",
+  "treinador",
+  "bbb",
+  "novela",
+  "cantor",
+  "atriz",
+  "celebridade",
+  "fofoca",
+  "reality",
+  "show",
+  "morreu",
+  "morte",
+  "acidente",
+];
+
+function buildTrendChannelContext(trend: GoogleTrendItem, angle?: string): string {
+  return normalizeEmailAnalysisText(
+    [
+      trend.title,
+      angle ?? "",
+      ...trend.newsItems.flatMap((item) => [item.title ?? "", item.source ?? "", item.snippet ?? ""]),
+    ].join(" | "),
+  );
+}
+
+function isRiquezaTrendEligible(input: {
+  trend: GoogleTrendItem;
+  fitScore: number;
+  angle?: string;
+}): { allowed: boolean; reason: string } {
+  const title = normalizeEmailAnalysisText(input.trend.title);
+  const context = buildTrendChannelContext(input.trend, input.angle);
+  const hasFinanceSignal = includesAny(context, RIQUEZA_ALLOWED_TREND_KEYWORDS);
+  const hasBlockedSignal = includesAny(context, RIQUEZA_BLOCKED_TREND_KEYWORDS) || /\b.+\s+x\s+.+\b/i.test(title);
+
+  if (!hasFinanceSignal) {
+    return {
+      allowed: false,
+      reason: "trend sem sinal forte de finanças, renda, negócios ou monetização prática",
+    };
+  }
+
+  if (hasBlockedSignal && !hasFinanceSignal) {
+    return {
+      allowed: false,
+      reason: "trend dominado por esporte, celebridade ou notícia geral fora do canal",
+    };
+  }
+
+  if (input.fitScore < 60) {
+    return {
+      allowed: false,
+      reason: "fit editorial abaixo do mínimo para virar pauta do canal",
+    };
+  }
+
+  return {
+    allowed: true,
+    reason: "trend com aderência financeira suficiente para virar pauta acionável",
+  };
+}
+
+function filterSelectedTrendsForChannel(input: {
+  channelKey: string;
+  selectedTrends: Array<{
+    title: string;
+    approxTraffic?: string;
+    fitScore: number;
+    angle: string;
+    useTrend: boolean;
+  }>;
+  rawTrends: GoogleTrendItem[];
+}): Array<{
+  title: string;
+  approxTraffic?: string;
+  fitScore: number;
+  angle: string;
+  useTrend: boolean;
+}> {
+  if (!input.channelKey.startsWith("riqueza_despertada")) {
+    return input.selectedTrends;
+  }
+
+  return input.selectedTrends.map((item) => {
+    const trend = input.rawTrends.find((entry) => normalizeEmailAnalysisText(entry.title) === normalizeEmailAnalysisText(item.title));
+    if (!trend) {
+      return {
+        ...item,
+        useTrend: false,
+      };
+    }
+
+    const eligibility = isRiquezaTrendEligible({
+      trend,
+      fitScore: item.fitScore,
+      angle: item.angle,
+    });
+
+    return {
+      ...item,
+      useTrend: item.useTrend && eligibility.allowed,
+      angle: eligibility.allowed ? item.angle : `${item.angle} | descartado: ${eligibility.reason}`,
+    };
+  });
+}
+
 function extractProjectRoot(prompt: string): ReadableRootKey {
   const normalized = normalizeEmailAnalysisText(prompt);
   if (normalized.includes("workspace")) {
@@ -4759,6 +4942,9 @@ function buildDailyEditorialResearchReply(input: {
     `Research Kernel ${input.channelName} | ${input.runDate}`,
     `- Modo: ${input.fallbackMode ? "evergreen fallback" : "trend-first"}`,
   ];
+  if (input.fallbackMode) {
+    lines.push("- Motivo: nenhum trend do dia passou no filtro de finanças, negócios e utilidade prática.");
+  }
   if (input.primaryTrend) {
     lines.push(`- Trend líder: ${input.primaryTrend}`);
   }
@@ -5044,6 +5230,10 @@ export class AgentCore {
             content: [
               "Você é o editor-chefe do canal Riqueza Despertada.",
               "Analise trends do Brasil e selecione no máximo 3 com melhor aderência ao canal.",
+              "O canal fala apenas de finanças, negócios, renda, vendas, SaaS, produtos e execução para ganhar dinheiro.",
+              "Rejeite esporte, celebridade, entretenimento e notícia geral sem impacto financeiro prático para o público.",
+              "Só marque useTrend=true se o tema puder virar conteúdo útil para ganhar, vender, economizar ou decidir melhor financeiramente.",
+              "Se o fitScore for menor que 60, useTrend deve ser false.",
               "Se nenhum trend servir, marque useTrend=false e proponha fallback evergreen.",
               "Responda somente JSON válido no formato {\"selectedTrends\":[...]}",
               "Cada item: title, fitScore, angle, useTrend.",
@@ -5093,6 +5283,12 @@ export class AgentCore {
         error: error instanceof Error ? error.message : String(error),
       });
     }
+
+    selectedTrends = filterSelectedTrendsForChannel({
+      channelKey: channel.key,
+      selectedTrends,
+      rawTrends: trends,
+    });
 
     const usableTrends = selectedTrends.filter((item) => item.useTrend);
     const fallbackMode = usableTrends.length === 0;
@@ -5147,7 +5343,7 @@ export class AgentCore {
 
     let generatedIdeas: GeneratedIdea[] = buildFallbackEditorialIdeas({
       channelName: channel.name,
-      seed: fallbackMode ? "tema evergreen do canal" : usableTrends[0]?.title,
+      seed: fallbackMode ? "formas reais de ganhar dinheiro, SaaS e produtos digitais" : usableTrends[0]?.title,
       formatKeys: formats.map((item) => item.key),
       seriesKeys: series.map((item) => item.key),
       limit: ideasLimit,
@@ -5164,6 +5360,8 @@ export class AgentCore {
             role: "system",
             content: [
               "Você gera pautas para short-form content do canal Riqueza Despertada.",
+              "Cada pauta deve ajudar o espectador a ganhar dinheiro, vender melhor, economizar ou tomar decisão financeira mais inteligente.",
+              "Não use futebol, celebridade, entretenimento ou curiosidade sem mecanismo claro de receita, caixa, venda, negócio ou patrimônio.",
               "Responda somente JSON válido.",
               "Formato: {\"ideas\":[...]}",
               "Cada item: title, hook, pillar, audience, formatTemplateKey, seriesKey, notes.",
@@ -5253,7 +5451,7 @@ export class AgentCore {
       channelName: channel.name,
       runDate,
       primaryTrend: usableTrends[0]?.title,
-      selectedTrends,
+      selectedTrends: usableTrends,
       items: savedItems,
       fallbackMode,
     });
@@ -5266,7 +5464,7 @@ export class AgentCore {
       primaryTrend: usableTrends[0]?.title,
       summary: reply,
       payloadJson: JSON.stringify({
-        selectedTrends,
+        selectedTrends: usableTrends,
         fallbackMode,
         createdItemIds: savedItems.map((item) => item.id),
       }),
