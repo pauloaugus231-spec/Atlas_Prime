@@ -4968,11 +4968,41 @@ type ShortPlatformVariants = {
   };
 };
 
-function clampShortDuration(value: number | undefined, fallback = 42): number {
+type ShortFormPackage = {
+  mode: string;
+  targetDurationSeconds: number;
+  hook: string;
+  script: string;
+  cta: string;
+  description: string;
+  titleOptions: string[];
+  scenes: ShortScenePlan[];
+  platformVariants: ShortPlatformVariants;
+};
+
+const FORBIDDEN_SHORT_PROMISES = [
+  "link da descricao",
+  "link na descrição",
+  "link na bio",
+  "checklist na descricao",
+  "checklist na descrição",
+  "baixe o checklist",
+  "baixe o material",
+  "confira o checklist",
+];
+
+function clampShortTargetDuration(value: number | undefined, fallback = 42): number {
   if (typeof value !== "number" || Number.isNaN(value)) {
     return fallback;
   }
   return Math.max(28, Math.min(55, Math.round(value)));
+}
+
+function clampSceneDuration(value: number | undefined, fallback = 8): number {
+  if (typeof value !== "number" || Number.isNaN(value)) {
+    return fallback;
+  }
+  return Math.max(4, Math.min(14, Math.round(value)));
 }
 
 function normalizeScenePlan(scenes: ShortScenePlan[] | undefined, fallbackScenes: ShortScenePlan[]): ShortScenePlan[] {
@@ -4993,11 +5023,117 @@ function normalizeScenePlan(scenes: ShortScenePlan[] | undefined, fallbackScenes
     .slice(0, 5)
     .map((scene, index) => ({
       order: index + 1,
-      durationSeconds: clampShortDuration(scene.durationSeconds, 8),
+      durationSeconds: clampSceneDuration(scene.durationSeconds, 8),
       voiceover: scene.voiceover.trim(),
       overlay: scene.overlay.trim(),
       visualDirection: scene.visualDirection.trim(),
     }));
+}
+
+function sumSceneDurations(scenes: ShortScenePlan[]): number {
+  return scenes.reduce((total, scene) => total + scene.durationSeconds, 0);
+}
+
+function rebalanceSceneDurations(scenes: ShortScenePlan[], targetDurationSeconds: number): ShortScenePlan[] {
+  if (scenes.length === 0) {
+    return scenes;
+  }
+
+  const currentTotal = sumSceneDurations(scenes);
+  if (currentTotal === targetDurationSeconds) {
+    return scenes;
+  }
+
+  const ratio = targetDurationSeconds / Math.max(currentTotal, 1);
+  const adjusted = scenes.map((scene) => ({
+    ...scene,
+    durationSeconds: clampSceneDuration(Math.round(scene.durationSeconds * ratio), scene.durationSeconds),
+  }));
+
+  let diff = targetDurationSeconds - sumSceneDurations(adjusted);
+  let cursor = 0;
+  while (diff !== 0 && cursor < 100) {
+    const index = cursor % adjusted.length;
+    const scene = adjusted[index]!;
+    if (diff > 0 && scene.durationSeconds < 14) {
+      scene.durationSeconds += 1;
+      diff -= 1;
+    } else if (diff < 0 && scene.durationSeconds > 4) {
+      scene.durationSeconds -= 1;
+      diff += 1;
+    }
+    cursor += 1;
+  }
+
+  return adjusted.map((scene, index) => ({
+    ...scene,
+    order: index + 1,
+  }));
+}
+
+function stripForbiddenShortPromises(text: string): string {
+  let next = text;
+  for (const token of FORBIDDEN_SHORT_PROMISES) {
+    const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    next = next.replace(new RegExp(escaped, "gi"), "comentários");
+  }
+  return next
+    .replace(/\s{2,}/g, " ")
+    .replace(/\s+([,.!?;:])/g, "$1")
+    .trim();
+}
+
+function normalizeShortLine(text: string | undefined, fallback: string): string {
+  if (typeof text !== "string" || text.trim().length === 0) {
+    return fallback;
+  }
+  return stripForbiddenShortPromises(text.trim());
+}
+
+function deriveScriptFromScenes(scenes: ShortScenePlan[]): string {
+  return scenes.map((scene) => scene.voiceover.trim()).filter(Boolean).join(" ");
+}
+
+function validateShortFormPackage(payload: ShortFormPackage, fallback: ShortFormPackage): ShortFormPackage {
+  const normalizedScenes = normalizeScenePlan(payload.scenes, fallback.scenes);
+  const desiredTarget = clampShortTargetDuration(payload.targetDurationSeconds, fallback.targetDurationSeconds);
+  const rebalancedScenes = rebalanceSceneDurations(normalizedScenes, desiredTarget);
+  const targetDurationSeconds = sumSceneDurations(rebalancedScenes);
+  const cta = normalizeShortLine(payload.cta, fallback.cta);
+  const scenes = rebalancedScenes.map((scene, index, allScenes) => {
+    if (index === allScenes.length - 1) {
+      return {
+        ...scene,
+        voiceover: cta,
+      };
+    }
+    return scene;
+  });
+  const script = deriveScriptFromScenes(scenes);
+
+  return {
+    ...payload,
+    mode: "viral_short",
+    targetDurationSeconds,
+    hook: normalizeShortLine(payload.hook, fallback.hook),
+    cta,
+    script,
+    description: normalizeShortLine(payload.description, fallback.description),
+    titleOptions: payload.titleOptions.length > 0 ? payload.titleOptions.map((item) => normalizeShortLine(item, fallback.titleOptions[0]!)).slice(0, 3) : fallback.titleOptions,
+    scenes,
+    platformVariants: {
+      youtubeShort: {
+        title: normalizeShortLine(payload.platformVariants.youtubeShort.title, fallback.platformVariants.youtubeShort.title),
+        caption: normalizeShortLine(payload.platformVariants.youtubeShort.caption, fallback.platformVariants.youtubeShort.caption),
+        coverText: normalizeShortLine(payload.platformVariants.youtubeShort.coverText, fallback.platformVariants.youtubeShort.coverText),
+      },
+      tiktok: {
+        hook: normalizeShortLine(payload.platformVariants.tiktok.hook, fallback.platformVariants.tiktok.hook),
+        caption: normalizeShortLine(payload.platformVariants.tiktok.caption, fallback.platformVariants.tiktok.caption),
+        coverText: normalizeShortLine(payload.platformVariants.tiktok.coverText, fallback.platformVariants.tiktok.coverText),
+      },
+    },
+  };
 }
 
 function buildShortFormFallbackPackage(input: {
@@ -5007,17 +5143,7 @@ function buildShortFormFallbackPackage(input: {
     hook: string | null;
   };
   platform: string;
-}): {
-  mode: string;
-  targetDurationSeconds: number;
-  hook: string;
-  script: string;
-  cta: string;
-  description: string;
-  titleOptions: string[];
-  scenes: ShortScenePlan[];
-  platformVariants: ShortPlatformVariants;
-} {
+}): ShortFormPackage {
   const hook = input.item.hook?.trim()
     || `Se você errar isso em ${input.item.title.toLowerCase()}, vai perder dinheiro sem perceber.`;
   const cta = "Comente \"parte 2\" se quiser a continuação prática.";
@@ -9475,7 +9601,7 @@ export class AgentCore {
 
       payload = {
         mode: parsed.mode === "viral_short" ? parsed.mode : payload.mode,
-        targetDurationSeconds: clampShortDuration(parsed.targetDurationSeconds, payload.targetDurationSeconds),
+        targetDurationSeconds: clampShortTargetDuration(parsed.targetDurationSeconds, payload.targetDurationSeconds),
         hook: typeof parsed.hook === "string" && parsed.hook.trim() ? parsed.hook.trim() : payload.hook,
         script: typeof parsed.script === "string" && parsed.script.trim() ? parsed.script.trim() : payload.script,
         cta: typeof parsed.cta === "string" && parsed.cta.trim() ? parsed.cta.trim() : payload.cta,
@@ -9524,6 +9650,8 @@ export class AgentCore {
         error: error instanceof Error ? error.message : String(error),
       });
     }
+
+    payload = validateShortFormPackage(payload, fallbackPayload);
 
     const scriptPackage = [
       "SHORT_PACKAGE_V2",
