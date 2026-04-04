@@ -24,6 +24,14 @@ export interface EvolutionWebhookMessage {
   messageType?: string;
 }
 
+export interface EvolutionInstanceWebhookConfig {
+  enabled: boolean;
+  url: string;
+  webhookByEvents: boolean;
+  webhookBase64: boolean;
+  events: string[];
+}
+
 function stripTrailingSlashes(value: string): string {
   return value.trim().replace(/\/+$/, "");
 }
@@ -181,5 +189,75 @@ export class EvolutionApiClient {
       number,
     });
     return data;
+  }
+
+  async findWebhook(instanceName: string): Promise<Record<string, unknown> | null> {
+    const status = this.getStatus();
+    if (!status.ready || !this.config.apiUrl || !this.config.apiKey) {
+      throw new Error(status.message);
+    }
+
+    const response = await fetch(
+      `${stripTrailingSlashes(this.config.apiUrl)}/webhook/find/${encodeURIComponent(instanceName.trim())}`,
+      {
+        method: "GET",
+        headers: {
+          apikey: this.config.apiKey,
+        },
+        signal: AbortSignal.timeout(15000),
+      },
+    );
+
+    if (!response.ok) {
+      const details = await response.text().catch(() => "");
+      throw new Error(`Evolution API findWebhook failed (${response.status}): ${details || response.statusText}`);
+    }
+
+    const data = (await response.json()) as Record<string, unknown> | null;
+    return data;
+  }
+
+  async setWebhook(instanceName: string, webhook: EvolutionInstanceWebhookConfig): Promise<Record<string, unknown>> {
+    const status = this.getStatus();
+    if (!status.ready || !this.config.apiUrl || !this.config.apiKey) {
+      throw new Error(status.message);
+    }
+
+    const response = await fetch(
+      `${stripTrailingSlashes(this.config.apiUrl)}/webhook/set/${encodeURIComponent(instanceName.trim())}`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          apikey: this.config.apiKey,
+        },
+        body: JSON.stringify({ webhook }),
+        signal: AbortSignal.timeout(15000),
+      },
+    );
+
+    if (!response.ok) {
+      const details = await response.text().catch(() => "");
+      throw new Error(`Evolution API setWebhook failed (${response.status}): ${details || response.statusText}`);
+    }
+
+    return (await response.json()) as Record<string, unknown>;
+  }
+
+  async ensureWebhook(instanceName: string, expected: EvolutionInstanceWebhookConfig): Promise<"unchanged" | "updated"> {
+    const current = await this.findWebhook(instanceName);
+    if (
+      current &&
+      current.enabled === expected.enabled &&
+      current.url === expected.url &&
+      current.webhookByEvents === expected.webhookByEvents &&
+      current.webhookBase64 === expected.webhookBase64 &&
+      JSON.stringify(current.events ?? []) === JSON.stringify(expected.events)
+    ) {
+      return "unchanged";
+    }
+
+    await this.setWebhook(instanceName, expected);
+    return "updated";
   }
 }

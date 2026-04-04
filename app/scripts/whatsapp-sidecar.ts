@@ -15,6 +15,7 @@ import {
   type EvolutionWebhookPayload,
 } from "../src/integrations/whatsapp/evolution-api.js";
 import type { AppConfig } from "../src/types/config.js";
+import type { Logger } from "../src/types/logger.js";
 
 type PendingWhatsAppReplyDraft = {
   kind: "whatsapp_reply";
@@ -152,6 +153,47 @@ async function readJsonBody(request: http.IncomingMessage): Promise<unknown> {
   }
   const raw = Buffer.concat(chunks).toString("utf8").trim();
   return raw ? JSON.parse(raw) : {};
+}
+
+async function ensureConfiguredWebhooks(
+  evolution: EvolutionApiClient,
+  config: AppConfig,
+  logger: Logger,
+): Promise<void> {
+  const instanceNames = Array.from(
+    new Set([
+      config.whatsapp.defaultInstanceName?.trim(),
+      ...Object.keys(config.whatsapp.instanceAccounts),
+    ].filter((value): value is string => Boolean(value && value.trim()))),
+  );
+
+  if (instanceNames.length === 0) {
+    return;
+  }
+
+  const expectedWebhook = {
+    enabled: true,
+    url: `http://whatsapp-sidecar:${config.whatsapp.sidecarPort}${config.whatsapp.webhookPath}`,
+    webhookByEvents: false,
+    webhookBase64: false,
+    events: ["MESSAGES_UPSERT", "CONNECTION_UPDATE", "QRCODE_UPDATED"],
+  } as const;
+
+  for (const instanceName of instanceNames) {
+    try {
+      const status = await evolution.ensureWebhook(instanceName, expectedWebhook);
+      logger.info("WhatsApp webhook ensured", {
+        instanceName,
+        status,
+        url: expectedWebhook.url,
+      });
+    } catch (error) {
+      logger.warn("WhatsApp webhook ensure failed", {
+        instanceName,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
 }
 
 async function main(): Promise<void> {
@@ -417,6 +459,12 @@ async function main(): Promise<void> {
       resolve();
     });
   });
+
+  await ensureConfiguredWebhooks(evolution, config, logger);
+  const webhookEnsureInterval = setInterval(() => {
+    void ensureConfiguredWebhooks(evolution, config, logger);
+  }, 2 * 60 * 1000);
+  webhookEnsureInterval.unref();
 }
 
 main().catch((error) => {
