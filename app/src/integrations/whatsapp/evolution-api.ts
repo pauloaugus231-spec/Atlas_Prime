@@ -32,6 +32,15 @@ export interface EvolutionInstanceWebhookConfig {
   events: string[];
 }
 
+export interface EvolutionRecentChatRecord {
+  remoteJid: string;
+  remoteJidAlt?: string;
+  pushName?: string;
+  updatedAt?: string;
+  lastMessageText?: string;
+  fromMe?: boolean;
+}
+
 function stripTrailingSlashes(value: string): string {
   return value.trim().replace(/\/+$/, "");
 }
@@ -75,6 +84,13 @@ function extractTextFromMessage(data: Record<string, unknown>): string | undefin
   }
 
   return undefined;
+}
+
+function extractTextFromAnyMessage(message: unknown): string | undefined {
+  if (!message || typeof message !== "object") {
+    return undefined;
+  }
+  return extractTextFromMessage({ message: message as Record<string, unknown> });
 }
 
 export function parseEvolutionWebhookMessage(payload: EvolutionWebhookPayload): EvolutionWebhookMessage | null {
@@ -259,5 +275,55 @@ export class EvolutionApiClient {
 
     await this.setWebhook(instanceName, expected);
     return "updated";
+  }
+
+  async findChats(instanceName: string, limit = 10): Promise<EvolutionRecentChatRecord[]> {
+    const status = this.getStatus();
+    if (!status.ready || !this.config.apiUrl || !this.config.apiKey) {
+      throw new Error(status.message);
+    }
+
+    const response = await fetch(
+      `${stripTrailingSlashes(this.config.apiUrl)}/chat/findChats/${encodeURIComponent(instanceName.trim())}`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          apikey: this.config.apiKey,
+        },
+        body: JSON.stringify({}),
+        signal: AbortSignal.timeout(15000),
+      },
+    );
+
+    if (!response.ok) {
+      const details = await response.text().catch(() => "");
+      throw new Error(`Evolution API findChats failed (${response.status}): ${details || response.statusText}`);
+    }
+
+    const data = (await response.json()) as Array<Record<string, unknown>>;
+    return data
+      .slice(0, Math.max(1, Math.min(50, Math.floor(limit))))
+      .map((item) => {
+        const lastMessage = item.lastMessage && typeof item.lastMessage === "object"
+          ? item.lastMessage as Record<string, unknown>
+          : undefined;
+        const key = lastMessage?.key && typeof lastMessage.key === "object"
+          ? lastMessage.key as Record<string, unknown>
+          : undefined;
+        return {
+          remoteJid: typeof item.remoteJid === "string" ? item.remoteJid : "",
+          remoteJidAlt: typeof key?.remoteJidAlt === "string" ? key.remoteJidAlt : undefined,
+          pushName: typeof item.pushName === "string"
+            ? item.pushName
+            : typeof lastMessage?.pushName === "string"
+              ? lastMessage.pushName
+              : undefined,
+          updatedAt: typeof item.updatedAt === "string" ? item.updatedAt : undefined,
+          lastMessageText: extractTextFromAnyMessage(lastMessage?.message),
+          fromMe: key?.fromMe === true,
+        };
+      })
+      .filter((item) => item.remoteJid);
   }
 }

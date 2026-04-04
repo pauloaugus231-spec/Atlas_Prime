@@ -67,6 +67,7 @@ import type { CalendarListSummary, DailyOperationalBrief, TaskSummary } from "..
 import { GoogleWorkspaceAccountsService } from "../integrations/google/google-workspace-accounts.js";
 import { GoogleWorkspaceService } from "../integrations/google/google-workspace.js";
 import { SupabaseMacCommandQueue } from "../integrations/supabase/mac-command-queue.js";
+import { EvolutionApiClient, type EvolutionRecentChatRecord } from "../integrations/whatsapp/evolution-api.js";
 import type { OrchestrationContext } from "../types/orchestration.js";
 import type { ApprovalInboxItemRecord } from "../types/approval-inbox.js";
 import type { UserPreferences } from "../types/user-preferences.js";
@@ -3004,6 +3005,34 @@ function buildWhatsAppScopedRecentMessagesReply(label: string, messages: WhatsAp
       const who = item.pushName ?? item.number ?? item.remoteJid;
       const direction = item.direction === "inbound" ? "recebida" : "enviada";
       return `- ${direction} | ${when} | ${who} | ${item.text}`;
+    }),
+  ].join("\n");
+}
+
+function buildWhatsAppScopedRecentChatsReply(label: string, chats: EvolutionRecentChatRecord[]): string {
+  if (chats.length === 0) {
+    return [
+      `Não encontrei conversas recentes no WhatsApp da conta ${label}.`,
+      "Se a instância acabou de conectar, tente de novo em alguns instantes.",
+    ].join("\n");
+  }
+
+  const formatter = new Intl.DateTimeFormat("pt-BR", {
+    timeZone: "America/Sao_Paulo",
+    day: "2-digit",
+    month: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+
+  return [
+    `Conversas recentes do WhatsApp ${label}: ${chats.length}.`,
+    ...chats.map((item) => {
+      const when = item.updatedAt ? formatter.format(new Date(item.updatedAt)) : "sem horário";
+      const who = item.pushName ?? item.remoteJidAlt ?? item.remoteJid;
+      const direction = item.fromMe ? "enviada" : "recebida";
+      const text = item.lastMessageText?.trim() || "sem texto";
+      return `- ${direction} | ${when} | ${who} | ${text}`;
     }),
   ].join("\n");
 }
@@ -6850,6 +6879,27 @@ export class AgentCore {
     const messages = isScopedAccountQuery && route.instanceName
       ? this.whatsappMessages.listRecentByInstance(route.instanceName, 8)
       : this.whatsappMessages.searchRecent(query, 8);
+    if (isScopedAccountQuery && route.instanceName && messages.length === 0 && this.config.whatsapp.enabled) {
+      try {
+        const whatsapp = new EvolutionApiClient(
+          this.config.whatsapp,
+          this.logger.child({ scope: "whatsapp-evolution" }),
+        );
+        const chats = await whatsapp.findChats(route.instanceName, 8);
+        return {
+          requestId,
+          reply: buildWhatsAppScopedRecentChatsReply(route.accountAlias, chats),
+          messages: buildBaseMessages(activeUserPrompt, orchestration),
+          toolExecutions: [],
+        };
+      } catch (error) {
+        this.logger.warn("WhatsApp recent chat fallback failed", {
+          account: route.accountAlias,
+          instanceName: route.instanceName,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
     return {
       requestId,
       reply: isScopedAccountQuery && route.instanceName
