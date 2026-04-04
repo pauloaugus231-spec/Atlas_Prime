@@ -90,7 +90,7 @@ services:
 
   evolution-api:
     build:
-      context: ./upstream/evolution-api
+      context: ${EVOLUTION_BUILD_CONTEXT:-/srv/atlas/vendor/evolution-api}
       dockerfile: Dockerfile
     container_name: atlas-evolution-api
     restart: unless-stopped
