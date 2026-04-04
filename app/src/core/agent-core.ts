@@ -1283,6 +1283,32 @@ function isContentHookLibraryPrompt(prompt: string): boolean {
   ].some((token) => normalized.includes(token));
 }
 
+function isContentIdeaGenerationPrompt(prompt: string): boolean {
+  const normalized = normalizeEmailAnalysisText(prompt);
+  return (
+    includesAny(normalized, [
+      "gere pautas",
+      "gerar pautas",
+      "gere ideias",
+      "gerar ideias",
+      "crie pautas",
+      "criar pautas",
+      "crie ideias",
+      "ideias para o canal",
+      "pautas para o canal",
+    ]) &&
+    includesAny(normalized, ["canal", "conteudo", "conteúdo", "riqueza despertada", "youtube", "tiktok"])
+  );
+}
+
+function isContentReviewPrompt(prompt: string): boolean {
+  const normalized = normalizeEmailAnalysisText(prompt);
+  return (
+    includesAny(normalized, ["aprovar", "aprove", "reprovar", "reprove"]) &&
+    includesAny(normalized, ["item", "conteudo", "conteúdo", "pauta", "fila", "#"])
+  );
+}
+
 function isCaseNotesPrompt(prompt: string): boolean {
   const normalized = normalizeEmailAnalysisText(prompt);
   return [
@@ -1450,6 +1476,60 @@ function extractContentChannelKey(prompt: string): string | undefined {
     }
   }
   return undefined;
+}
+
+function inferDefaultContentChannelKey(prompt: string): string {
+  return extractContentChannelKey(prompt)
+    ?? (normalizeEmailAnalysisText(prompt).includes("tiktok")
+      ? "riqueza_despertada_tiktok"
+      : "riqueza_despertada_youtube");
+}
+
+function extractContentIdeaSeed(prompt: string): string | undefined {
+  const topicMatch = prompt.match(
+    /(?:sobre|tema|assunto|nicho)\s+["“]?(.+?)["”]?(?=(?:\s+(?:para|pro|no|na)\s+(?:o\s+)?(?:canal|youtube|tiktok)|[?.!,;:]|$))/i,
+  );
+  return topicMatch?.[1]?.trim();
+}
+
+function extractContentItemId(prompt: string): number | undefined {
+  const hashMatch = prompt.match(/#(\d{1,6})\b/);
+  if (hashMatch) {
+    return Number.parseInt(hashMatch[1], 10);
+  }
+  const itemMatch = prompt.match(/(?:item|conteudo|conteúdo|pauta)\s+(\d{1,6})\b/i);
+  if (itemMatch) {
+    return Number.parseInt(itemMatch[1], 10);
+  }
+  return undefined;
+}
+
+function extractContentReviewReason(prompt: string): string | undefined {
+  const reasonMatch = prompt.match(/(?:porque|motivo|raz[aã]o)\s+(.+)$/i);
+  return reasonMatch?.[1]?.trim();
+}
+
+function classifyContentReviewFeedback(reason: string | undefined): string | undefined {
+  if (!reason) {
+    return undefined;
+  }
+  const normalized = normalizeEmailAnalysisText(reason);
+  if (normalized.includes("hook")) {
+    return "hook_fraco";
+  }
+  if (normalized.includes("confus")) {
+    return "confuso";
+  }
+  if (normalized.includes("genéric") || normalized.includes("generic")) {
+    return "generico";
+  }
+  if (normalized.includes("tens")) {
+    return "sem_tensao";
+  }
+  if (normalized.includes("longo")) {
+    return "longo_demais";
+  }
+  return "reprovado_manual";
 }
 
 function extractProjectRoot(prompt: string): ReadableRootKey {
@@ -4437,6 +4517,59 @@ function buildContentHooksReply(hooks: Array<{
   ].join("\n");
 }
 
+function buildContentIdeaGenerationReply(items: Array<{
+  id: number;
+  title: string;
+  channelKey: string | null;
+  formatTemplateKey: string | null;
+  seriesKey: string | null;
+  ideaScore: number | null;
+  scoreReason: string | null;
+}>): string {
+  if (!items.length) {
+    return "Nao consegui gerar pautas editoriais nesta tentativa.";
+  }
+
+  return [
+    `Pautas geradas e salvas: ${items.length}.`,
+    ...items.map((item) =>
+      `- #${item.id} | ${item.title}${item.channelKey ? ` | canal: ${item.channelKey}` : ""}${item.formatTemplateKey ? ` | formato: ${item.formatTemplateKey}` : ""}${item.seriesKey ? ` | serie: ${item.seriesKey}` : ""}${item.ideaScore != null ? ` | score: ${item.ideaScore}` : ""}${item.scoreReason ? ` | motivo: ${truncateBriefText(item.scoreReason, 60)}` : ""}`,
+    ),
+    "",
+    "Próximo passo: revise a fila editorial e aprove ou reprove os itens mais fortes.",
+  ].join("\n");
+}
+
+function buildContentReviewReply(input: {
+  action: "approved" | "rejected";
+  item: {
+    id: number;
+    title: string;
+    status: string;
+    reviewFeedbackCategory?: string | null;
+    reviewFeedbackReason?: string | null;
+    lastReviewedAt?: string | null;
+  };
+}): string {
+  if (input.action === "approved") {
+    return [
+      "Item editorial aprovado.",
+      `- #${input.item.id} | ${input.item.title}`,
+      `- Novo status: ${input.item.status}`,
+      `- Revisado em: ${input.item.lastReviewedAt ?? "agora"}`,
+    ].join("\n");
+  }
+
+  return [
+    "Item editorial reprovado e retirado da fila ativa.",
+    `- #${input.item.id} | ${input.item.title}`,
+    `- Novo status: ${input.item.status}`,
+    `- Categoria: ${input.item.reviewFeedbackCategory ?? "reprovado_manual"}`,
+    `- Motivo: ${input.item.reviewFeedbackReason ?? "sem motivo registrado"}`,
+    `- Revisado em: ${input.item.lastReviewedAt ?? "agora"}`,
+  ].join("\n");
+}
+
 function buildCaseNotesReply(notes: Array<{
   id: number;
   title: string;
@@ -4985,6 +5118,24 @@ export class AgentCore {
     );
     if (directSafeExecResult) {
       return directSafeExecResult;
+    }
+    const directContentIdeaGenerationResult = await this.tryRunDirectContentIdeaGeneration(
+      activeUserPrompt,
+      requestId,
+      requestLogger,
+      orchestration,
+    );
+    if (directContentIdeaGenerationResult) {
+      return directContentIdeaGenerationResult;
+    }
+    const directContentReviewResult = await this.tryRunDirectContentReview(
+      activeUserPrompt,
+      requestId,
+      requestLogger,
+      orchestration,
+    );
+    if (directContentReviewResult) {
+      return directContentReviewResult;
     }
     const directContentChannelsResult = await this.tryRunDirectContentChannels(
       activeUserPrompt,
@@ -7982,6 +8133,225 @@ export class AgentCore {
               total: channels.length,
               platform,
               limit,
+            },
+            null,
+            2,
+          ),
+        },
+      ],
+    };
+  }
+
+  private async tryRunDirectContentIdeaGeneration(
+    userPrompt: string,
+    requestId: string,
+    requestLogger: Logger,
+    orchestration: OrchestrationContext,
+  ): Promise<AgentRunResult | null> {
+    if (!isContentIdeaGenerationPrompt(userPrompt)) {
+      return null;
+    }
+
+    const channelKey = inferDefaultContentChannelKey(userPrompt);
+    const requestedPlatform = extractContentPlatform(userPrompt);
+    const seed = extractContentIdeaSeed(userPrompt);
+    const limit = extractPromptLimit(userPrompt, 8, 20);
+    const channels = this.contentOps.listChannels({ limit: 20 });
+    const channel = channels.find((item) => item.key === channelKey)
+      ?? channels.find((item) => item.platform === requestedPlatform)
+      ?? channels[0];
+
+    if (!channel) {
+      return {
+        requestId,
+        reply: "Nao encontrei nenhum canal editorial configurado para gerar pautas.",
+        messages: buildBaseMessages(userPrompt, orchestration),
+        toolExecutions: [],
+      };
+    }
+
+    const formats = this.contentOps.listFormatTemplates({ activeOnly: true, limit: 20 });
+    const hooks = this.contentOps.listHookTemplates({ limit: 20 });
+    const series = this.contentOps.listSeries({ channelKey: channel.key, limit: 20 });
+
+    requestLogger.info("Using direct content idea generation route", {
+      channelKey: channel.key,
+      platform: channel.platform,
+      limit,
+      seed,
+    });
+
+    const fallbackIdeas = Array.from({ length: Math.min(limit, 5) }).map((_, index) => ({
+      title: `${seed ? `${seed}: ` : ""}${index + 1}. Ideia para ${channel.name}`,
+      hook: hooks[index % Math.max(hooks.length, 1)]?.template ?? "O erro que quase todo mundo comete sobre dinheiro é este:",
+      pillar: ["formas de fazer dinheiro", "modelos de negocio", "erros sobre riqueza", "execucao e disciplina"][index % 4],
+      audience: channel.persona ?? "público geral interessado em riqueza e renda",
+      formatTemplateKey: formats[index % Math.max(formats.length, 1)]?.key ?? "direct_educational",
+      seriesKey: series[index % Math.max(series.length, 1)]?.key ?? null,
+      notes: "Fallback determinístico por falha de geração do modelo.",
+    }));
+
+    type GeneratedIdea = {
+      title: string;
+      hook?: string;
+      pillar?: string;
+      audience?: string;
+      formatTemplateKey?: string;
+      seriesKey?: string | null;
+      notes?: string;
+    };
+
+    let generatedIdeas: GeneratedIdea[] = fallbackIdeas;
+    try {
+      const response = await this.client.chat({
+        messages: [
+          {
+            role: "system",
+            content: [
+              "Você é o editor-chefe do Atlas para short-form content.",
+              "Responda somente JSON válido.",
+              "Formato: um array chamado ideas.",
+              "Cada item deve ter: title, hook, pillar, audience, formatTemplateKey, seriesKey, notes.",
+              "Não repita ideias.",
+              "Faça ideias com potencial de retenção e série.",
+              "Se não houver série adequada, use null em seriesKey.",
+              "Use somente formatTemplateKey e seriesKey existentes no contexto.",
+            ].join(" "),
+          },
+          {
+            role: "user",
+            content: [
+              `Canal: ${channel.name}`,
+              `Channel key: ${channel.key}`,
+              `Plataforma: ${channel.platform}`,
+              `Nicho: ${channel.niche ?? ""}`,
+              `Persona: ${channel.persona ?? ""}`,
+              `Objetivo: ${channel.primaryGoal ?? ""}`,
+              `Estilo: ${channel.styleNotes ?? ""}`,
+              `Idioma: ${channel.language ?? "pt-BR"}`,
+              `Quantidade: ${limit}`,
+              `Seed opcional: ${seed ?? "nenhuma"}`,
+              "",
+              "Formatos disponíveis:",
+              ...formats.map((item) => `- ${item.key}: ${item.label} | ${item.structure}`),
+              "",
+              "Séries disponíveis:",
+              ...(series.length > 0
+                ? series.map((item) => `- ${item.key}: ${item.title} | ${item.premise ?? ""}`)
+                : ["- nenhuma série específica"]),
+              "",
+              "Hooks de referência:",
+              ...hooks.slice(0, 8).map((item) => `- ${item.label}: ${item.template}`),
+            ].join("\n"),
+          },
+        ],
+      });
+
+      const parsed = JSON.parse(stripCodeFences(response.message.content ?? "")) as {
+        ideas?: GeneratedIdea[];
+      };
+      if (Array.isArray(parsed.ideas) && parsed.ideas.length > 0) {
+        generatedIdeas = parsed.ideas
+          .filter((item) => item && typeof item.title === "string" && item.title.trim().length > 0)
+          .slice(0, limit);
+      }
+    } catch (error) {
+      requestLogger.warn("Content idea generation fell back to deterministic ideas", {
+        channelKey: channel.key,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    const savedItems = generatedIdeas.map((idea) =>
+      this.contentOps.createItem({
+        title: idea.title,
+        platform: channel.platform === "youtube" ? "youtube" : channel.platform,
+        format: "short_video",
+        status: "idea",
+        pillar: idea.pillar,
+        audience: idea.audience,
+        hook: idea.hook,
+        notes: idea.notes,
+        channelKey: channel.key,
+        seriesKey: idea.seriesKey ?? undefined,
+        formatTemplateKey: idea.formatTemplateKey ?? undefined,
+      })
+    );
+
+    return {
+      requestId,
+      reply: buildContentIdeaGenerationReply(savedItems),
+      messages: buildBaseMessages(userPrompt, orchestration),
+      toolExecutions: [
+        {
+          toolName: "save_content_item",
+          resultPreview: JSON.stringify(
+            {
+              total: savedItems.length,
+              channelKey: channel.key,
+              platform: channel.platform,
+            },
+            null,
+            2,
+          ),
+        },
+      ],
+    };
+  }
+
+  private async tryRunDirectContentReview(
+    userPrompt: string,
+    requestId: string,
+    requestLogger: Logger,
+    orchestration: OrchestrationContext,
+  ): Promise<AgentRunResult | null> {
+    if (!isContentReviewPrompt(userPrompt)) {
+      return null;
+    }
+
+    const itemId = extractContentItemId(userPrompt);
+    if (!itemId) {
+      return {
+        requestId,
+        reply: "Diga qual item editorial devo revisar, por exemplo: `aprove o item #12`.",
+        messages: buildBaseMessages(userPrompt, orchestration),
+        toolExecutions: [],
+      };
+    }
+
+    const normalized = normalizeEmailAnalysisText(userPrompt);
+    const action: "approved" | "rejected" = includesAny(normalized, ["reprovar", "reprove"]) ? "rejected" : "approved";
+    const reason = extractContentReviewReason(userPrompt);
+    const now = new Date().toISOString();
+
+    requestLogger.info("Using direct content review route", {
+      itemId,
+      action,
+    });
+
+    const item = this.contentOps.updateItem({
+      id: itemId,
+      status: action === "approved" ? "draft" : "archived",
+      reviewFeedbackCategory: action === "rejected" ? classifyContentReviewFeedback(reason) ?? "reprovado_manual" : null,
+      reviewFeedbackReason: action === "rejected" ? reason ?? "reprovado sem motivo detalhado" : null,
+      lastReviewedAt: now,
+    });
+
+    return {
+      requestId,
+      reply: buildContentReviewReply({
+        action,
+        item,
+      }),
+      messages: buildBaseMessages(userPrompt, orchestration),
+      toolExecutions: [
+        {
+          toolName: "update_content_item",
+          resultPreview: JSON.stringify(
+            {
+              id: item.id,
+              status: item.status,
+              reviewFeedbackCategory: item.reviewFeedbackCategory,
             },
             null,
             2,
