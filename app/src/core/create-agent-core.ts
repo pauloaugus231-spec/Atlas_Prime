@@ -4,6 +4,7 @@ import { GoogleMapsService } from "../integrations/google/google-maps.js";
 import { GoogleWorkspaceAuthService } from "../integrations/google/google-auth.js";
 import { GoogleWorkspaceAccountsService } from "../integrations/google/google-workspace-accounts.js";
 import { GoogleWorkspaceService } from "../integrations/google/google-workspace.js";
+import { PexelsMediaService } from "../integrations/media/pexels.js";
 import { SupabaseMacCommandQueue } from "../integrations/supabase/mac-command-queue.js";
 import { createLogger } from "../utils/logger.js";
 import { AgentCore } from "./agent-core.js";
@@ -87,6 +88,10 @@ export async function createAgentCore() {
     config.googleMaps,
     logger.child({ scope: "google-maps" }),
   );
+  const pexelsMedia = new PexelsMediaService(
+    config.media,
+    logger.child({ scope: "pexels-media" }),
+  );
   const emailAccounts = new EmailAccountsService(
     config.emailAccounts,
     googleWorkspaces,
@@ -149,6 +154,7 @@ export async function createAgentCore() {
     googleWorkspace,
     googleWorkspaces,
     googleMaps,
+    pexelsMedia,
     projectOps,
     safeExec,
   );
@@ -177,6 +183,7 @@ export async function createAgentCore() {
     googleWorkspace,
     googleWorkspaces,
     googleMaps,
+    pexelsMedia,
     growthOps,
     projectOps,
     fileAccess,

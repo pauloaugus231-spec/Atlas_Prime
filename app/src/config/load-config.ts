@@ -1,6 +1,6 @@
 import path from "node:path";
 import { existsSync, readFileSync } from "node:fs";
-import type { AppConfig, EmailConfig, GoogleMapsConfig, GoogleWorkspaceConfig } from "../types/config.js";
+import type { AppConfig, EmailConfig, GoogleMapsConfig, GoogleWorkspaceConfig, MediaConfig } from "../types/config.js";
 import type { LogLevel } from "../types/logger.js";
 
 const DEFAULT_OLLAMA_BASE_URL = "http://host.docker.internal:11434";
@@ -372,6 +372,18 @@ function buildGoogleMapsConfig(env: NodeJS.ProcessEnv): GoogleMapsConfig {
   };
 }
 
+function buildMediaConfig(env: NodeJS.ProcessEnv): MediaConfig {
+  const pexelsApiKey = env.PEXELS_API_KEY?.trim() || undefined;
+  const pexelsEnabled = parseBoolean(env.PEXELS_ENABLED, Boolean(pexelsApiKey));
+  return {
+    enabled: pexelsEnabled,
+    pexelsEnabled,
+    pexelsApiKey,
+    pexelsMaxResultsPerScene: parsePositiveInteger(env.PEXELS_MAX_RESULTS_PER_SCENE, 2),
+    pexelsMaxScenesPerRequest: parsePositiveInteger(env.PEXELS_MAX_SCENES_PER_REQUEST, 5),
+  };
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   env = mergeEnvWithFiles(env);
   const appHome = path.resolve(env.APP_HOME ?? process.cwd());
@@ -511,6 +523,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     google: baseGoogleConfig,
     googleAccounts,
     googleMaps: buildGoogleMapsConfig(env),
+    media: buildMediaConfig(env),
     safeExec: {
       enabled: parseBoolean(env.SAFE_EXEC_ENABLED, true),
       allowedCommands: parseCommandMatrix(env.SAFE_EXEC_ALLOWED_COMMANDS, defaultSafeExecCommands),

@@ -66,6 +66,7 @@ import { GoogleMapsService, type GooglePlaceLookupResult } from "../integrations
 import type { CalendarListSummary, DailyOperationalBrief, TaskSummary } from "../integrations/google/google-workspace.js";
 import { GoogleWorkspaceAccountsService } from "../integrations/google/google-workspace-accounts.js";
 import { GoogleWorkspaceService } from "../integrations/google/google-workspace.js";
+import { PexelsMediaService, type PexelsVideoSuggestion } from "../integrations/media/pexels.js";
 import { SupabaseMacCommandQueue } from "../integrations/supabase/mac-command-queue.js";
 import { EvolutionApiClient, type EvolutionRecentChatRecord } from "../integrations/whatsapp/evolution-api.js";
 import type { OrchestrationContext } from "../types/orchestration.js";
@@ -4903,6 +4904,7 @@ function buildContentScriptReply(input: {
     voiceover: string;
     overlay: string;
     visualDirection: string;
+    assetSearchQuery: string;
   }>;
   platformVariants: {
     youtubeShort: {
@@ -4916,6 +4918,11 @@ function buildContentScriptReply(input: {
       hook: string;
     };
   };
+  sceneAssets: Array<{
+    order: number;
+    searchQuery: string;
+    suggestions: PexelsVideoSuggestion[];
+  }>;
 }): string {
   return [
     `Roteiro pronto para o item #${input.item.id}.`,
@@ -4933,8 +4940,18 @@ function buildContentScriptReply(input: {
     "",
     "Plano por cena:",
     ...input.scenes.map((scene) =>
-      `- Cena ${scene.order} | ${scene.durationSeconds}s | VO: ${scene.voiceover} | overlay: ${scene.overlay} | visual: ${scene.visualDirection}`,
+      `- Cena ${scene.order} | ${scene.durationSeconds}s | VO: ${scene.voiceover} | overlay: ${scene.overlay} | visual: ${scene.visualDirection} | busca: ${scene.assetSearchQuery}`,
     ),
+    "",
+    "Assets sugeridos:",
+    ...(input.sceneAssets.length > 0
+      ? input.sceneAssets.flatMap((scene) => [
+          `- Cena ${scene.order} | busca: ${scene.searchQuery}`,
+          ...scene.suggestions.slice(0, 2).map((asset) =>
+            `  - ${asset.videoUrl ?? asset.pageUrl}${asset.creator ? ` | creator: ${asset.creator}` : ""}${asset.durationSeconds ? ` | ${asset.durationSeconds}s` : ""}`,
+          ),
+        ])
+      : ["- Sem assets resolvidos por API. Use a busca por cena para procurar b-roll manualmente."]),
     "",
     "Variações por plataforma:",
     `- YouTube Shorts | título: ${input.platformVariants.youtubeShort.title} | capa: ${input.platformVariants.youtubeShort.coverText} | caption: ${input.platformVariants.youtubeShort.caption}`,
@@ -4953,6 +4970,7 @@ type ShortScenePlan = {
   voiceover: string;
   overlay: string;
   visualDirection: string;
+  assetSearchQuery: string;
 };
 
 type ShortPlatformVariants = {
@@ -5018,7 +5036,9 @@ function normalizeScenePlan(scenes: ShortScenePlan[] | undefined, fallbackScenes
       && typeof scene.overlay === "string"
       && scene.overlay.trim().length > 0
       && typeof scene.visualDirection === "string"
-      && scene.visualDirection.trim().length > 0,
+      && scene.visualDirection.trim().length > 0
+      && typeof scene.assetSearchQuery === "string"
+      && scene.assetSearchQuery.trim().length > 0,
     )
     .slice(0, 5)
     .map((scene, index) => ({
@@ -5027,6 +5047,7 @@ function normalizeScenePlan(scenes: ShortScenePlan[] | undefined, fallbackScenes
       voiceover: scene.voiceover.trim(),
       overlay: scene.overlay.trim(),
       visualDirection: scene.visualDirection.trim(),
+      assetSearchQuery: scene.assetSearchQuery.trim(),
     }));
 }
 
@@ -5094,6 +5115,54 @@ function deriveScriptFromScenes(scenes: ShortScenePlan[]): string {
   return scenes.map((scene) => scene.voiceover.trim()).filter(Boolean).join(" ");
 }
 
+function normalizeAssetSearchQuery(value: string | undefined, fallback: string): string {
+  const normalized = normalizeShortLine(value, fallback)
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return normalized || fallback;
+}
+
+async function resolveSceneAssets(
+  pexelsMedia: PexelsMediaService,
+  scenes: ShortScenePlan[],
+  maxScenes: number,
+): Promise<Array<{
+  order: number;
+  searchQuery: string;
+  suggestions: PexelsVideoSuggestion[];
+}>> {
+  if (!pexelsMedia.isEnabled()) {
+    return [];
+  }
+
+  const results: Array<{
+    order: number;
+    searchQuery: string;
+    suggestions: PexelsVideoSuggestion[];
+  }> = [];
+
+  for (const scene of scenes.slice(0, Math.max(1, maxScenes))) {
+    try {
+      const suggestions = await pexelsMedia.searchVideos(scene.assetSearchQuery);
+      results.push({
+        order: scene.order,
+        searchQuery: scene.assetSearchQuery,
+        suggestions,
+      });
+    } catch {
+      results.push({
+        order: scene.order,
+        searchQuery: scene.assetSearchQuery,
+        suggestions: [],
+      });
+    }
+  }
+
+  return results;
+}
+
 function validateShortFormPackage(payload: ShortFormPackage, fallback: ShortFormPackage): ShortFormPackage {
   const normalizedScenes = normalizeScenePlan(payload.scenes, fallback.scenes);
   const desiredTarget = clampShortTargetDuration(payload.targetDurationSeconds, fallback.targetDurationSeconds);
@@ -5109,7 +5178,15 @@ function validateShortFormPackage(payload: ShortFormPackage, fallback: ShortForm
     }
     return scene;
   });
-  const script = deriveScriptFromScenes(scenes);
+  const resolvedScenes = scenes.map((scene, index, allScenes) => ({
+    ...scene,
+    assetSearchQuery: normalizeAssetSearchQuery(
+      scene.assetSearchQuery,
+      fallback.scenes[Math.min(index, fallback.scenes.length - 1)]?.assetSearchQuery ?? "startup business office",
+    ),
+    overlay: index === allScenes.length - 1 ? cta.toUpperCase() : scene.overlay,
+  }));
+  const script = deriveScriptFromScenes(resolvedScenes);
 
   return {
     ...payload,
@@ -5120,7 +5197,7 @@ function validateShortFormPackage(payload: ShortFormPackage, fallback: ShortForm
     script,
     description: normalizeShortLine(payload.description, fallback.description),
     titleOptions: payload.titleOptions.length > 0 ? payload.titleOptions.map((item) => normalizeShortLine(item, fallback.titleOptions[0]!)).slice(0, 3) : fallback.titleOptions,
-    scenes,
+    scenes: resolvedScenes,
     platformVariants: {
       youtubeShort: {
         title: normalizeShortLine(payload.platformVariants.youtubeShort.title, fallback.platformVariants.youtubeShort.title),
@@ -5160,6 +5237,7 @@ function buildShortFormFallbackPackage(input: {
       voiceover: hook,
       overlay: "ERRO QUE CUSTA CARO",
       visualDirection: "texto forte em tela + corte rápido + destaque visual no problema",
+      assetSearchQuery: "worried founder laptop",
     },
     {
       order: 2,
@@ -5167,6 +5245,7 @@ function buildShortFormFallbackPackage(input: {
       voiceover: `A maioria olha só para ${input.item.pillar ?? "o resultado"} e ignora o mecanismo que gera caixa.`,
       overlay: "OLHAR SÓ O RESULTADO É ARMADILHA",
       visualDirection: "b-roll de dashboard, vendas, computador ou rotina de trabalho",
+      assetSearchQuery: "startup dashboard office",
     },
     {
       order: 3,
@@ -5174,6 +5253,7 @@ function buildShortFormFallbackPackage(input: {
       voiceover: `A regra prática aqui é simples: ${titleBase.toLowerCase()} precisa aumentar valor percebido sem travar conversão.`,
       overlay: "REGRA PRÁTICA",
       visualDirection: "close em planilha, pricing page, números ou cards de oferta",
+      assetSearchQuery: "pricing page saas",
     },
     {
       order: 4,
@@ -5181,6 +5261,7 @@ function buildShortFormFallbackPackage(input: {
       voiceover: "Se não melhorar retenção, margem ou conversão, não é estratégia. É só ruído.",
       overlay: "SEM RETENÇÃO, MARGEM OU CONVERSÃO = RUÍDO",
       visualDirection: "comparação antes/depois, gráficos simples, setas e cortes secos",
+      assetSearchQuery: "growth analytics chart",
     },
     {
       order: 5,
@@ -5188,6 +5269,7 @@ function buildShortFormFallbackPackage(input: {
       voiceover: cta,
       overlay: "QUER A PARTE 2?",
       visualDirection: "encerramento com texto forte e tela limpa para CTA",
+      assetSearchQuery: "social media comment phone",
     },
   ];
   const script = scenes.map((scene) => scene.voiceover).join(" ");
@@ -5453,6 +5535,7 @@ export class AgentCore {
     private readonly googleWorkspace: GoogleWorkspaceService,
     private readonly googleWorkspaces: GoogleWorkspaceAccountsService,
     private readonly googleMaps: GoogleMapsService,
+    private readonly pexelsMedia: PexelsMediaService,
     private readonly projectOps: ProjectOpsService,
     private readonly safeExec: SafeExecService,
   ) {}
@@ -9562,7 +9645,8 @@ export class AgentCore {
               "mode deve ser viral_short.",
               "targetDurationSeconds entre 35 e 50.",
               "titleOptions deve ser array com 3 títulos curtos.",
-              "Crie cenas curtas com os campos order, durationSeconds, voiceover, overlay, visualDirection.",
+              "Crie cenas curtas com os campos order, durationSeconds, voiceover, overlay, visualDirection, assetSearchQuery.",
+              "assetSearchQuery deve ser uma busca curta em inglês, de 2 a 5 palavras, boa para achar b-roll em banco de vídeo.",
               "Cada vídeo deve ter UMA ideia central. Sem lista longa, sem densidade excessiva, sem jargão demais.",
               "O hook precisa abrir tensão real em até 2 segundos.",
               "O CTA deve ser curto. Não invente link, checklist ou oferta que ainda não existem.",
@@ -9653,6 +9737,12 @@ export class AgentCore {
 
     payload = validateShortFormPackage(payload, fallbackPayload);
 
+    const sceneAssets = await resolveSceneAssets(
+      this.pexelsMedia,
+      payload.scenes,
+      this.config.media.pexelsMaxScenesPerRequest,
+    );
+
     const scriptPackage = [
       "SHORT_PACKAGE_V2",
       `mode: ${payload.mode}`,
@@ -9665,8 +9755,16 @@ export class AgentCore {
       "",
       "scene_plan:",
       ...payload.scenes.map((scene) =>
-        `${scene.order}. ${scene.durationSeconds}s | VO=${scene.voiceover} | overlay=${scene.overlay} | visual=${scene.visualDirection}`,
+        `${scene.order}. ${scene.durationSeconds}s | VO=${scene.voiceover} | overlay=${scene.overlay} | visual=${scene.visualDirection} | search=${scene.assetSearchQuery}`,
       ),
+      "",
+      "scene_assets:",
+      ...(sceneAssets.length > 0
+        ? sceneAssets.flatMap((scene) => [
+            `scene_${scene.order}.query: ${scene.searchQuery}`,
+            ...scene.suggestions.slice(0, 2).map((asset, index) => `scene_${scene.order}.asset_${index + 1}: ${asset.videoUrl ?? asset.pageUrl}`),
+          ])
+        : ["scene_assets: no_api_results"]),
       "",
       "platform_variants:",
       `youtube_short.title: ${payload.platformVariants.youtubeShort.title}`,
@@ -9703,6 +9801,7 @@ export class AgentCore {
         description: payload.description,
         scenes: payload.scenes,
         platformVariants: payload.platformVariants,
+        sceneAssets,
       }),
       messages: buildBaseMessages(userPrompt, orchestration),
       toolExecutions: [

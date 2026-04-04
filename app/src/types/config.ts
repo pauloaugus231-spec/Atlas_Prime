@@ -80,6 +80,14 @@ export interface GoogleMapsConfig {
   defaultLanguageCode: string;
 }
 
+export interface MediaConfig {
+  enabled: boolean;
+  pexelsEnabled: boolean;
+  pexelsApiKey?: string;
+  pexelsMaxResultsPerScene: number;
+  pexelsMaxScenesPerRequest: number;
+}
+
 export interface SafeExecConfig {
   enabled: boolean;
   allowedCommands: string[][];
@@ -128,6 +136,7 @@ export interface AppConfig {
   google: GoogleWorkspaceConfig;
   googleAccounts: Record<string, GoogleWorkspaceConfig>;
   googleMaps: GoogleMapsConfig;
+  media: MediaConfig;
   safeExec: SafeExecConfig;
   supabaseMacQueue: SupabaseMacQueueConfig;
   whatsapp: WhatsAppConfig;
