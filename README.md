@@ -218,6 +218,16 @@ Ver logs:
 docker compose logs -f agent
 ```
 
+## Auto-deploy para EC2
+
+O repositorio ja inclui um workflow de deploy automatico da branch `main` para EC2:
+
+- workflow: [deploy-ec2.yml](/Users/user/Documents/agente_ai/.github/workflows/deploy-ec2.yml)
+- script remoto: [deploy-ec2.sh](/Users/user/Documents/agente_ai/scripts/deploy-ec2.sh)
+- guia rapido: [aws-ec2-autodeploy.md](/Users/user/Documents/agente_ai/docs/aws-ec2-autodeploy.md)
+
+Esse fluxo exige secrets no GitHub Actions antes de entrar em operacao.
+
 Se alterar `.env`, recrie o container:
 
 ```bash

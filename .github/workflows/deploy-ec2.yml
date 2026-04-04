@@ -1,0 +1,68 @@
+name: Deploy EC2
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-ec2-main
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    if: ${{ secrets.AWS_EC2_HOST != '' && secrets.AWS_EC2_SSH_KEY != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      EC2_HOST: ${{ secrets.AWS_EC2_HOST }}
+      EC2_PORT: ${{ secrets.AWS_EC2_PORT }}
+      EC2_USER: ${{ secrets.AWS_EC2_USER }}
+      DEPLOY_PATH: ${{ secrets.AWS_EC2_DEPLOY_PATH }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate deployment settings
+        run: |
+          EC2_PORT="${EC2_PORT:-22}"
+          EC2_USER="${EC2_USER:-ubuntu}"
+          DEPLOY_PATH="${DEPLOY_PATH:-/srv/atlas/app}"
+          test -n "$EC2_HOST" || { echo "AWS_EC2_HOST ausente"; exit 1; }
+          test -n "${{ secrets.AWS_EC2_SSH_KEY }}" || { echo "AWS_EC2_SSH_KEY ausente"; exit 1; }
+          printf 'Host: %s\nPort: %s\nUser: %s\nPath: %s\n' "$EC2_HOST" "$EC2_PORT" "$EC2_USER" "$DEPLOY_PATH"
+
+      - name: Prepare SSH
+        run: |
+          EC2_PORT="${EC2_PORT:-22}"
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "${{ secrets.AWS_EC2_SSH_KEY }}" > ~/.ssh/atlas_ec2
+          chmod 600 ~/.ssh/atlas_ec2
+          ssh-keyscan -p "$EC2_PORT" -H "$EC2_HOST" >> ~/.ssh/known_hosts
+
+      - name: Sync repository to EC2
+        run: |
+          EC2_PORT="${EC2_PORT:-22}"
+          EC2_USER="${EC2_USER:-ubuntu}"
+          DEPLOY_PATH="${DEPLOY_PATH:-/srv/atlas/app}"
+          rsync -az --delete \
+            --exclude ".git/" \
+            --exclude ".github/" \
+            --exclude ".env" \
+            --exclude ".env.production" \
+            --exclude ".env.omnichannel" \
+            --exclude "app/node_modules/" \
+            --exclude "app/dist/" \
+            --exclude "app/workspace/.agent-state/" \
+            --exclude "upstream/" \
+            -e "ssh -i ~/.ssh/atlas_ec2 -p $EC2_PORT" \
+            ./ "$EC2_USER@$EC2_HOST:$DEPLOY_PATH/"
+
+      - name: Run remote deploy
+        run: |
+          EC2_PORT="${EC2_PORT:-22}"
+          EC2_USER="${EC2_USER:-ubuntu}"
+          DEPLOY_PATH="${DEPLOY_PATH:-/srv/atlas/app}"
+          ssh -i ~/.ssh/atlas_ec2 -p "$EC2_PORT" "$EC2_USER@$EC2_HOST" \
+            "cd '$DEPLOY_PATH' && chmod +x scripts/deploy-ec2.sh && ATLAS_APP_DIR='$DEPLOY_PATH' scripts/deploy-ec2.sh"
