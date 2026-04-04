@@ -1,0 +1,34 @@
+services:
+  agent:
+    container_name: atlas-core
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - .env.production
+    working_dir: /app
+    command: ["npm", "run", "telegram:start"]
+    environment:
+      APP_HOME: /app
+      WORKSPACE_DIR: /workspace
+      PLUGINS_DIR: /plugins
+      LOGS_DIR: /logs
+      AUTHORIZED_PROJECTS_DIR: /authorized-projects
+    read_only: true
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 256
+    mem_limit: 1500m
+    cpus: 1.5
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m
+      - /home/agente/.cache:rw,noexec,nosuid,nodev,size=128m
+      - /home/agente/.npm:rw,noexec,nosuid,nodev,size=128m
+    volumes:
+      - /srv/atlas/state/workspace:/workspace:rw
+      - /srv/atlas/state/plugins:/plugins:rw
+      - /srv/atlas/logs:/logs:rw
+      - /srv/atlas/state/authorized-projects:/authorized-projects:ro

@@ -21,6 +21,10 @@ RUN groupadd --system --gid 10001 agente \
 WORKDIR /app
 
 COPY --chown=agente:agente app/package.json ./package.json
+COPY --chown=agente:agente app/package-lock.json ./package-lock.json
+COPY --chown=agente:agente app/tsconfig.json ./tsconfig.json
+RUN npm ci --no-audit --no-fund
+
 COPY --chown=agente:agente app/scripts ./scripts
 COPY --chown=agente:agente app/src ./src
 COPY --chown=agente:agente app/workspace ./workspace

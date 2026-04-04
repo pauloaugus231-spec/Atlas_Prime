@@ -5424,18 +5424,18 @@ export class AgentCore {
 
   private resolveHostProjectPath(alias: string): string | undefined {
     const normalizedAlias = normalizeAliasToken(alias);
-    const hostUserDocuments = process.env.HOST_USER_DOCUMENTS_DIR?.trim() || "/Users/user/Documents";
-    const hostAuthorizedProjects = process.env.HOST_AUTHORIZED_PROJECTS_DIR?.trim() || "/Users/user/Agente_Autorizados";
-    const hostWorkspace = process.env.HOST_AGENT_WORKSPACE?.trim() || "/Users/user/Agente_Workspace";
+    const documentsRoot = process.env.HOST_USER_DOCUMENTS_DIR?.trim();
+    const authorizedProjectsRoot = this.config.paths.authorizedProjectsDir;
     const roots = [
-      hostUserDocuments,
-      hostWorkspace,
-      path.join(hostAuthorizedProjects, "Dev"),
-      path.join(hostAuthorizedProjects, "Social"),
-      path.join(hostAuthorizedProjects, "Conteudo"),
-      path.join(hostAuthorizedProjects, "Financeiro"),
-      path.join(hostAuthorizedProjects, "Admin"),
-    ];
+      documentsRoot,
+      this.config.paths.workspaceDir,
+      authorizedProjectsRoot,
+      path.join(authorizedProjectsRoot, "Dev"),
+      path.join(authorizedProjectsRoot, "Social"),
+      path.join(authorizedProjectsRoot, "Conteudo"),
+      path.join(authorizedProjectsRoot, "Financeiro"),
+      path.join(authorizedProjectsRoot, "Admin"),
+    ].filter((value): value is string => Boolean(value));
 
     for (const root of roots) {
       const direct = path.resolve(root, alias);
