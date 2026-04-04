@@ -2379,6 +2379,39 @@ function formatTaskDue(task: TaskSummary, timezone: string): string {
   return formatBriefDateTime(task.due ?? task.updated, timezone);
 }
 
+function truncateBriefText(value: string | null | undefined, maxLength = 72): string {
+  const normalized = value?.replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return "(sem detalhe)";
+  }
+
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+
+  return `${normalized.slice(0, maxLength - 3).trimEnd()}...`;
+}
+
+function summarizeEmailSender(from: string[]): string {
+  const primary = from.find((item) => item.trim())?.trim();
+  if (!primary) {
+    return "(remetente desconhecido)";
+  }
+
+  const match = primary.match(/^(.*?)\s*<[^>]+>$/);
+  const label = match?.[1]?.replace(/^"+|"+$/g, "").trim() || primary;
+  return truncateBriefText(label, 28);
+}
+
+function isOperationalNoise(value: string | null | undefined): boolean {
+  const normalized = value?.normalize("NFD").replace(/\p{Diacritic}/gu, "").toLowerCase().trim() ?? "";
+  if (!normalized) {
+    return false;
+  }
+
+  return normalized.includes("teste controlado");
+}
+
 function buildOperationalBriefReply(input: {
   brief: DailyOperationalBrief;
   focus: Array<{ title: string; whyNow: string; nextAction: string }>;
@@ -2441,65 +2474,120 @@ function buildMorningBriefReply(input: {
   focus: Array<{ title: string; nextAction: string }>;
   nextAction?: string;
 }): string {
+  const attentionNow: string[] = [];
+  const highestEmail = input.emails.find((item) => item.priority === "alta") ?? input.emails[0];
+  const nextEvent = input.events[0];
+  const nextTask = input.tasks[0];
+  const topWorkflow = input.workflows[0];
+
+  if (input.approvals.length > 0) {
+    attentionNow.push(`${input.approvals.length} aprovação(ões) pendente(s).`);
+  }
+
+  if (highestEmail) {
+    attentionNow.push(
+      `${highestEmail.priority.toUpperCase()} email: ${truncateBriefText(highestEmail.subject || "(sem assunto)")} — ${summarizeEmailSender(highestEmail.from)} — ${highestEmail.account}`,
+    );
+  }
+
+  if (nextEvent) {
+    attentionNow.push(
+      `Próximo compromisso: ${formatBriefDateTime(nextEvent.start, input.timezone)} — ${truncateBriefText(nextEvent.summary)}${nextEvent.location ? ` — ${summarizeCalendarLocation(nextEvent.location)}` : ""}`,
+    );
+  }
+
+  if (nextTask) {
+    attentionNow.push(
+      `Tarefa mais próxima: ${truncateBriefText(nextTask.title)} — ${formatTaskDue(nextTask, input.timezone)} — ${nextTask.account}`,
+    );
+  }
+
+  if (!nextEvent && !nextTask && topWorkflow) {
+    attentionNow.push(`Workflow #${topWorkflow.id}: ${truncateBriefText(topWorkflow.title)}`);
+  }
+
   const lines = [
-    "Morning briefing pronto.",
-    `- Agenda hoje: ${input.events.length}`,
-    `- Tarefas abertas: ${input.tasks.length}`,
-    `- Emails prioritários: ${input.emails.length}`,
-    `- Aprovações pendentes: ${input.approvals.length}`,
-    `- Workflows ativos: ${input.workflows.length}`,
+    "Briefing da manhã",
+    "",
+    "Resumo rápido:",
+    `- Hoje: ${input.events.length} compromisso(s) | ${input.tasks.length} tarefa(s) | ${input.emails.length} email(s)`,
+    `- Pendências: ${input.approvals.length} aprovação(ões) | ${input.workflows.length} workflow(s)`,
   ];
 
+  if (attentionNow.length > 0) {
+    lines.push("", "Atenção agora:");
+    for (const item of attentionNow.slice(0, 3)) {
+      lines.push(`- ${item}`);
+    }
+  }
+
+  lines.push("", "Agenda de hoje:");
   if (input.events.length > 0) {
-    lines.push("", "Agenda:");
-    for (const event of input.events.slice(0, 4)) {
+    for (const event of input.events.slice(0, 3)) {
       lines.push(
-        `- ${formatBriefDateTime(event.start, input.timezone)} | ${event.summary} | conta: ${event.account}${event.location ? ` | ${summarizeCalendarLocation(event.location)}` : ""}${event.matchedTerms?.length ? ` | relevante para você` : ""}`,
+        `- ${formatBriefDateTime(event.start, input.timezone)} — ${truncateBriefText(event.summary)}${event.location ? ` — ${summarizeCalendarLocation(event.location)}` : ""} — ${event.account}${event.matchedTerms?.length ? " — seu" : ""}`,
       );
     }
+    if (input.events.length > 3) {
+      lines.push(`- ... e mais ${input.events.length - 3} compromisso(s).`);
+    }
+  } else {
+    lines.push("- Nenhum compromisso pessoal hoje.");
   }
 
+  lines.push("", "Tarefas em foco:");
   if (input.tasks.length > 0) {
-    lines.push("", "Tarefas:");
-    for (const task of input.tasks.slice(0, 4)) {
-      lines.push(`- ${task.title} | conta: ${task.account} | prazo: ${formatTaskDue(task, input.timezone)}`);
+    for (const task of input.tasks.slice(0, 3)) {
+      lines.push(`- ${truncateBriefText(task.title)} — ${formatTaskDue(task, input.timezone)} — ${task.account}`);
     }
+    if (input.tasks.length > 3) {
+      lines.push(`- ... e mais ${input.tasks.length - 3} tarefa(s).`);
+    }
+  } else {
+    lines.push("- Nenhuma tarefa aberta em foco.");
   }
 
+  lines.push("", "Inbox primeiro:");
   if (input.emails.length > 0) {
-    lines.push("", "Inbox prioritária:");
-    for (const item of input.emails.slice(0, 4)) {
+    for (const item of input.emails.slice(0, 3)) {
       lines.push(
-        `- [${item.priority}] ${item.subject || "(sem assunto)"} | ${item.from.join(", ") || "(remetente desconhecido)"} | ${item.relationship} | conta: ${item.account}`,
+        `- ${item.priority.toUpperCase()} — ${truncateBriefText(item.subject || "(sem assunto)")} — ${summarizeEmailSender(item.from)} — ${item.account}`,
       );
     }
+    if (input.emails.length > 3) {
+      lines.push(`- ... e mais ${input.emails.length - 3} email(s) prioritário(s).`);
+    }
+  } else {
+    lines.push("- Nenhum email prioritário agora.");
   }
 
   if (input.approvals.length > 0) {
     lines.push("", "Aprovações:");
-    for (const item of input.approvals.slice(0, 4)) {
-      lines.push(`- ${item.subject} | ${item.actionKind} | ${item.channel}`);
+    for (const item of input.approvals.slice(0, 3)) {
+      lines.push(`- ${truncateBriefText(item.subject)} — ${item.actionKind} — ${item.channel}`);
+    }
+    if (input.approvals.length > 3) {
+      lines.push(`- ... e mais ${input.approvals.length - 3} aprovação(ões).`);
     }
   }
 
   if (input.workflows.length > 0) {
-    lines.push("", "Workflows em andamento:");
-    for (const workflow of input.workflows.slice(0, 4)) {
-      lines.push(
-        `- #${workflow.id} ${workflow.title} | status: ${workflow.status}${workflow.nextAction ? ` | próxima ação: ${workflow.nextAction}` : ""}`,
-      );
+    lines.push("", "Radar:");
+    for (const workflow of input.workflows.slice(0, 2)) {
+      lines.push(`#${workflow.id} ${truncateBriefText(workflow.title)} — ${workflow.status}`);
     }
-  }
-
-  if (input.focus.length > 0) {
-    lines.push("", "Foco recomendado:");
-    for (const item of input.focus.slice(0, 3)) {
-      lines.push(`- ${item.title} | próxima ação: ${item.nextAction}`);
+    if (input.workflows.length > 2) {
+      lines.push(`- ... e mais ${input.workflows.length - 2} workflow(s).`);
+    }
+  } else if (input.focus.length > 0) {
+    lines.push("", "Radar:");
+    for (const item of input.focus.slice(0, 2)) {
+      lines.push(`- ${truncateBriefText(item.title)}${item.nextAction ? ` — ${truncateBriefText(item.nextAction, 56)}` : ""}`);
     }
   }
 
   if (input.nextAction) {
-    lines.push("", `Próxima ação recomendada: ${input.nextAction}`);
+    lines.push("", `Próxima ação: ${truncateBriefText(input.nextAction, 96)}`);
   }
 
   return lines.join("\n");
@@ -5244,6 +5332,7 @@ export class AgentCore {
 
     events.sort((left, right) => (left.start ?? "").localeCompare(right.start ?? ""));
     tasks.sort((left, right) => (left.due ?? left.updated ?? "").localeCompare(right.due ?? right.updated ?? ""));
+    const visibleTasks = tasks.filter((task) => !isOperationalNoise(task.title));
 
     const prioritizedEmails: Array<{
       account: string;
@@ -5303,6 +5392,7 @@ export class AgentCore {
         priorityOrder[left.priority as keyof typeof priorityOrder]
         - priorityOrder[right.priority as keyof typeof priorityOrder],
     );
+    const visibleEmails = prioritizedEmails.filter((item) => !isOperationalNoise(item.subject));
 
     const approvals = this.approvals.listPendingAll(6).map((item) => ({
       subject: item.subject,
@@ -5318,32 +5408,34 @@ export class AgentCore {
         status: plan.status,
         nextAction: plan.nextAction,
       }));
+    const visibleWorkflows = workflows.filter((plan) => !isOperationalNoise(plan.title));
     const focus = this.memory.getDailyFocus(3).map((item) => ({
       title: item.item.title,
       nextAction: item.nextAction,
     }));
+    const visibleFocus = focus.filter((item) => !isOperationalNoise(item.title));
 
     const nextAction =
       approvals.length > 0
         ? "Revisar as aprovações pendentes no Telegram."
-        : prioritizedEmails.find((item) => item.priority === "alta")
+        : visibleEmails.find((item) => item.priority === "alta")
           ? "Responder o email mais urgente da inbox prioritária."
           : events.length > 0
             ? "Preparar o primeiro compromisso do dia."
-            : tasks.length > 0
+            : visibleTasks.length > 0
               ? "Atacar a primeira tarefa com prazo do dia."
-              : workflows[0]?.nextAction ?? focus[0]?.nextAction;
+              : visibleWorkflows[0]?.nextAction ?? visibleFocus[0]?.nextAction;
 
     return {
       requestId,
       reply: buildMorningBriefReply({
         timezone: this.config.google.defaultTimezone,
         events,
-        tasks,
-        emails: prioritizedEmails,
+        tasks: visibleTasks,
+        emails: visibleEmails,
         approvals,
-        workflows,
-        focus,
+        workflows: visibleWorkflows,
+        focus: visibleFocus,
         nextAction,
       }),
       messages: buildBaseMessages(userPrompt, orchestration),
@@ -5353,10 +5445,10 @@ export class AgentCore {
           resultPreview: JSON.stringify(
             {
               events: events.length,
-              tasks: tasks.length,
-              emails: prioritizedEmails.length,
+              tasks: visibleTasks.length,
+              emails: visibleEmails.length,
               approvals: approvals.length,
-              workflows: workflows.length,
+              workflows: visibleWorkflows.length,
             },
             null,
             2,
