@@ -8,10 +8,12 @@ import type {
   ContentHookTemplateRecord,
   ContentItemRecord,
   ContentPerformanceRecord,
+  ContentResearchRunRecord,
   ContentSeriesRecord,
   CreateContentHookTemplateInput,
   CreateContentItemInput,
   CreateContentPerformanceInput,
+  CreateContentResearchRunInput,
   ListContentItemsFilters,
   UpdateContentItemInput,
   UpsertContentChannelInput,
@@ -237,6 +239,20 @@ function mapPerformance(row: Record<string, unknown>): ContentPerformanceRecord 
   };
 }
 
+function mapResearchRun(row: Record<string, unknown>): ContentResearchRunRecord {
+  return {
+    id: Number(row.id),
+    channelKey: String(row.channel_key),
+    runType: String(row.run_type),
+    runDate: String(row.run_date),
+    status: String(row.status) as ContentResearchRunRecord["status"],
+    primaryTrend: row.primary_trend == null ? null : String(row.primary_trend),
+    summary: row.summary == null ? null : String(row.summary),
+    payloadJson: row.payload_json == null ? null : String(row.payload_json),
+    createdAt: String(row.created_at),
+  };
+}
+
 export class ContentOpsStore {
   private readonly db: DatabaseSync;
 
@@ -345,6 +361,18 @@ export class ContentOpsStore {
         shares REAL,
         score REAL,
         notes TEXT,
+        created_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS content_research_runs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        channel_key TEXT NOT NULL,
+        run_type TEXT NOT NULL,
+        run_date TEXT NOT NULL,
+        status TEXT NOT NULL,
+        primary_trend TEXT,
+        summary TEXT,
+        payload_json TEXT,
         created_at TEXT NOT NULL
       );
     `);
@@ -914,5 +942,36 @@ export class ContentOpsStore {
       LIMIT ?
     `).all(...params, normalizeLimit(filters.limit)) as Array<Record<string, unknown>>;
     return rows.map((row) => mapPerformance(row));
+  }
+
+  createResearchRun(input: CreateContentResearchRunInput): ContentResearchRunRecord {
+    const row = this.db.prepare(`
+      INSERT INTO content_research_runs (
+        channel_key, run_type, run_date, status, primary_trend, summary, payload_json, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      RETURNING *
+    `).get(
+      input.channelKey.trim(),
+      input.runType.trim(),
+      input.runDate.trim(),
+      input.status,
+      normalizeOptionalText(input.primaryTrend),
+      normalizeOptionalText(input.summary),
+      normalizeOptionalText(input.payloadJson),
+      new Date().toISOString(),
+    ) as Record<string, unknown>;
+
+    return mapResearchRun(row);
+  }
+
+  getLatestResearchRun(channelKey: string, runType: string, runDate: string): ContentResearchRunRecord | null {
+    const row = this.db.prepare(`
+      SELECT *
+      FROM content_research_runs
+      WHERE channel_key = ? AND run_type = ? AND run_date = ?
+      ORDER BY id DESC
+      LIMIT 1
+    `).get(channelKey.trim(), runType.trim(), runDate.trim()) as Record<string, unknown> | undefined;
+    return row ? mapResearchRun(row) : null;
   }
 }

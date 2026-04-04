@@ -153,6 +153,28 @@ export interface ContentPerformanceRecord {
   createdAt: string;
 }
 
+export interface CreateContentResearchRunInput {
+  channelKey: string;
+  runType: string;
+  runDate: string;
+  status: "success" | "failed" | "skipped";
+  primaryTrend?: string;
+  summary?: string;
+  payloadJson?: string;
+}
+
+export interface ContentResearchRunRecord {
+  id: number;
+  channelKey: string;
+  runType: string;
+  runDate: string;
+  status: "success" | "failed" | "skipped";
+  primaryTrend: string | null;
+  summary: string | null;
+  payloadJson: string | null;
+  createdAt: string;
+}
+
 export interface CreateContentItemInput {
   title: string;
   platform: (typeof CONTENT_PLATFORMS)[number];

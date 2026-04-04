@@ -1164,6 +1164,7 @@ export class TelegramService {
   private readonly audioTranscription?: OpenAiAudioTranscriptionService;
   private readonly scheduleImport?: OpenAiScheduleImportService;
   private readonly whatsapp: EvolutionApiClient;
+  private backgroundJobsStarted = false;
 
   constructor(
     private readonly config: AppConfig,
@@ -1207,6 +1208,8 @@ export class TelegramService {
       allowlistConfigured: this.hasAllowlist,
     });
 
+    this.startBackgroundJobs(signal);
+
     let offset = 0;
 
     while (!signal.aborted) {
@@ -1231,6 +1234,57 @@ export class TelegramService {
         });
         await delay(2000, undefined, { signal }).catch(() => undefined);
       }
+    }
+  }
+
+  private startBackgroundJobs(signal: AbortSignal): void {
+    if (this.backgroundJobsStarted) {
+      return;
+    }
+    this.backgroundJobsStarted = true;
+    void this.runDailyEditorialResearchLoop(signal);
+  }
+
+  private async runDailyEditorialResearchLoop(signal: AbortSignal): Promise<void> {
+    const timezone = this.config.google.defaultTimezone || "America/Sao_Paulo";
+    while (!signal.aborted) {
+      try {
+        const now = new Date();
+        const local = new Date(now.toLocaleString("en-US", { timeZone: timezone }));
+        const hour = local.getHours();
+        const minute = local.getMinutes();
+
+        if (hour === 6 && minute < 5) {
+          const result = await this.core.runDailyEditorialResearch({
+            channelKey: "riqueza_despertada_youtube",
+            timezone,
+            trendsLimit: 10,
+            ideasLimit: 5,
+            now,
+          });
+
+          if (!result.skipped) {
+            for (const chatId of this.config.telegram.allowedUserIds) {
+              try {
+                await this.sendText(chatId, result.reply, {
+                  disable_web_page_preview: true,
+                });
+              } catch (error) {
+                this.logger.warn("Failed to send daily editorial research packet", {
+                  chatId,
+                  error: error instanceof Error ? error.message : String(error),
+                });
+              }
+            }
+          }
+        }
+      } catch (error) {
+        this.logger.error("Daily editorial research loop failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+
+      await delay(60_000, undefined, { signal }).catch(() => undefined);
     }
   }
 
