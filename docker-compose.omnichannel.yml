@@ -1,0 +1,123 @@
+services:
+  chatwoot-postgres:
+    image: postgres:16-alpine
+    container_name: agente-chatwoot-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${CHATWOOT_POSTGRES_DB:-chatwoot_production}
+      POSTGRES_USER: ${CHATWOOT_POSTGRES_USER:-chatwoot}
+      POSTGRES_PASSWORD: ${CHATWOOT_POSTGRES_PASSWORD:-chatwoot_password}
+    volumes:
+      - chatwoot_postgres_data:/var/lib/postgresql/data
+
+  chatwoot-redis:
+    image: redis:7-alpine
+    container_name: agente-chatwoot-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - chatwoot_redis_data:/data
+
+  chatwoot-rails:
+    image: chatwoot/chatwoot:latest
+    container_name: agente-chatwoot-rails
+    restart: unless-stopped
+    depends_on:
+      - chatwoot-postgres
+      - chatwoot-redis
+    env_file:
+      - .env.omnichannel
+    environment:
+      RAILS_ENV: production
+      NODE_ENV: production
+      FRONTEND_URL: ${CHATWOOT_FRONTEND_URL:-http://localhost:3300}
+      SECRET_KEY_BASE: ${CHATWOOT_SECRET_KEY_BASE:-replace_me}
+      POSTGRES_HOST: chatwoot-postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DATABASE: ${CHATWOOT_POSTGRES_DB:-chatwoot_production}
+      POSTGRES_USERNAME: ${CHATWOOT_POSTGRES_USER:-chatwoot}
+      POSTGRES_PASSWORD: ${CHATWOOT_POSTGRES_PASSWORD:-chatwoot_password}
+      REDIS_URL: redis://chatwoot-redis:6379
+      ENABLE_ACCOUNT_SIGNUP: "false"
+    ports:
+      - "127.0.0.1:3300:3000"
+    command: ["bundle", "exec", "rails", "s", "-p", "3000", "-b", "0.0.0.0"]
+
+  chatwoot-sidekiq:
+    image: chatwoot/chatwoot:latest
+    container_name: agente-chatwoot-sidekiq
+    restart: unless-stopped
+    depends_on:
+      - chatwoot-postgres
+      - chatwoot-redis
+    env_file:
+      - .env.omnichannel
+    environment:
+      RAILS_ENV: production
+      NODE_ENV: production
+      FRONTEND_URL: ${CHATWOOT_FRONTEND_URL:-http://localhost:3300}
+      SECRET_KEY_BASE: ${CHATWOOT_SECRET_KEY_BASE:-replace_me}
+      POSTGRES_HOST: chatwoot-postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DATABASE: ${CHATWOOT_POSTGRES_DB:-chatwoot_production}
+      POSTGRES_USERNAME: ${CHATWOOT_POSTGRES_USER:-chatwoot}
+      POSTGRES_PASSWORD: ${CHATWOOT_POSTGRES_PASSWORD:-chatwoot_password}
+      REDIS_URL: redis://chatwoot-redis:6379
+      ENABLE_ACCOUNT_SIGNUP: "false"
+    command: ["bundle", "exec", "sidekiq", "-C", "config/sidekiq.yml"]
+
+  evolution-postgres:
+    image: postgres:15
+    container_name: agente-evolution-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${EVOLUTION_POSTGRES_DB:-evolution_api}
+      POSTGRES_USER: ${EVOLUTION_POSTGRES_USER:-evolution}
+      POSTGRES_PASSWORD: ${EVOLUTION_POSTGRES_PASSWORD:-evolution_password}
+    volumes:
+      - evolution_postgres_data:/var/lib/postgresql/data
+
+  evolution-redis:
+    image: redis:7-alpine
+    container_name: agente-evolution-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - evolution_redis_data:/data
+
+  evolution-api:
+    build:
+      context: ./upstream/evolution-api
+      dockerfile: Dockerfile
+    container_name: agente-evolution-api
+    restart: unless-stopped
+    depends_on:
+      - evolution-postgres
+      - evolution-redis
+    env_file:
+      - .env.omnichannel
+    environment:
+      SERVER_TYPE: http
+      SERVER_PORT: 8080
+      SERVER_URL: ${EVOLUTION_SERVER_URL:-http://localhost:8080}
+      DATABASE_PROVIDER: postgresql
+      DATABASE_CONNECTION_URI: postgresql://${EVOLUTION_POSTGRES_USER:-evolution}:${EVOLUTION_POSTGRES_PASSWORD:-evolution_password}@evolution-postgres:5432/${EVOLUTION_POSTGRES_DB:-evolution_api}
+      CACHE_REDIS_ENABLED: "true"
+      CACHE_REDIS_URI: redis://evolution-redis:6379
+      AUTHENTICATION_API_KEY: ${EVOLUTION_API_KEY:-change_me}
+      WEBHOOK_GLOBAL_ENABLED: ${EVOLUTION_WEBHOOK_ENABLED:-false}
+      WEBHOOK_GLOBAL_URL: ${EVOLUTION_WEBHOOK_URL:-}
+      CHATWOOT_ENABLED: ${EVOLUTION_CHATWOOT_ENABLED:-false}
+      CHATWOOT_MESSAGE_READ: "false"
+      CHATWOOT_MESSAGE_DELETE: "false"
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - evolution_instances:/evolution/instances
+
+volumes:
+  chatwoot_postgres_data:
+  chatwoot_redis_data:
+  evolution_postgres_data:
+  evolution_redis_data:
+  evolution_instances:

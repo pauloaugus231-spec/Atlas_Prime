@@ -1,0 +1,805 @@
+export interface PendingGoogleTaskDraft {
+  kind: "google_task";
+  title: string;
+  notes?: string;
+  due?: string;
+  taskListId?: string;
+  taskId?: string;
+  account?: string;
+}
+
+export interface PendingGoogleEventDraftBase {
+  summary: string;
+  description?: string;
+  location?: string;
+  attendees?: string[];
+  start: string;
+  end: string;
+  timezone: string;
+  calendarId?: string;
+  account?: string;
+  reminderMinutes?: number;
+  createMeet?: boolean;
+}
+
+export interface PendingGoogleEventDraft extends PendingGoogleEventDraftBase {
+  kind: "google_event";
+}
+
+export interface PendingGoogleEventDeleteDraft {
+  kind: "google_event_delete";
+  eventId: string;
+  summary: string;
+  description?: string;
+  location?: string;
+  start?: string;
+  end?: string;
+  timezone: string;
+  calendarId?: string;
+  account?: string;
+  reminderMinutes?: number;
+}
+
+export interface PendingGoogleEventUpdateDraft extends PendingGoogleEventDraftBase {
+  kind: "google_event_update";
+  eventId: string;
+  originalSummary?: string;
+  originalStart?: string;
+  originalEnd?: string;
+  originalLocation?: string;
+}
+
+export type PendingGoogleEventLikeDraft = PendingGoogleEventDraft | PendingGoogleEventUpdateDraft;
+
+export interface PendingGoogleEventDeleteBatchDraft {
+  kind: "google_event_delete_batch";
+  timezone: string;
+  events: Array<{
+    eventId: string;
+    summary: string;
+    start?: string;
+    end?: string;
+    calendarId?: string;
+    account?: string;
+  }>;
+}
+
+export interface PendingGoogleEventImportBatchItem extends PendingGoogleEventDraftBase {
+  personallyRelevant?: boolean;
+  matchedTerms?: string[];
+  sourceLabel?: string;
+  confidence?: number;
+}
+
+export interface PendingGoogleEventImportBatchDraft {
+  kind: "google_event_import_batch";
+  timezone: string;
+  account?: string;
+  calendarId?: string;
+  sourceLabel?: string;
+  totalExtracted?: number;
+  relevantCount?: number;
+  skippedCount?: number;
+  assumptions?: string[];
+  events: PendingGoogleEventImportBatchItem[];
+}
+
+function normalize(value: string): string {
+  return value
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .toLowerCase()
+    .trim();
+}
+
+function includesAny(source: string, tokens: string[]): boolean {
+  return tokens.some((token) => source.includes(token));
+}
+
+function getNowParts(timeZone: string): { year: number; month: number; day: number; weekday: number } {
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    weekday: "short",
+  });
+  const parts = formatter.formatToParts(new Date());
+  const raw = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  const weekdayMap: Record<string, number> = {
+    sun: 0,
+    mon: 1,
+    tue: 2,
+    wed: 3,
+    thu: 4,
+    fri: 5,
+    sat: 6,
+  };
+
+  return {
+    year: Number.parseInt(raw.year ?? "0", 10),
+    month: Number.parseInt(raw.month ?? "0", 10),
+    day: Number.parseInt(raw.day ?? "0", 10),
+    weekday: weekdayMap[(raw.weekday ?? "").slice(0, 3).toLowerCase()] ?? 0,
+  };
+}
+
+function shiftDate(parts: { year: number; month: number; day: number }, deltaDays: number) {
+  const date = new Date(Date.UTC(parts.year, parts.month - 1, parts.day + deltaDays, 12, 0, 0));
+  return {
+    year: date.getUTCFullYear(),
+    month: date.getUTCMonth() + 1,
+    day: date.getUTCDate(),
+  };
+}
+
+function getOffsetString(timeZone: string, year: number, month: number, day: number, hour: number, minute: number): string {
+  const probe = new Date(Date.UTC(year, month - 1, day, hour, minute, 0));
+  const formatter = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    timeZoneName: "shortOffset",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  const value = formatter.formatToParts(probe).find((part) => part.type === "timeZoneName")?.value ?? "GMT";
+  const match = value.match(/^GMT([+-])(\d{1,2})(?::?(\d{2}))?$/i);
+  if (!match) {
+    return "+00:00";
+  }
+  const sign = match[1];
+  const hours = match[2].padStart(2, "0");
+  const minutes = (match[3] ?? "00").padStart(2, "0");
+  return `${sign}${hours}:${minutes}`;
+}
+
+function buildLocalIso(
+  timeZone: string,
+  year: number,
+  month: number,
+  day: number,
+  hour: number,
+  minute: number,
+): string {
+  const offset = getOffsetString(timeZone, year, month, day, hour, minute);
+  return `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}T${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}:00${offset}`;
+}
+
+function parseDateReference(normalizedPrompt: string, timeZone: string): { year: number; month: number; day: number } | null {
+  const now = getNowParts(timeZone);
+
+  if (normalizedPrompt.includes("amanha")) {
+    return shiftDate(now, 1);
+  }
+  if (normalizedPrompt.includes("hoje")) {
+    return { year: now.year, month: now.month, day: now.day };
+  }
+
+  const explicitDateMatch = normalizedPrompt.match(/\b(?:dia\s+)?(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?\b/);
+  if (explicitDateMatch) {
+    const day = Number.parseInt(explicitDateMatch[1], 10);
+    const month = Number.parseInt(explicitDateMatch[2], 10);
+    const yearCandidate = explicitDateMatch[3]
+      ? Number.parseInt(explicitDateMatch[3].length === 2 ? `20${explicitDateMatch[3]}` : explicitDateMatch[3], 10)
+      : now.year;
+    return { year: yearCandidate, month, day };
+  }
+
+  const weekdayMap: Array<{ tokens: string[]; weekday: number }> = [
+    { tokens: ["domingo"], weekday: 0 },
+    { tokens: ["segunda", "segunda-feira"], weekday: 1 },
+    { tokens: ["terca", "terca-feira"], weekday: 2 },
+    { tokens: ["quarta", "quarta-feira"], weekday: 3 },
+    { tokens: ["quinta", "quinta-feira"], weekday: 4 },
+    { tokens: ["sexta", "sexta-feira"], weekday: 5 },
+    { tokens: ["sabado"], weekday: 6 },
+  ];
+
+  const hit = weekdayMap.find((item) => item.tokens.some((token) => normalizedPrompt.includes(token)));
+  if (!hit) {
+    return null;
+  }
+
+  const delta = ((hit.weekday - now.weekday + 7) % 7) || 7;
+  return shiftDate(now, delta);
+}
+
+function parseTimeRange(normalizedPrompt: string): { startHour: number; startMinute: number; endHour: number; endMinute: number } | null {
+  const rangePatterns = [
+    /\bdas?\s+(\d{1,2})(?::(\d{2}))?\s*(?:h)?\s+(?:as|a|ate)\s+(\d{1,2})(?::(\d{2}))?\s*(?:h)?/,
+    /\b(\d{1,2})(?::(\d{2}))?\s*(?:h)?\s+(?:as|a|ate)\s+(\d{1,2})(?::(\d{2}))?\s*(?:h)?/,
+  ];
+
+  for (const pattern of rangePatterns) {
+    const match = normalizedPrompt.match(pattern);
+    if (!match) {
+      continue;
+    }
+
+    return {
+      startHour: Number.parseInt(match[1], 10),
+      startMinute: Number.parseInt(match[2] ?? "0", 10),
+      endHour: Number.parseInt(match[3], 10),
+      endMinute: Number.parseInt(match[4] ?? "0", 10),
+    };
+  }
+
+  return null;
+}
+
+function parseSingleTime(normalizedPrompt: string): { hour: number; minute: number } | null {
+  const patterns = [
+    /\bas\s+(\d{1,2})(?::(\d{2}))?\s*(?:h)?\b/,
+    /\ba\s+(\d{1,2})(?::(\d{2}))?\s*(?:h)?\b/,
+    /\b(\d{1,2})h(\d{2})?\b/,
+  ];
+
+  for (const pattern of patterns) {
+    const match = normalizedPrompt.match(pattern);
+    if (!match) {
+      continue;
+    }
+
+    return {
+      hour: Number.parseInt(match[1], 10),
+      minute: Number.parseInt(match[2] ?? "0", 10),
+    };
+  }
+
+  return null;
+}
+
+function parseReminderMinutes(normalizedPrompt: string): number | undefined {
+  const match = normalizedPrompt.match(/\blembrete(?:\s+de)?\s+(\d{1,3})\s*min/);
+  if (!match) {
+    return undefined;
+  }
+  const minutes = Number.parseInt(match[1], 10);
+  if (!Number.isFinite(minutes) || minutes < 0 || minutes > 40320) {
+    return undefined;
+  }
+  return minutes;
+}
+
+function extractEmailAddresses(value: string): string[] {
+  const matches = value.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi) ?? [];
+  return [...new Set(matches.map((item) => item.trim().toLowerCase()))];
+}
+
+function extractRemovedEmailAddresses(value: string): string[] {
+  const matches = [...value.matchAll(/\b(?:remova|retire|exclua|sem)\s+([^\n]+)/gi)];
+  const emails = new Set<string>();
+  for (const match of matches) {
+    const chunk = match[1] ?? "";
+    for (const email of extractEmailAddresses(chunk)) {
+      emails.add(email);
+    }
+  }
+  return [...emails];
+}
+
+function extractLocation(value: string): string | undefined {
+  const explicitMatch = value.match(/\blocal\s*[:=]\s*([^,.;\n]+)/i);
+  if (explicitMatch?.[1]?.trim()) {
+    return explicitMatch[1].trim();
+  }
+
+  const sanitized = value
+    .replace(/\b(?:proxima|próxima|proximo|próximo)\s+(?:segunda(?:-feira)?|terca(?:-feira)?|terça(?:-feira)?|quarta(?:-feira)?|quinta(?:-feira)?|sexta(?:-feira)?|sabado|sábado|domingo)\b/gi, " ")
+    .replace(/\b(?:amanha|amanhã|hoje)\b/gi, " ")
+    .replace(/\bdas?\s+\d{1,2}(?::\d{2})?\s*(?:h)?\s+(?:as|a|ate)\s+\d{1,2}(?::\d{2})?\s*(?:h)?\b/gi, " ")
+    .replace(/\bas?\s+\d{1,2}(?::\d{2})?\s*(?:h)?\b/gi, " ")
+    .replace(/\b\d{1,2}h(?:\d{2})?\b/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  const venueMatch = sanitized.match(
+    /(?:,\s*|\s+)(?:na|no|em)\s+((?:quadra|arena|campo|ginasio|ginásio|clube|audit[oó]rio|sala)\b[^,.;\n]*)$/i,
+  );
+  if (venueMatch?.[1]?.trim()) {
+    return venueMatch[1].trim();
+  }
+
+  const tailMatch = sanitized.match(/(?:,\s*|\s+)(?:na|no|em)\s+([^,.;\n]{3,})$/i);
+  if (tailMatch?.[1]?.trim()) {
+    return tailMatch[1].trim();
+  }
+
+  return undefined;
+}
+
+function cleanupDraftTitle(value: string): string {
+  const cleaned = normalize(value)
+    .replace(/\b(?:para|com prazo|prazo|no dia|dia|amanha|hoje|segunda(?:-feira)?|terca(?:-feira)?|quarta(?:-feira)?|quinta(?:-feira)?|sexta(?:-feira)?|sabado|domingo)\b/g, " ")
+    .replace(/\b\d{1,2}\/\d{1,2}(?:\/\d{2,4})?\b/g, " ")
+    .replace(/\bdas?\s+\d{1,2}(?::\d{2})?\s*(?:h)?\s+(?:as|a|ate)\s+\d{1,2}(?::\d{2})?\s*(?:h)?\b/g, " ")
+    .replace(/\bas?\s+\d{1,2}(?::\d{2})?\s*(?:h)?\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  const withoutTrailingPunctuation = cleaned.replace(/[.,;:!?-]+$/g, "").trim();
+
+  if (!withoutTrailingPunctuation) {
+    return value.trim();
+  }
+
+  return withoutTrailingPunctuation.charAt(0).toUpperCase() + withoutTrailingPunctuation.slice(1);
+}
+
+function cleanupEventTitle(value: string): string {
+  const cleaned = normalize(value)
+    .replace(/\bcom(?:\s+google)?\s+meet\b/g, " ")
+    .replace(/\bsem(?:\s+google)?\s+meet\b/g, " ")
+    .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, " ")
+    .replace(/\blocal\s*[:=]\s*[^,.;\n]+/gi, " ")
+    .replace(/(?:,\s*|\s+)(?:na|no|em)\s+([^,.;\n]{3,})$/gi, " ")
+    .replace(/(?:,\s*|\s+)(?:na|no|em)\s+(?:quadra|arena|campo|ginasio|ginásio|clube|audit[oó]rio|sala)\b[^,.;\n]*/gi, " ")
+    .replace(
+      /,\s*(?:coloque|coloca|adicione|adiciona|agende|agendar|marque|marcar|registre|salve)\b[\s\S]*$/g,
+      " ",
+    )
+    .replace(
+      /\b(?:coloque|coloca|adicione|adiciona|agende|agendar|marque|marcar|registre|salve)\b(?:\s+isso)?\s+(?:na\s+minha\s+agenda|na\s+agenda|no\s+meu\s+calendario|no\s+calendario|ao\s+calendario)\b/g,
+      " ",
+    )
+    .replace(/\b(?:um|uma)\s+(?:evento|compromisso|reuniao)\b/g, " ")
+    .replace(/\b(?:convide|convidar|convidados?|participantes?)\b/g, " ")
+    .replace(/\b(?:tenho|preciso|quero|gostaria)\s+(?:uma|um)\b/g, " ")
+    .replace(/\b(?:na\s+minha\s+agenda|na\s+agenda|no\s+meu\s+calendario|no\s+calendario|ao\s+calendario)\b/g, " ")
+    .replace(/\b(?:para|com prazo|prazo|no dia|dia|amanha|hoje|proxima|proximo|segunda(?:-feira)?|terca(?:-feira)?|quarta(?:-feira)?|quinta(?:-feira)?|sexta(?:-feira)?|sabado|domingo)\b/g, " ")
+    .replace(/\b\d{1,2}\/\d{1,2}(?:\/\d{2,4})?\b/g, " ")
+    .replace(/\bdas?\s+\d{1,2}(?::\d{2})?\s*(?:h)?\s+(?:as|a|ate)\s+\d{1,2}(?::\d{2})?\s*(?:h)?\b/g, " ")
+    .replace(/\bas?\s+\d{1,2}(?::\d{2})?\s*(?:h)?\b/g, " ")
+    .replace(/\b\d{1,2}h(?:\d{2})?\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  const withoutTrailingPunctuation = cleaned
+    .replace(/^[,.;:\s-]+/g, "")
+    .replace(/\s+,/g, " ")
+    .replace(/\b(?:na|no|em)\b$/g, "")
+    .replace(/\be\b$/g, "")
+    .replace(/[.,;:!?-]+$/g, "")
+    .trim();
+  if (!withoutTrailingPunctuation) {
+    return "";
+  }
+
+  const restored = withoutTrailingPunctuation
+    .replace(/\breuniao\b/gi, "Reunião")
+    .replace(/\bcompromisso\b/gi, "Compromisso")
+    .replace(/\bevento\b/gi, "Evento");
+
+  return restored.charAt(0).toUpperCase() + restored.slice(1);
+}
+
+function defaultEventSummary(normalizedPrompt: string): string {
+  if (normalizedPrompt.includes("reuniao")) {
+    return "Reunião";
+  }
+  if (normalizedPrompt.includes("compromisso")) {
+    return "Compromisso";
+  }
+  return "Evento";
+}
+
+export function isGoogleTaskCreatePrompt(prompt: string): boolean {
+  const normalized = normalize(prompt);
+  return includesAny(normalized, [
+    "crie uma tarefa",
+    "criar uma tarefa",
+    "adicione uma tarefa",
+    "adicionar tarefa",
+    "crie um lembrete",
+    "adicionar lembrete",
+  ]);
+}
+
+export function isGoogleEventCreatePrompt(prompt: string): boolean {
+  const normalized = normalize(prompt);
+  const hasCalendar = /\b(?:agenda|calendario)\b/.test(normalized);
+  const hasAction = /\b(?:coloque|coloca|adicione|adiciona|agende|agendar|marque|marcar|crie|criar)\b/.test(normalized);
+  const hasEventNoun = /\b(?:evento|compromisso|reuniao)\b/.test(normalized);
+  return includesAny(normalized, [
+    "crie um evento",
+    "criar um evento",
+    "crie um compromisso",
+    "criar um compromisso",
+    "agende uma reuniao",
+    "agendar uma reuniao",
+    "marque uma reuniao",
+    "marcar uma reuniao",
+    "agende um evento",
+    "coloque na minha agenda",
+    "coloca na minha agenda",
+    "coloque na agenda",
+    "coloca na agenda",
+    "coloque no meu calendario",
+    "coloca no meu calendario",
+    "adicione na minha agenda",
+    "adiciona na minha agenda",
+    "adicione no meu calendario",
+    "adiciona no meu calendario",
+    "coloque um evento no meu calendario",
+    "coloca um evento no meu calendario",
+    "coloque um evento na minha agenda",
+    "coloca um evento na minha agenda",
+  ]) || (
+    hasCalendar && hasAction && hasEventNoun
+  ) || (
+    /tenho\s+(?:uma|um)\s+(?:reuniao|evento|compromisso)\b/.test(normalized) &&
+    /\b(?:agenda|calendario)\b/.test(normalized)
+  );
+}
+
+export function buildTaskDraftFromPrompt(prompt: string, timeZone: string): { draft?: PendingGoogleTaskDraft; reason?: string } {
+  const normalizedPrompt = normalize(prompt);
+  const match = prompt.match(/(?:crie|criar|adicione|adicionar|registre|salve)\s+(?:uma\s+)?(?:tarefa|lembrete)(?:\s+no\s+google(?:\s+tasks)?)?(?:\s+para|\s*:)?\s+([\s\S]+)/i);
+  const rawTitle = match?.[1]?.trim() || "";
+  const title = cleanupDraftTitle(rawTitle);
+  if (!title) {
+    return {
+      reason: "Consigo preparar a tarefa, mas preciso pelo menos do título. Exemplo: `Crie uma tarefa para revisar proposta amanhã às 10h.`",
+    };
+  }
+
+  const date = parseDateReference(normalizedPrompt, timeZone);
+  const time = parseSingleTime(normalizedPrompt);
+  const due = date
+    ? buildLocalIso(timeZone, date.year, date.month, date.day, time?.hour ?? 12, time?.minute ?? 0)
+    : undefined;
+
+  return {
+    draft: {
+      kind: "google_task",
+      title,
+      due,
+    },
+  };
+}
+
+export function buildEventDraftFromPrompt(prompt: string, timeZone: string): { draft?: PendingGoogleEventDraft; reason?: string } {
+  const normalizedPrompt = normalize(prompt);
+  const patterns = [
+    /(?:crie|criar|agende|agendar|marque|marcar|coloque|coloca|adicione|adiciona)\s+(?:um\s+)?(?:evento|compromisso|reuniao)(?:\s+no\s+google calendar|\s+na\s+agenda|\s+na\s+minha\s+agenda|\s+no\s+calendario|\s+no\s+meu\s+calendario)?(?:\s+para|\s*:)?\s+([\s\S]+)/i,
+    /(?:na\s+minha\s+agenda|na\s+agenda|no\s+meu\s+calendario|no\s+calendario|ao\s+calendario)\s*,?\s*(?:coloque|coloca|adicione|adiciona|agende|agendar|marque|marcar|crie|criar)\s+(?:um\s+)?(?:evento|compromisso|reuniao)?(?:\s+para|\s*:)?\s+([\s\S]+)/i,
+  ];
+  const match = patterns.map((pattern) => prompt.match(pattern)).find(Boolean);
+  const rawSummary = match?.[1]?.trim() || prompt.trim();
+  const summary = cleanupEventTitle(rawSummary) || defaultEventSummary(normalizedPrompt);
+  if (!summary) {
+    return {
+      reason: "Consigo preparar o evento, mas preciso do título. Exemplo: `Crie um evento reunião com cliente amanhã das 14h às 15h.`",
+    };
+  }
+
+  const date = parseDateReference(normalizedPrompt, timeZone);
+  if (!date) {
+    return {
+      reason: "Consigo preparar o evento, mas preciso da data. Exemplo: `Crie um evento reunião com cliente amanhã das 14h às 15h.`",
+    };
+  }
+
+  const timeRange = parseTimeRange(normalizedPrompt);
+  const singleTime = timeRange ? null : parseSingleTime(normalizedPrompt);
+  if (!timeRange && !singleTime) {
+    return {
+      reason: "Consigo preparar o evento, mas preciso do horário. Exemplo: `Crie um evento reunião com cliente amanhã das 14h às 15h.`",
+    };
+  }
+
+  const startHour = timeRange?.startHour ?? singleTime!.hour;
+  const startMinute = timeRange?.startMinute ?? singleTime!.minute;
+  const endHour = timeRange?.endHour ?? Math.min(startHour + 1, 23);
+  const endMinute = timeRange?.endMinute ?? startMinute;
+
+  return {
+    draft: {
+      kind: "google_event",
+      summary,
+      start: buildLocalIso(timeZone, date.year, date.month, date.day, startHour, startMinute),
+      end: buildLocalIso(timeZone, date.year, date.month, date.day, endHour, endMinute),
+      timezone: timeZone,
+      location: extractLocation(prompt),
+      attendees: extractEmailAddresses(prompt),
+      reminderMinutes: parseReminderMinutes(normalizedPrompt) ?? 30,
+      createMeet: /\bcom(?:\s+google)?\s+meet\b/.test(normalizedPrompt),
+    },
+  };
+}
+
+function parseIsoLocalParts(value: string): {
+  year: number;
+  month: number;
+  day: number;
+  hour: number;
+  minute: number;
+  offset: string;
+} | null {
+  const match = value.match(
+    /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):\d{2}([+-]\d{2}:\d{2}|Z)$/,
+  );
+  if (!match) {
+    return null;
+  }
+  return {
+    year: Number.parseInt(match[1], 10),
+    month: Number.parseInt(match[2], 10),
+    day: Number.parseInt(match[3], 10),
+    hour: Number.parseInt(match[4], 10),
+    minute: Number.parseInt(match[5], 10),
+    offset: match[6],
+  };
+}
+
+function buildIsoFromParts(parts: {
+  year: number;
+  month: number;
+  day: number;
+  hour: number;
+  minute: number;
+  offset: string;
+}): string {
+  return `${String(parts.year).padStart(4, "0")}-${String(parts.month).padStart(2, "0")}-${String(parts.day).padStart(2, "0")}T${String(parts.hour).padStart(2, "0")}:${String(parts.minute).padStart(2, "0")}:00${parts.offset}`;
+}
+
+function updateIsoDatePart(value: string, year: number, month: number, day: number): string {
+  const parts = parseIsoLocalParts(value);
+  if (!parts) {
+    return value;
+  }
+  return buildIsoFromParts({
+    ...parts,
+    year,
+    month,
+    day,
+  });
+}
+
+function updateIsoTimePart(value: string, hour: number, minute: number): string {
+  const parts = parseIsoLocalParts(value);
+  if (!parts) {
+    return value;
+  }
+  return buildIsoFromParts({
+    ...parts,
+    hour,
+    minute,
+  });
+}
+
+function parseSummaryAdjustment(value: string): string | undefined {
+  const match = value.match(/\b(?:titulo|título|nome)\s*[:=]\s*(.+)$/i)
+    ?? value.match(/\b(?:troque|altere|mude)\s+o?\s*(?:titulo|título|nome)\s+(?:para\s+)?(.+)$/i);
+  const summary = match?.[1]?.trim();
+  return summary || undefined;
+}
+
+export function adjustEventDraftFromInstruction(
+  draft: PendingGoogleEventLikeDraft,
+  instruction: string,
+): PendingGoogleEventLikeDraft | null {
+  const normalized = normalize(instruction);
+  let updated: PendingGoogleEventLikeDraft = { ...draft };
+  let changed = false;
+
+  const summary = parseSummaryAdjustment(instruction);
+  if (summary) {
+    updated.summary = summary;
+    changed = true;
+  }
+
+  const date = parseDateReference(normalized, draft.timezone);
+  if (date) {
+    updated.start = updateIsoDatePart(updated.start, date.year, date.month, date.day);
+    updated.end = updateIsoDatePart(updated.end, date.year, date.month, date.day);
+    changed = true;
+  }
+
+  const range = parseTimeRange(normalized);
+  const single = range ? null : parseSingleTime(normalized);
+  if (range) {
+    updated.start = updateIsoTimePart(updated.start, range.startHour, range.startMinute);
+    updated.end = updateIsoTimePart(updated.end, range.endHour, range.endMinute);
+    changed = true;
+  } else if (single) {
+    const currentEnd = new Date(updated.end);
+    const currentStart = new Date(updated.start);
+    const durationMinutes = Math.max(
+      15,
+      Number.isNaN(currentEnd.getTime()) || Number.isNaN(currentStart.getTime())
+        ? 60
+        : Math.round((currentEnd.getTime() - currentStart.getTime()) / 60000),
+    );
+    updated.start = updateIsoTimePart(updated.start, single.hour, single.minute);
+    const startParts = parseIsoLocalParts(updated.start);
+    if (startParts) {
+      const startProbe = new Date(
+        `${String(startParts.year).padStart(4, "0")}-${String(startParts.month).padStart(2, "0")}-${String(startParts.day).padStart(2, "0")}T${String(startParts.hour).padStart(2, "0")}:${String(startParts.minute).padStart(2, "0")}:00${startParts.offset}`,
+      );
+      const endProbe = new Date(startProbe.getTime() + durationMinutes * 60000);
+      const offset = startParts.offset;
+      const year = endProbe.getUTCFullYear();
+      const month = endProbe.getUTCMonth() + 1;
+      const day = endProbe.getUTCDate();
+      const hour = endProbe.getUTCHours();
+      const minute = endProbe.getUTCMinutes();
+      updated.end = buildIsoFromParts({ year, month, day, hour, minute, offset });
+    }
+    changed = true;
+  }
+
+  const location = extractLocation(instruction);
+  if (location) {
+    updated.location = location;
+    changed = true;
+  } else if (/\b(?:sem|remova|retire)\s+local\b/.test(normalized)) {
+    updated.location = undefined;
+    changed = true;
+  }
+
+  const attendees = extractEmailAddresses(instruction);
+  const removedAttendees = extractRemovedEmailAddresses(instruction);
+  if (/\b(?:troque|substitua)\b/.test(normalized) && attendees.length >= 2) {
+    const [oldEmail, newEmail] = attendees;
+    updated.attendees = [
+      ...(updated.attendees ?? []).filter((email) => email !== oldEmail && email !== newEmail),
+      newEmail,
+    ];
+    changed = true;
+  }
+  if (removedAttendees.length > 0 && (updated.attendees?.length ?? 0) > 0) {
+    updated.attendees = (updated.attendees ?? []).filter((email) => !removedAttendees.includes(email));
+    changed = true;
+  }
+
+  if (attendees.length > 0 && !/\b(?:troque|substitua)\b/.test(normalized)) {
+    updated.attendees = [...new Set([...(updated.attendees ?? []), ...attendees])];
+    changed = true;
+  } else if (/\b(?:sem|remova|retire)\s+(?:convidados|participantes)\b/.test(normalized)) {
+    updated.attendees = [];
+    changed = true;
+  }
+
+  const reminder = parseReminderMinutes(normalized);
+  if (typeof reminder === "number") {
+    updated.reminderMinutes = reminder;
+    changed = true;
+  }
+
+  if (/\bcom(?:\s+google)?\s+meet\b/.test(normalized)) {
+    updated.createMeet = true;
+    changed = true;
+  } else if (/\bsem(?:\s+google)?\s+meet\b/.test(normalized)) {
+    updated.createMeet = false;
+    changed = true;
+  }
+
+  return changed ? updated : null;
+}
+
+export function formatDraftDateTime(value: string | undefined, timeZone: string): string {
+  if (!value) {
+    return "(sem data)";
+  }
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  return new Intl.DateTimeFormat("pt-BR", {
+    timeZone,
+    day: "2-digit",
+    month: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
+}
+
+export function buildGoogleTaskDraftReply(draft: PendingGoogleTaskDraft, timeZone: string): string {
+  return [
+    "Rascunho de tarefa Google pronto.",
+    `- Título: ${draft.title}`,
+    `- Prazo: ${formatDraftDateTime(draft.due, timeZone)}`,
+    "Confirme com `sim, quero` ou `agendar`. Para descartar, use `cancelar rascunho`.",
+    "",
+    "GOOGLE_TASK_DRAFT",
+    JSON.stringify(draft),
+    "END_GOOGLE_TASK_DRAFT",
+  ].join("\n");
+}
+
+export function buildGoogleEventDraftReply(draft: PendingGoogleEventLikeDraft): string {
+  return [
+    "Rascunho de evento Google pronto.",
+    `- Título: ${draft.summary}`,
+    `- Início: ${formatDraftDateTime(draft.start, draft.timezone)}`,
+    `- Fim: ${formatDraftDateTime(draft.end, draft.timezone)}`,
+    ...(draft.location ? [`- Local: ${draft.location}`] : []),
+    ...(draft.attendees?.length ? [`- Convidados: ${draft.attendees.join(", ")}`] : []),
+    `- Lembrete: ${draft.reminderMinutes ?? 30} minutos antes`,
+    `- Meet: ${draft.createMeet ? "incluído" : "não incluído"}`,
+    "Confirme com `sim, quero` ou `agendar`. Para descartar, use `cancelar rascunho`.",
+    "",
+    "GOOGLE_EVENT_DRAFT",
+    JSON.stringify(draft),
+    "END_GOOGLE_EVENT_DRAFT",
+  ].join("\n");
+}
+
+export function buildGoogleEventDeleteDraftReply(draft: PendingGoogleEventDeleteDraft): string {
+  return [
+    "Rascunho de exclusão de evento Google pronto.",
+    "Evento identificado:",
+    `- Atual: ${draft.summary}`,
+    ...(draft.start ? [`- Início: ${formatDraftDateTime(draft.start, draft.timezone)}`] : []),
+    ...(draft.end ? [`- Fim: ${formatDraftDateTime(draft.end, draft.timezone)}`] : []),
+    ...(draft.location ? [`- Local: ${draft.location}`] : []),
+    "Confirme com `sim, quero` ou `agendar`. Para descartar, use `cancelar rascunho`.",
+    "",
+    "GOOGLE_EVENT_DELETE_DRAFT",
+    JSON.stringify(draft),
+    "END_GOOGLE_EVENT_DELETE_DRAFT",
+  ].join("\n");
+}
+
+export function buildGoogleEventUpdateDraftReply(draft: PendingGoogleEventUpdateDraft): string {
+  return [
+    "Rascunho de atualização de evento Google pronto.",
+    ...(draft.originalSummary
+      ? [
+          "Evento identificado:",
+          `- Atual: ${draft.originalSummary}`,
+          ...(draft.originalStart ? [`- Início atual: ${formatDraftDateTime(draft.originalStart, draft.timezone)}`] : []),
+          ...(draft.originalEnd ? [`- Fim atual: ${formatDraftDateTime(draft.originalEnd, draft.timezone)}`] : []),
+          ...(draft.originalLocation ? [`- Local atual: ${draft.originalLocation}`] : []),
+          "",
+          "Atualização proposta:",
+        ]
+      : []),
+    `- Título: ${draft.summary}`,
+    `- Início: ${formatDraftDateTime(draft.start, draft.timezone)}`,
+    `- Fim: ${formatDraftDateTime(draft.end, draft.timezone)}`,
+    ...(draft.location ? [`- Local: ${draft.location}`] : []),
+    ...(draft.attendees?.length ? [`- Convidados: ${draft.attendees.join(", ")}`] : []),
+    `- Lembrete: ${draft.reminderMinutes ?? 30} minutos antes`,
+    `- Meet: ${draft.createMeet ? "incluído" : "não incluído"}`,
+    "Confirme com `sim, quero` ou `agendar`. Para descartar, use `cancelar rascunho`.",
+    "",
+    "GOOGLE_EVENT_UPDATE_DRAFT",
+    JSON.stringify(draft),
+    "END_GOOGLE_EVENT_UPDATE_DRAFT",
+  ].join("\n");
+}
+
+export function buildGoogleEventDeleteBatchDraftReply(draft: PendingGoogleEventDeleteBatchDraft): string {
+  return [
+    `Rascunho de exclusão em lote pronto. Eventos encontrados: ${draft.events.length}.`,
+    ...draft.events.slice(0, 10).map((event) =>
+      `- ${event.summary} | ${event.start ? formatDraftDateTime(event.start, draft.timezone) : "sem horário"}`
+    ),
+    "Confirme com `sim, quero` ou `agendar`. Para descartar, use `cancelar rascunho`.",
+    "",
+    "GOOGLE_EVENT_DELETE_BATCH_DRAFT",
+    JSON.stringify(draft),
+    "END_GOOGLE_EVENT_DELETE_BATCH_DRAFT",
+  ].join("\n");
+}
+
+export function buildGoogleEventImportBatchDraftReply(draft: PendingGoogleEventImportBatchDraft): string {
+  return [
+    `Rascunho de importação pronto. Eventos extraídos: ${draft.events.length}.`,
+    ...(typeof draft.relevantCount === "number" ? [`- Relevantes para você: ${draft.relevantCount}`] : []),
+    ...(draft.sourceLabel ? [`- Origem: ${draft.sourceLabel}`] : []),
+    ...draft.events.slice(0, 10).map((event) =>
+      `- ${event.personallyRelevant ? "*" : ""}${event.summary} | ${formatDraftDateTime(event.start, draft.timezone)}${event.location ? ` | ${event.location}` : ""}`
+    ),
+    ...(draft.events.length > 10 ? [`- ... e mais ${draft.events.length - 10} evento(s).`] : []),
+    ...(draft.assumptions?.length ? ["- Observações: " + draft.assumptions.slice(0, 3).join(" | ")] : []),
+    "Confirme com `sim, quero` ou `agendar`. Para descartar, use `cancelar rascunho`.",
+    "",
+    "GOOGLE_EVENT_IMPORT_BATCH_DRAFT",
+    JSON.stringify(draft),
+    "END_GOOGLE_EVENT_IMPORT_BATCH_DRAFT",
+  ].join("\n");
+}

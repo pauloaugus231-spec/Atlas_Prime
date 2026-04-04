@@ -1,0 +1,528 @@
+import path from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import type { AppConfig, EmailConfig, GoogleMapsConfig, GoogleWorkspaceConfig } from "../types/config.js";
+import type { LogLevel } from "../types/logger.js";
+
+const DEFAULT_OLLAMA_BASE_URL = "http://host.docker.internal:11434";
+const DEFAULT_OLLAMA_MODEL = "qwen2.5-coder:3b";
+const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
+const DEFAULT_OPENAI_MODEL = "gpt-5-mini";
+const DEFAULT_MAX_TOOL_ITERATIONS = 6;
+
+function parseEnvFile(filePath: string): Record<string, string> {
+  if (!existsSync(filePath)) {
+    return {};
+  }
+
+  const result: Record<string, string> = {};
+  const raw = readFileSync(filePath, "utf8");
+  for (const line of raw.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) {
+      continue;
+    }
+    const separator = trimmed.indexOf("=");
+    if (separator === -1) {
+      continue;
+    }
+    const key = trimmed.slice(0, separator).trim();
+    let value = trimmed.slice(separator + 1).trim();
+    if (
+      (value.startsWith("\"") && value.endsWith("\"")) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1);
+    }
+    if (key) {
+      result[key] = value;
+    }
+  }
+  return result;
+}
+
+function mergeEnvWithFiles(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const candidates = [
+    env.ENV_FILE?.trim(),
+    path.resolve(process.cwd(), ".env"),
+    path.resolve(process.cwd(), "..", ".env"),
+    path.resolve(process.cwd(), "..", "..", ".env"),
+    env.APP_HOME ? path.resolve(env.APP_HOME, ".env") : undefined,
+  ].filter((value): value is string => Boolean(value));
+
+  const fileEnv = candidates.reduce<Record<string, string>>((acc, candidate) => {
+    return { ...acc, ...parseEnvFile(candidate) };
+  }, {});
+
+  return {
+    ...fileEnv,
+    ...env,
+  };
+}
+
+function normalizeOllamaBaseUrl(baseUrl: string): string {
+  return baseUrl.trim().replace(/\/+$/, "").replace(/\/v1$/i, "");
+}
+
+function normalizeBaseUrl(baseUrl: string): string {
+  return baseUrl.trim().replace(/\/+$/, "");
+}
+
+function parsePositiveInteger(value: string | undefined, fallback: number): number {
+  if (!value) {
+    return fallback;
+  }
+
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return fallback;
+  }
+
+  return parsed;
+}
+
+function parseBoolean(value: string | undefined, fallback = false): boolean {
+  if (!value) {
+    return fallback;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) {
+    return true;
+  }
+  if (["0", "false", "no", "off"].includes(normalized)) {
+    return false;
+  }
+  return fallback;
+}
+
+function parseLogLevel(value: string | undefined): LogLevel {
+  if (value === "debug" || value === "info" || value === "warn" || value === "error") {
+    return value;
+  }
+  return "info";
+}
+
+function parseAllowedUserIds(value: string | undefined): number[] {
+  if (!value?.trim()) {
+    return [];
+  }
+
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .map((item) => Number.parseInt(item, 10))
+    .filter((item) => Number.isFinite(item));
+}
+
+function parseStringList(value: string | undefined): string[] {
+  if (!value?.trim()) {
+    return [];
+  }
+
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function parseCommandMatrix(value: string | undefined, fallback: string[][]): string[][] {
+  if (!value?.trim()) {
+    return fallback;
+  }
+
+  const rows = value
+    .split("|")
+    .map((item) =>
+      item
+        .trim()
+        .split(/\s+/)
+        .map((part) => part.trim())
+        .filter(Boolean),
+    )
+    .filter((parts) => parts.length > 0);
+
+  return rows.length > 0 ? rows : fallback;
+}
+
+function readGoogleCredentialsFile(credentialsPath: string): {
+  clientId?: string;
+  clientSecret?: string;
+  redirectUri?: string;
+} {
+  if (!existsSync(credentialsPath)) {
+    return {};
+  }
+
+  try {
+    const raw = readFileSync(credentialsPath, "utf8");
+    const parsed = JSON.parse(raw) as {
+      installed?: { client_id?: string; client_secret?: string; redirect_uris?: string[] };
+      web?: { client_id?: string; client_secret?: string; redirect_uris?: string[] };
+    };
+    const block = parsed.installed ?? parsed.web;
+    return {
+      clientId: block?.client_id?.trim() || undefined,
+      clientSecret: block?.client_secret?.trim() || undefined,
+      redirectUri: block?.redirect_uris?.[0]?.trim() || undefined,
+    };
+  } catch {
+    return {};
+  }
+}
+
+function normalizeAccountAlias(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+function parseAccountAliases(value: string | undefined): string[] {
+  if (!value?.trim()) {
+    return [];
+  }
+
+  return [...new Set(value.split(",").map((item) => normalizeAccountAlias(item)).filter(Boolean))];
+}
+
+function parseAliasMap(value: string | undefined, fallback?: Record<string, string>): Record<string, string> {
+  const result = new Map<string, string>();
+
+  for (const [key, mappedValue] of Object.entries(fallback ?? {})) {
+    const normalizedKey = normalizeAccountAlias(key);
+    if (normalizedKey && mappedValue?.trim()) {
+      result.set(normalizedKey, mappedValue.trim());
+    }
+  }
+
+  if (!value?.trim()) {
+    return Object.fromEntries(result.entries());
+  }
+
+  for (const entry of value.split("|")) {
+    const [rawKey, ...rawValueParts] = entry.split(":");
+    const key = normalizeAccountAlias(rawKey ?? "");
+    const mappedValue = rawValueParts.join(":").trim();
+    if (key && mappedValue) {
+      result.set(key, mappedValue);
+    }
+  }
+
+  return Object.fromEntries(result.entries());
+}
+
+function buildEmailConfig(env: NodeJS.ProcessEnv, prefix = "EMAIL_", defaults?: EmailConfig): EmailConfig {
+  const fallback = defaults;
+  return {
+    enabled: parseBoolean(env[`${prefix}ENABLED`], fallback?.enabled ?? false),
+    host: env[`${prefix}IMAP_HOST`]?.trim() || fallback?.host,
+    port: parsePositiveInteger(env[`${prefix}IMAP_PORT`], fallback?.port ?? 993),
+    secure: parseBoolean(env[`${prefix}IMAP_SECURE`], fallback?.secure ?? true),
+    username: env[`${prefix}IMAP_USERNAME`]?.trim() || fallback?.username,
+    password: env[`${prefix}IMAP_PASSWORD`]?.trim() || fallback?.password,
+    mailbox: env[`${prefix}IMAP_MAILBOX`]?.trim() || fallback?.mailbox || "INBOX",
+    lookbackHours: parsePositiveInteger(env[`${prefix}LOOKBACK_HOURS`], fallback?.lookbackHours ?? 72),
+    maxMessages: parsePositiveInteger(env[`${prefix}MAX_MESSAGES`], fallback?.maxMessages ?? 10),
+    maxSourceBytes: parsePositiveInteger(env[`${prefix}MAX_SOURCE_BYTES`], fallback?.maxSourceBytes ?? 200000),
+    maxTextChars: parsePositiveInteger(env[`${prefix}MAX_TEXT_CHARS`], fallback?.maxTextChars ?? 12000),
+    writeEnabled: parseBoolean(env[`${prefix}WRITE_ENABLED`], fallback?.writeEnabled ?? false),
+    smtpHost: env[`${prefix}SMTP_HOST`]?.trim() || fallback?.smtpHost,
+    smtpPort: parsePositiveInteger(env[`${prefix}SMTP_PORT`], fallback?.smtpPort ?? 465),
+    smtpSecure: parseBoolean(env[`${prefix}SMTP_SECURE`], fallback?.smtpSecure ?? true),
+    smtpUsername:
+      env[`${prefix}SMTP_USERNAME`]?.trim() ||
+      env[`${prefix}IMAP_USERNAME`]?.trim() ||
+      fallback?.smtpUsername ||
+      fallback?.username,
+    smtpPassword:
+      env[`${prefix}SMTP_PASSWORD`]?.trim() ||
+      env[`${prefix}IMAP_PASSWORD`]?.trim() ||
+      fallback?.smtpPassword ||
+      fallback?.password,
+    fromName: env[`${prefix}FROM_NAME`]?.trim() || fallback?.fromName,
+    fromAddress:
+      env[`${prefix}FROM_ADDRESS`]?.trim() ||
+      env[`${prefix}SMTP_USERNAME`]?.trim() ||
+      env[`${prefix}IMAP_USERNAME`]?.trim() ||
+      fallback?.fromAddress ||
+      fallback?.smtpUsername ||
+      fallback?.username,
+    replyAllowedSenders: parseStringList(env[`${prefix}REPLY_ALLOWED_SENDERS`] ?? fallback?.replyAllowedSenders.join(",")),
+    replyAllowedDomains: parseStringList(
+      env[`${prefix}REPLY_ALLOWED_DOMAINS`] ?? fallback?.replyAllowedDomains.join(","),
+    ).map((item) => item.toLowerCase()),
+  };
+}
+
+function buildSecondaryEmailFallback(defaults: EmailConfig): EmailConfig {
+  return {
+    ...defaults,
+    username: undefined,
+    password: undefined,
+    smtpUsername: undefined,
+    smtpPassword: undefined,
+    fromAddress: undefined,
+  };
+}
+
+function hasExplicitSecondaryEmailConfig(env: NodeJS.ProcessEnv, prefix: string): boolean {
+  const hasIdentity = Boolean(env[`${prefix}IMAP_USERNAME`]?.trim() || env[`${prefix}SMTP_USERNAME`]?.trim());
+  const hasSecret = Boolean(env[`${prefix}IMAP_PASSWORD`]?.trim() || env[`${prefix}SMTP_PASSWORD`]?.trim());
+  return hasIdentity && hasSecret;
+}
+
+function buildGoogleConfig(
+  env: NodeJS.ProcessEnv,
+  options: {
+    prefix?: string;
+    fallback?: GoogleWorkspaceConfig;
+    workspaceDir: string;
+    defaultOauthPort: number;
+    alias?: string;
+  },
+): GoogleWorkspaceConfig {
+  const prefix = options.prefix ?? "GOOGLE_";
+  const fallback = options.fallback;
+  const alias = options.alias ? normalizeAccountAlias(options.alias) : "primary";
+  const credentialsPath = path.resolve(
+    env[`${prefix}CREDENTIALS_PATH`] ??
+      (alias === "primary"
+        ? fallback?.credentialsPath
+        : path.join(options.workspaceDir, ".agent-state", `google-oauth-client-${alias}.json`)) ??
+      path.join(options.workspaceDir, ".agent-state", `google-oauth-client-${alias}.json`),
+  );
+  const tokenPath = path.resolve(
+    env[`${prefix}TOKEN_PATH`] ??
+      (alias === "primary"
+        ? fallback?.tokenPath
+        : path.join(options.workspaceDir, ".agent-state", `google-oauth-token-${alias}.json`)) ??
+      path.join(options.workspaceDir, ".agent-state", `google-oauth-token-${alias}.json`),
+  );
+  const oauthPort = parsePositiveInteger(env[`${prefix}OAUTH_PORT`], fallback?.oauthPort ?? options.defaultOauthPort);
+  const credentials = readGoogleCredentialsFile(credentialsPath);
+
+  return {
+    enabled: parseBoolean(env[`${prefix}ENABLED`], alias === "primary" ? (fallback?.enabled ?? false) : false),
+    clientId: env[`${prefix}CLIENT_ID`]?.trim() || credentials.clientId || fallback?.clientId,
+    clientSecret: env[`${prefix}CLIENT_SECRET`]?.trim() || credentials.clientSecret || fallback?.clientSecret,
+    redirectUri:
+      env[`${prefix}REDIRECT_URI`]?.trim() ||
+      credentials.redirectUri ||
+      fallback?.redirectUri ||
+      `http://127.0.0.1:${oauthPort}/oauth2callback`,
+    oauthPort,
+    credentialsPath,
+    tokenPath,
+    calendarId: env[`${prefix}CALENDAR_ID`]?.trim() || fallback?.calendarId || "primary",
+    calendarAliases: parseAliasMap(
+      env[`${prefix}CALENDAR_ALIASES`],
+      fallback?.calendarAliases ?? { principal: "primary", pessoal: "primary", personal: "primary" },
+    ),
+    defaultTimezone:
+      env[`${prefix}DEFAULT_TIMEZONE`]?.trim() ||
+      fallback?.defaultTimezone ||
+      env.AGENT_TIMEZONE?.trim() ||
+      "America/Sao_Paulo",
+    maxEvents: parsePositiveInteger(env[`${prefix}MAX_EVENTS`], fallback?.maxEvents ?? 10),
+    maxTasks: parsePositiveInteger(env[`${prefix}MAX_TASKS`], fallback?.maxTasks ?? 15),
+    maxContacts: parsePositiveInteger(env[`${prefix}MAX_CONTACTS`], fallback?.maxContacts ?? 10),
+  };
+}
+
+function buildGoogleMapsConfig(env: NodeJS.ProcessEnv): GoogleMapsConfig {
+  const apiKey = env.GOOGLE_MAPS_API_KEY?.trim() || undefined;
+  return {
+    enabled: parseBoolean(env.GOOGLE_MAPS_ENABLED, Boolean(apiKey)),
+    apiKey,
+    defaultRegionCode: (env.GOOGLE_MAPS_DEFAULT_REGION ?? "BR").trim().toUpperCase(),
+    defaultLanguageCode: (env.GOOGLE_MAPS_DEFAULT_LANGUAGE ?? "pt-BR").trim(),
+  };
+}
+
+export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
+  env = mergeEnvWithFiles(env);
+  const appHome = path.resolve(env.APP_HOME ?? process.cwd());
+  const workspaceDir = path.resolve(env.WORKSPACE_DIR ?? env.HOST_AGENT_WORKSPACE ?? path.join(appHome, "workspace"));
+  const pluginsDir = path.resolve(env.PLUGINS_DIR ?? env.HOST_AGENT_PLUGINS ?? path.join(appHome, "plugins"));
+  const logsDir = path.resolve(env.LOGS_DIR ?? env.HOST_AGENT_LOGS ?? path.join(appHome, "logs"));
+  const authorizedProjectsDir = path.resolve(
+    env.AUTHORIZED_PROJECTS_DIR ?? env.HOST_AUTHORIZED_PROJECTS_DIR ?? path.join(appHome, "authorized-projects"),
+  );
+  const builtInPluginsDir = existsSync(path.join(appHome, "dist", "plugins"))
+    ? path.join(appHome, "dist", "plugins")
+    : path.join(appHome, "src", "plugins");
+  const googleOauthPort = parsePositiveInteger(env.GOOGLE_OAUTH_PORT, 8787);
+  const requestedProvider = env.LLM_PROVIDER?.trim().toLowerCase();
+  const llmProvider = (
+    requestedProvider === "openai" || (!requestedProvider && env.OPENAI_API_KEY?.trim())
+      ? "openai"
+      : "ollama"
+  ) as "ollama" | "openai";
+  const defaultSafeExecCommands = [
+    ["git", "status", "--short"],
+    ["git", "branch", "--show-current"],
+    ["git", "diff", "--stat"],
+    ["npm", "ci"],
+    ["npm", "install"],
+    ["npm", "run", "build"],
+    ["npm", "test"],
+    ["pnpm", "install"],
+    ["pnpm", "build"],
+    ["pnpm", "test"],
+    ["yarn", "install"],
+    ["yarn", "build"],
+    ["yarn", "test"],
+  ];
+  const defaultMacWorkerCommands = [
+    ["open", "-a"],
+    ["open", "-g"],
+    ["open"],
+    ["code"],
+    ["git", "status"],
+    ["git", "branch", "--show-current"],
+    ["npm", "run", "build"],
+    ["npm", "run", "dev"],
+    ["npm", "test"],
+    ["pnpm", "build"],
+    ["pnpm", "dev"],
+    ["pnpm", "test"],
+    ["yarn", "build"],
+    ["yarn", "dev"],
+    ["yarn", "test"],
+    ["osascript", "-e"],
+  ];
+  const baseEmailConfig = buildEmailConfig(env, "EMAIL_");
+  const emailAccounts: Record<string, EmailConfig> = {
+    primary: baseEmailConfig,
+  };
+  for (const alias of parseAccountAliases(env.EMAIL_ACCOUNTS)) {
+    if (alias === "primary") {
+      continue;
+    }
+    const prefix = `EMAIL_ACCOUNT_${alias.toUpperCase()}_`;
+    if (!parseBoolean(env[`${prefix}ENABLED`], false)) {
+      continue;
+    }
+    if (!hasExplicitSecondaryEmailConfig(env, prefix)) {
+      continue;
+    }
+    emailAccounts[alias] = buildEmailConfig(env, prefix, buildSecondaryEmailFallback(baseEmailConfig));
+  }
+  const baseGoogleConfig = buildGoogleConfig(env, {
+    prefix: "GOOGLE_",
+    workspaceDir,
+    defaultOauthPort: googleOauthPort,
+    alias: "primary",
+  });
+  const googleAccounts: Record<string, GoogleWorkspaceConfig> = {
+    primary: baseGoogleConfig,
+  };
+  for (const alias of parseAccountAliases(env.GOOGLE_ACCOUNTS)) {
+    if (alias === "primary") {
+      continue;
+    }
+    const prefix = `GOOGLE_ACCOUNT_${alias.toUpperCase()}_`;
+    if (!parseBoolean(env[`${prefix}ENABLED`], false)) {
+      continue;
+    }
+    googleAccounts[alias] = buildGoogleConfig(env, {
+      prefix,
+      fallback: baseGoogleConfig,
+      workspaceDir,
+      defaultOauthPort: googleOauthPort,
+      alias,
+    });
+  }
+
+  return {
+    paths: {
+      appHome,
+      workspaceDir,
+      pluginsDir,
+      logsDir,
+      authorizedProjectsDir,
+      builtInPluginsDir,
+      memoryDbPath: path.join(workspaceDir, ".agent-state", "operational-memory.sqlite"),
+      preferencesDbPath: path.join(workspaceDir, ".agent-state", "user-preferences.sqlite"),
+      growthDbPath: path.join(workspaceDir, ".agent-state", "growth-ops.sqlite"),
+      contentDbPath: path.join(workspaceDir, ".agent-state", "content-ops.sqlite"),
+      socialAssistantDbPath: path.join(workspaceDir, ".agent-state", "social-assistant.sqlite"),
+      workflowDbPath: path.join(workspaceDir, ".agent-state", "workflow-orchestrator.sqlite"),
+      contactIntelligenceDbPath: path.join(workspaceDir, ".agent-state", "contact-intelligence.sqlite"),
+      approvalInboxDbPath: path.join(workspaceDir, ".agent-state", "approval-inbox.sqlite"),
+      whatsappMessagesDbPath: path.join(workspaceDir, ".agent-state", "whatsapp-messages.sqlite"),
+    },
+    llm: {
+      provider: llmProvider,
+      baseUrl:
+        llmProvider === "openai"
+          ? normalizeBaseUrl(env.OPENAI_BASE_URL ?? DEFAULT_OPENAI_BASE_URL)
+          : normalizeOllamaBaseUrl(env.OLLAMA_BASE_URL ?? DEFAULT_OLLAMA_BASE_URL),
+      model: llmProvider === "openai"
+        ? env.OPENAI_MODEL?.trim() || DEFAULT_OPENAI_MODEL
+        : env.OLLAMA_MODEL?.trim() || DEFAULT_OLLAMA_MODEL,
+      timeoutMs:
+        parsePositiveInteger(
+          llmProvider === "openai" ? env.OPENAI_TIMEOUT_SECONDS : env.OLLAMA_TIMEOUT_SECONDS,
+          60,
+        ) * 1000,
+      apiKey: llmProvider === "openai" ? env.OPENAI_API_KEY?.trim() || undefined : undefined,
+    },
+    telegram: {
+      botToken: env.TELEGRAM_BOT_TOKEN?.trim() || undefined,
+      allowedUserIds: parseAllowedUserIds(env.TELEGRAM_ALLOWED_USER_IDS),
+      pollTimeoutSeconds: parsePositiveInteger(env.TELEGRAM_POLL_TIMEOUT_SECONDS, 30),
+    },
+    email: baseEmailConfig,
+    emailAccounts,
+    google: baseGoogleConfig,
+    googleAccounts,
+    googleMaps: buildGoogleMapsConfig(env),
+    safeExec: {
+      enabled: parseBoolean(env.SAFE_EXEC_ENABLED, true),
+      allowedCommands: parseCommandMatrix(env.SAFE_EXEC_ALLOWED_COMMANDS, defaultSafeExecCommands),
+      maxOutputChars: parsePositiveInteger(env.SAFE_EXEC_MAX_OUTPUT_CHARS, 8000),
+      auditLogPath: path.join(logsDir, "safe-exec-audit.jsonl"),
+    },
+    supabaseMacQueue: {
+      enabled: parseBoolean(env.SUPABASE_MAC_QUEUE_ENABLED, false),
+      url: env.SUPABASE_URL?.trim() || undefined,
+      serviceRoleKey: env.SUPABASE_SERVICE_ROLE_KEY?.trim() || undefined,
+      commandsTable: env.SUPABASE_MAC_COMMANDS_TABLE?.trim() || "mac_commands",
+      workersTable: env.SUPABASE_MAC_WORKERS_TABLE?.trim() || "mac_workers",
+      targetHost: env.SUPABASE_MAC_TARGET_HOST?.trim() || "atlas_mac",
+      pollIntervalSeconds: parsePositiveInteger(env.SUPABASE_MAC_POLL_SECONDS, 15),
+      maxExecutionSeconds: parsePositiveInteger(env.SUPABASE_MAC_MAX_EXEC_SECONDS, 300),
+      allowedCommands: parseCommandMatrix(env.SUPABASE_MAC_ALLOWED_COMMANDS, defaultMacWorkerCommands),
+      allowedCwds: parseStringList(env.SUPABASE_MAC_ALLOWED_CWDS ?? `${workspaceDir},${appHome}`),
+    },
+    whatsapp: {
+      enabled: parseBoolean(env.WHATSAPP_ENABLED, true)
+        && Boolean(
+          (env.EVOLUTION_API_URL ?? env.EVOLUTION_SERVER_URL)?.trim()
+          && env.EVOLUTION_API_KEY?.trim(),
+        ),
+      apiUrl: (env.EVOLUTION_API_URL ?? env.EVOLUTION_SERVER_URL)?.trim() || undefined,
+      apiKey: env.EVOLUTION_API_KEY?.trim() || undefined,
+      defaultInstanceName: env.EVOLUTION_INSTANCE_NAME?.trim() || undefined,
+      sidecarEnabled: parseBoolean(env.WHATSAPP_SIDECAR_ENABLED, false),
+      sidecarPort: parsePositiveInteger(env.WHATSAPP_SIDECAR_PORT, 8790),
+      webhookPath: env.WHATSAPP_SIDECAR_WEBHOOK_PATH?.trim() || "/webhooks/evolution",
+      notifyTelegramChatId: (() => {
+        const raw = env.WHATSAPP_NOTIFY_TELEGRAM_CHAT_ID?.trim();
+        if (!raw) {
+          return undefined;
+        }
+        const parsed = Number.parseInt(raw, 10);
+        return Number.isFinite(parsed) ? parsed : undefined;
+      })(),
+    },
+    runtime: {
+      nodeEnv: env.NODE_ENV?.trim() || "development",
+      logLevel: parseLogLevel(env.LOG_LEVEL),
+      maxToolIterations: DEFAULT_MAX_TOOL_ITERATIONS,
+    },
+  };
+}

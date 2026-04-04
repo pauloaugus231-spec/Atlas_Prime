@@ -1,0 +1,185 @@
+import { loadConfig } from "../config/load-config.js";
+import { EmailAccountsService } from "../integrations/email/email-accounts.js";
+import { GoogleMapsService } from "../integrations/google/google-maps.js";
+import { GoogleWorkspaceAuthService } from "../integrations/google/google-auth.js";
+import { GoogleWorkspaceAccountsService } from "../integrations/google/google-workspace-accounts.js";
+import { GoogleWorkspaceService } from "../integrations/google/google-workspace.js";
+import { SupabaseMacCommandQueue } from "../integrations/supabase/mac-command-queue.js";
+import { createLogger } from "../utils/logger.js";
+import { AgentCore } from "./agent-core.js";
+import { ApprovalInboxStore } from "./approval-inbox.js";
+import { CommunicationRouter, ContactIntelligenceStore } from "./contact-intelligence.js";
+import { ContentOpsStore } from "./content-ops.js";
+import { FileAccessPolicy } from "./file-access-policy.js";
+import { GrowthOpsStore } from "./growth-ops.js";
+import { OpenAIClient } from "./openai-client.js";
+import { OllamaClient } from "./ollama-client.js";
+import { OperationalMemoryStore } from "./operational-memory.js";
+import { loadToolPlugins } from "./plugin-loader.js";
+import { ToolPluginRegistry } from "./plugin-registry.js";
+import { ProjectOpsService } from "./project-ops.js";
+import { SafeExecService } from "./safe-exec.js";
+import { SocialAssistantStore } from "./social-assistant.js";
+import { UserPreferencesStore } from "./user-preferences.js";
+import { WhatsAppMessageStore } from "./whatsapp-message-store.js";
+import { WorkflowOrchestratorStore } from "./workflow-orchestrator.js";
+import type { LlmClient } from "../types/llm.js";
+
+export async function createAgentCore() {
+  const config = loadConfig();
+  const logger = createLogger(config.runtime.logLevel);
+  const pluginLogger = logger.child({ scope: "plugins" });
+  const memory = new OperationalMemoryStore(
+    config.paths.memoryDbPath,
+    logger.child({ scope: "operational-memory" }),
+  );
+  const growthOps = new GrowthOpsStore(
+    config.paths.growthDbPath,
+    logger.child({ scope: "growth-ops" }),
+  );
+  const preferences = new UserPreferencesStore(
+    config.paths.preferencesDbPath,
+    logger.child({ scope: "user-preferences" }),
+  );
+  const contentOps = new ContentOpsStore(
+    config.paths.contentDbPath,
+    logger.child({ scope: "content-ops" }),
+  );
+  const socialAssistant = new SocialAssistantStore(
+    config.paths.socialAssistantDbPath,
+    logger.child({ scope: "social-assistant" }),
+  );
+  const contacts = new ContactIntelligenceStore(
+    config.paths.contactIntelligenceDbPath,
+    logger.child({ scope: "contact-intelligence" }),
+  );
+  const approvals = new ApprovalInboxStore(
+    config.paths.approvalInboxDbPath,
+    logger.child({ scope: "approval-inbox" }),
+  );
+  const whatsappMessages = new WhatsAppMessageStore(
+    config.paths.whatsappMessagesDbPath,
+    logger.child({ scope: "whatsapp-messages" }),
+  );
+  const communicationRouter = new CommunicationRouter(contacts);
+  const workflows = new WorkflowOrchestratorStore(
+    config.paths.workflowDbPath,
+    logger.child({ scope: "workflow-orchestrator" }),
+  );
+  const macCommandQueue = new SupabaseMacCommandQueue(
+    config.supabaseMacQueue,
+    logger.child({ scope: "supabase-mac-queue" }),
+  );
+  const googleAuth = new GoogleWorkspaceAuthService(
+    config.google,
+    logger.child({ scope: "google-auth" }),
+  );
+  const googleWorkspace = new GoogleWorkspaceService(
+    config.google,
+    googleAuth,
+    logger.child({ scope: "google-workspace" }),
+  );
+  const googleWorkspaces = new GoogleWorkspaceAccountsService(
+    config.googleAccounts,
+    logger.child({ scope: "google-workspace-accounts" }),
+  );
+  const googleMaps = new GoogleMapsService(
+    config.googleMaps,
+    logger.child({ scope: "google-maps" }),
+  );
+  const emailAccounts = new EmailAccountsService(
+    config.emailAccounts,
+    googleWorkspaces,
+    logger.child({ scope: "email-accounts" }),
+  );
+  const email = emailAccounts.getReader("primary");
+  const emailWriter = emailAccounts.getWriter("primary");
+  const fileAccess = new FileAccessPolicy(
+    config.paths.workspaceDir,
+    config.paths.authorizedProjectsDir,
+  );
+  const projectOps = new ProjectOpsService(
+    fileAccess,
+    logger.child({ scope: "project-ops" }),
+  );
+  const safeExec = new SafeExecService(
+    config.safeExec,
+    fileAccess,
+    logger.child({ scope: "safe-exec" }),
+  );
+
+  const loadedPlugins = await loadToolPlugins(
+    [
+      {
+        dir: config.paths.pluginsDir,
+        origin: "external",
+      },
+      {
+        dir: config.paths.builtInPluginsDir,
+        origin: "builtin",
+      },
+    ],
+    pluginLogger,
+  );
+
+  const registry = new ToolPluginRegistry(loadedPlugins, logger.child({ scope: "tool-registry" }));
+  const client: LlmClient = config.llm.provider === "openai"
+    ? new OpenAIClient(config, logger.child({ scope: "openai" }))
+    : new OllamaClient(config, logger.child({ scope: "ollama" }));
+  const core = new AgentCore(
+    config,
+    logger.child({ scope: "agent-core" }),
+    fileAccess,
+    client,
+    registry,
+    memory,
+    preferences,
+    growthOps,
+    contentOps,
+    socialAssistant,
+    contacts,
+    communicationRouter,
+    approvals,
+    whatsappMessages,
+    workflows,
+    macCommandQueue,
+    email,
+    emailWriter,
+    emailAccounts,
+    googleWorkspace,
+    googleWorkspaces,
+    googleMaps,
+    projectOps,
+    safeExec,
+  );
+
+  return {
+    config,
+    logger,
+    memory,
+    preferences,
+    contentOps,
+    socialAssistant,
+    contacts,
+    approvals,
+    whatsappMessages,
+    communicationRouter,
+    workflows,
+    macCommandQueue,
+    email,
+    emailWriter,
+    emailAccounts,
+    loadedPlugins,
+    registry,
+    client,
+    core,
+    googleAuth,
+    googleWorkspace,
+    googleWorkspaces,
+    googleMaps,
+    growthOps,
+    projectOps,
+    fileAccess,
+    safeExec,
+  };
+}

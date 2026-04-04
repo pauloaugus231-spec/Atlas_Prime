@@ -1,0 +1,50 @@
+.DS_Store
+**/.DS_Store
+.idea/
+.vscode/
+
+# Git / editor / local tooling
+.git
+*.log
+*.pid
+*.seed
+*.stackdump
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# Dependencies and builds
+node_modules/
+**/node_modules/
+app/dist/
+app/tmp/
+.pnpm-store/
+
+# Local runtime state
+app/logs/*
+!app/logs/.gitkeep
+app/workspace/*
+!app/workspace/.gitkeep
+app/workspace/.agent-state/
+*.sqlite
+*.db
+*.session
+*.session-*
+*.token
+*.token-*
+
+# Local reports and generated media
+reports/
+*.qr.png
+
+# Local-only host data at repo root
+/authorized-projects/
+/plugins/
+/logs/
+/workspace/
+
+# Vendored upstream clones kept only for local reference
+upstream/

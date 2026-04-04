@@ -1,0 +1,89 @@
+services:
+  agent:
+    container_name: agente-ai-local
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    working_dir: /app
+    command: ["npm", "run", "telegram:start"]
+    environment:
+      TZ: ${AGENT_TIMEZONE:-America/Sao_Paulo}
+      NODE_ENV: ${NODE_ENV:-development}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      LLM_PROVIDER: ${LLM_PROVIDER:-ollama}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5-coder:3b}
+      OLLAMA_TIMEOUT_SECONDS: ${OLLAMA_TIMEOUT_SECONDS:-60}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5-mini}
+      OPENAI_TIMEOUT_SECONDS: ${OPENAI_TIMEOUT_SECONDS:-60}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      BOOTSTRAP_STRICT_OLLAMA: ${BOOTSTRAP_STRICT_OLLAMA:-true}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_ALLOWED_USER_IDS: ${TELEGRAM_ALLOWED_USER_IDS:-}
+      TELEGRAM_POLL_TIMEOUT_SECONDS: ${TELEGRAM_POLL_TIMEOUT_SECONDS:-30}
+      EMAIL_ENABLED: ${EMAIL_ENABLED:-false}
+      EMAIL_IMAP_HOST: ${EMAIL_IMAP_HOST:-}
+      EMAIL_IMAP_PORT: ${EMAIL_IMAP_PORT:-993}
+      EMAIL_IMAP_SECURE: ${EMAIL_IMAP_SECURE:-true}
+      EMAIL_IMAP_USERNAME: ${EMAIL_IMAP_USERNAME:-}
+      EMAIL_IMAP_PASSWORD: ${EMAIL_IMAP_PASSWORD:-}
+      EMAIL_IMAP_MAILBOX: ${EMAIL_IMAP_MAILBOX:-INBOX}
+      EMAIL_LOOKBACK_HOURS: ${EMAIL_LOOKBACK_HOURS:-72}
+      EMAIL_MAX_MESSAGES: ${EMAIL_MAX_MESSAGES:-10}
+      EMAIL_MAX_SOURCE_BYTES: ${EMAIL_MAX_SOURCE_BYTES:-200000}
+      EMAIL_MAX_TEXT_CHARS: ${EMAIL_MAX_TEXT_CHARS:-12000}
+      EMAIL_WRITE_ENABLED: ${EMAIL_WRITE_ENABLED:-false}
+      EMAIL_SMTP_HOST: ${EMAIL_SMTP_HOST:-}
+      EMAIL_SMTP_PORT: ${EMAIL_SMTP_PORT:-465}
+      EMAIL_SMTP_SECURE: ${EMAIL_SMTP_SECURE:-true}
+      EMAIL_SMTP_USERNAME: ${EMAIL_SMTP_USERNAME:-}
+      EMAIL_SMTP_PASSWORD: ${EMAIL_SMTP_PASSWORD:-}
+      EMAIL_FROM_NAME: ${EMAIL_FROM_NAME:-}
+      EMAIL_FROM_ADDRESS: ${EMAIL_FROM_ADDRESS:-}
+      EMAIL_REPLY_ALLOWED_SENDERS: ${EMAIL_REPLY_ALLOWED_SENDERS:-}
+      EMAIL_REPLY_ALLOWED_DOMAINS: ${EMAIL_REPLY_ALLOWED_DOMAINS:-}
+      GOOGLE_ENABLED: ${GOOGLE_ENABLED:-false}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-}
+      GOOGLE_OAUTH_PORT: ${GOOGLE_OAUTH_PORT:-8787}
+      GOOGLE_CREDENTIALS_PATH: ${GOOGLE_CREDENTIALS_PATH:-/workspace/.agent-state/google-oauth-client.json}
+      GOOGLE_TOKEN_PATH: ${GOOGLE_TOKEN_PATH:-/workspace/.agent-state/google-oauth-token.json}
+      GOOGLE_CALENDAR_ID: ${GOOGLE_CALENDAR_ID:-primary}
+      GOOGLE_DEFAULT_TIMEZONE: ${GOOGLE_DEFAULT_TIMEZONE:-America/Sao_Paulo}
+      GOOGLE_MAX_EVENTS: ${GOOGLE_MAX_EVENTS:-10}
+      GOOGLE_MAX_TASKS: ${GOOGLE_MAX_TASKS:-15}
+      GOOGLE_MAX_CONTACTS: ${GOOGLE_MAX_CONTACTS:-10}
+      SAFE_EXEC_ENABLED: ${SAFE_EXEC_ENABLED:-true}
+      SAFE_EXEC_ALLOWED_COMMANDS: ${SAFE_EXEC_ALLOWED_COMMANDS:-git status --short|git branch --show-current|git diff --stat|npm run build|npm test|pnpm build|pnpm test|yarn build|yarn test}
+      SAFE_EXEC_MAX_OUTPUT_CHARS: ${SAFE_EXEC_MAX_OUTPUT_CHARS:-8000}
+      APP_HOME: /app
+      WORKSPACE_DIR: /workspace
+      PLUGINS_DIR: /plugins
+      LOGS_DIR: /logs
+      AUTHORIZED_PROJECTS_DIR: /authorized-projects
+    read_only: true
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 256
+    mem_limit: 1g
+    cpus: 2.0
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m
+      - /home/agente/.cache:rw,noexec,nosuid,nodev,size=128m
+      - /home/agente/.npm:rw,noexec,nosuid,nodev,size=128m
+    volumes:
+      - ./app:/app:rw
+      - ${HOST_AGENT_WORKSPACE}:/workspace:rw
+      - ${HOST_AGENT_PLUGINS}:/plugins:rw
+      - ${HOST_AGENT_LOGS}:/logs:rw
+      - ${HOST_AUTHORIZED_PROJECTS_DIR}:/authorized-projects:ro
+      - ${HOST_USER_DOCUMENTS_DIR:-/Users/user/Documents}:/Users/user/Documents:ro
+    ports:
+      - "127.0.0.1:8787-8795:8787-8795"

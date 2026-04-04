@@ -1,0 +1,44 @@
+{
+  "name": "agente-ai-local",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Local AI agent core based on Moltbot/OpenClaw architectural concepts",
+  "engines": {
+    "node": ">=22.14.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "dev": "tsx src/index.ts",
+    "core:doctor": "tsx src/index.ts doctor",
+    "core:plugins": "tsx src/index.ts plugins:list",
+    "core:memory": "tsx src/index.ts memory:list",
+    "core:chat": "tsx src/index.ts chat",
+    "telegram:start": "tsx src/integrations/telegram/index.ts",
+    "google:auth": "tsx scripts/google-auth.ts",
+    "mac:worker": "tsx scripts/mac-worker.ts",
+    "whatsapp:sidecar": "tsx scripts/whatsapp-sidecar.ts",
+    "container:bootstrap": "bash ./scripts/docker/bootstrap.sh",
+    "container:healthcheck": "bash ./scripts/docker/healthcheck.sh",
+    "email:smoke": "tsx scripts/smoke-email.ts"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.101.1",
+    "ajv": "^8.17.1",
+    "imapflow": "^1.2.18",
+    "mailparser": "^3.9.6",
+    "nodemailer": "^8.0.4",
+    "pdf-parse": "^2.4.5",
+    "pdf-parse-old": "npm:pdf-parse@^1.1.1",
+    "pdf2json": "^4.0.2"
+  },
+  "devDependencies": {
+    "@types/mailparser": "^3.4.6",
+    "@types/node": "^22.15.30",
+    "@types/nodemailer": "^7.0.11",
+    "pm2": "^6.0.14",
+    "tsx": "^4.20.3",
+    "typescript": "^5.8.3"
+  }
+}
