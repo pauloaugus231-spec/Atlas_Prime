@@ -18,8 +18,6 @@ jobs:
     timeout-minutes: 20
     env:
       DEPLOY_PATH: /srv/atlas/app
-      DEPLOY_NOTIFY_TELEGRAM_BOT_TOKEN: ${{ secrets.DEPLOY_NOTIFY_TELEGRAM_BOT_TOKEN }}
-      DEPLOY_NOTIFY_TELEGRAM_CHAT_ID: ${{ secrets.DEPLOY_NOTIFY_TELEGRAM_CHAT_ID }}
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -44,16 +42,16 @@ jobs:
             ./ "$DEPLOY_PATH/"
 
       - name: Run local deploy
-        id: deploy_local
         run: |
           cd "$DEPLOY_PATH"
           chmod +x scripts/deploy-ec2.sh
           ATLAS_APP_DIR="$DEPLOY_PATH" scripts/deploy-ec2.sh
 
-      - name: Notify Telegram
-        if: ${{ always() }}
+      - name: Notify Telegram success
+        if: ${{ success() }}
         env:
-          DEPLOY_STATUS: ${{ steps.deploy_local.conclusion }}
+          DEPLOY_NOTIFY_TELEGRAM_BOT_TOKEN: ${{ secrets.DEPLOY_NOTIFY_TELEGRAM_BOT_TOKEN }}
+          DEPLOY_NOTIFY_TELEGRAM_CHAT_ID: ${{ secrets.DEPLOY_NOTIFY_TELEGRAM_CHAT_ID }}
         run: |
           if [ -z "$DEPLOY_NOTIFY_TELEGRAM_BOT_TOKEN" ] || [ -z "$DEPLOY_NOTIFY_TELEGRAM_CHAT_ID" ]; then
             echo "Telegram deploy notification skipped: secrets ausentes."
@@ -62,16 +60,49 @@ jobs:
 
           SHORT_SHA="${GITHUB_SHA:0:7}"
           RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-          ICON="✅"
-          if [ "$DEPLOY_STATUS" != "success" ]; then
-            ICON="❌"
-          fi
 
           MESSAGE=$(cat <<EOF
-$ICON Deploy Atlas
+✅ Deploy Atlas
 Repo: $GITHUB_REPOSITORY
 Branch: $GITHUB_REF_NAME
-Status: $DEPLOY_STATUS
+Status: success
+Commit: $SHORT_SHA
+Run: $RUN_URL
+EOF
+)
+
+          RESPONSE="$(curl -sS --max-time 20 \
+            --data-urlencode "chat_id=$DEPLOY_NOTIFY_TELEGRAM_CHAT_ID" \
+            --data-urlencode "text=$MESSAGE" \
+            "https://api.telegram.org/bot$DEPLOY_NOTIFY_TELEGRAM_BOT_TOKEN/sendMessage" || true)"
+
+          if ! printf '%s' "$RESPONSE" | grep -q '"ok":true'; then
+            echo "Telegram deploy notification failed."
+            echo "$RESPONSE"
+            exit 0
+          fi
+
+          echo "Telegram deploy notification sent."
+
+      - name: Notify Telegram failure
+        if: ${{ failure() }}
+        env:
+          DEPLOY_NOTIFY_TELEGRAM_BOT_TOKEN: ${{ secrets.DEPLOY_NOTIFY_TELEGRAM_BOT_TOKEN }}
+          DEPLOY_NOTIFY_TELEGRAM_CHAT_ID: ${{ secrets.DEPLOY_NOTIFY_TELEGRAM_CHAT_ID }}
+        run: |
+          if [ -z "$DEPLOY_NOTIFY_TELEGRAM_BOT_TOKEN" ] || [ -z "$DEPLOY_NOTIFY_TELEGRAM_CHAT_ID" ]; then
+            echo "Telegram deploy notification skipped: secrets ausentes."
+            exit 0
+          fi
+
+          SHORT_SHA="${GITHUB_SHA:0:7}"
+          RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+
+          MESSAGE=$(cat <<EOF
+❌ Deploy Atlas
+Repo: $GITHUB_REPOSITORY
+Branch: $GITHUB_REF_NAME
+Status: failure
 Commit: $SHORT_SHA
 Run: $RUN_URL
 EOF
