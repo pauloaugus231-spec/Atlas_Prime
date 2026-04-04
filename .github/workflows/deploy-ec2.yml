@@ -44,6 +44,7 @@ jobs:
             ./ "$DEPLOY_PATH/"
 
       - name: Run local deploy
+        id: deploy_local
         run: |
           cd "$DEPLOY_PATH"
           chmod +x scripts/deploy-ec2.sh
@@ -52,26 +53,25 @@ jobs:
       - name: Notify Telegram
         if: ${{ always() }}
         env:
-          JOB_STATUS: ${{ job.status }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          SHORT_SHA: ${{ github.sha }}
+          DEPLOY_STATUS: ${{ steps.deploy_local.conclusion }}
         run: |
           if [ -z "$DEPLOY_NOTIFY_TELEGRAM_BOT_TOKEN" ] || [ -z "$DEPLOY_NOTIFY_TELEGRAM_CHAT_ID" ]; then
             echo "Telegram deploy notification skipped: secrets ausentes."
             exit 0
           fi
 
-          SHORT_SHA="${SHORT_SHA:0:7}"
+          SHORT_SHA="${GITHUB_SHA:0:7}"
+          RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           ICON="✅"
-          if [ "$JOB_STATUS" != "success" ]; then
+          if [ "$DEPLOY_STATUS" != "success" ]; then
             ICON="❌"
           fi
 
           MESSAGE=$(cat <<EOF
 $ICON Deploy Atlas
-Repo: ${{ github.repository }}
-Branch: ${{ github.ref_name }}
-Status: $JOB_STATUS
+Repo: $GITHUB_REPOSITORY
+Branch: $GITHUB_REF_NAME
+Status: $DEPLOY_STATUS
 Commit: $SHORT_SHA
 Run: $RUN_URL
 EOF
