@@ -27,6 +27,20 @@ Se voce ja criou secrets como:
 
 eles podem ficar cadastrados por enquanto, mas **nao sao mais necessarios** para este deploy.
 
+## Secrets opcionais para notificacao no Telegram
+
+Se quiser receber aviso de deploy no Telegram, cadastre:
+
+- `DEPLOY_NOTIFY_TELEGRAM_BOT_TOKEN`
+- `DEPLOY_NOTIFY_TELEGRAM_CHAT_ID`
+
+Quando esses secrets existem, o workflow envia uma mensagem com:
+
+- status do deploy
+- branch
+- commit curto
+- link direto do run
+
 ## O que nao e sincronizado
 
 O workflow exclui do `rsync`:

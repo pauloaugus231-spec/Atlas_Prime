@@ -16,19 +16,21 @@ jobs:
       - self-hosted
       - atlas-ec2
     timeout-minutes: 20
+    env:
+      DEPLOY_PATH: /srv/atlas/app
+      DEPLOY_NOTIFY_TELEGRAM_BOT_TOKEN: ${{ secrets.DEPLOY_NOTIFY_TELEGRAM_BOT_TOKEN }}
+      DEPLOY_NOTIFY_TELEGRAM_CHAT_ID: ${{ secrets.DEPLOY_NOTIFY_TELEGRAM_CHAT_ID }}
     steps:
       - name: Checkout
         uses: actions/checkout@v5
 
       - name: Validate local deploy target
         run: |
-          DEPLOY_PATH="/srv/atlas/app"
           test -d "$DEPLOY_PATH" || { echo "Diretorio de deploy ausente: $DEPLOY_PATH"; exit 1; }
           test -f "$DEPLOY_PATH/.env.production" || { echo ".env.production ausente em $DEPLOY_PATH"; exit 1; }
 
       - name: Sync repository to EC2 app dir
         run: |
-          DEPLOY_PATH="/srv/atlas/app"
           rsync -az --delete \
             --exclude ".git/" \
             --exclude ".github/" \
@@ -43,7 +45,47 @@ jobs:
 
       - name: Run local deploy
         run: |
-          DEPLOY_PATH="/srv/atlas/app"
           cd "$DEPLOY_PATH"
           chmod +x scripts/deploy-ec2.sh
           ATLAS_APP_DIR="$DEPLOY_PATH" scripts/deploy-ec2.sh
+
+      - name: Notify Telegram
+        if: ${{ always() }}
+        env:
+          JOB_STATUS: ${{ job.status }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SHORT_SHA: ${{ github.sha }}
+        run: |
+          if [ -z "$DEPLOY_NOTIFY_TELEGRAM_BOT_TOKEN" ] || [ -z "$DEPLOY_NOTIFY_TELEGRAM_CHAT_ID" ]; then
+            echo "Telegram deploy notification skipped: secrets ausentes."
+            exit 0
+          fi
+
+          SHORT_SHA="${SHORT_SHA:0:7}"
+          ICON="✅"
+          if [ "$JOB_STATUS" != "success" ]; then
+            ICON="❌"
+          fi
+
+          MESSAGE=$(cat <<EOF
+$ICON Deploy Atlas
+Repo: ${{ github.repository }}
+Branch: ${{ github.ref_name }}
+Status: $JOB_STATUS
+Commit: $SHORT_SHA
+Run: $RUN_URL
+EOF
+)
+
+          RESPONSE="$(curl -sS --max-time 20 \
+            --data-urlencode "chat_id=$DEPLOY_NOTIFY_TELEGRAM_CHAT_ID" \
+            --data-urlencode "text=$MESSAGE" \
+            "https://api.telegram.org/bot$DEPLOY_NOTIFY_TELEGRAM_BOT_TOKEN/sendMessage" || true)"
+
+          if ! printf '%s' "$RESPONSE" | grep -q '"ok":true'; then
+            echo "Telegram deploy notification failed."
+            echo "$RESPONSE"
+            exit 0
+          fi
+
+          echo "Telegram deploy notification sent."
