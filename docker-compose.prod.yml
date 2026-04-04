@@ -32,3 +32,93 @@ services:
       - /srv/atlas/state/plugins:/plugins:rw
       - /srv/atlas/logs:/logs:rw
       - /srv/atlas/state/authorized-projects:/authorized-projects:ro
+
+  whatsapp-sidecar:
+    container_name: atlas-whatsapp-sidecar
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - .env.production
+    working_dir: /app
+    command: ["npm", "run", "whatsapp:sidecar"]
+    environment:
+      APP_HOME: /app
+      WORKSPACE_DIR: /workspace
+      PLUGINS_DIR: /plugins
+      LOGS_DIR: /logs
+      AUTHORIZED_PROJECTS_DIR: /authorized-projects
+    read_only: true
+    restart: unless-stopped
+    depends_on:
+      - evolution-api
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 256
+    mem_limit: 768m
+    cpus: 1.0
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m
+      - /home/agente/.cache:rw,noexec,nosuid,nodev,size=128m
+      - /home/agente/.npm:rw,noexec,nosuid,nodev,size=128m
+    volumes:
+      - /srv/atlas/state/workspace:/workspace:rw
+      - /srv/atlas/state/plugins:/plugins:rw
+      - /srv/atlas/logs:/logs:rw
+      - /srv/atlas/state/authorized-projects:/authorized-projects:ro
+
+  evolution-postgres:
+    image: postgres:15
+    container_name: atlas-evolution-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${EVOLUTION_POSTGRES_DB:-evolution_api}
+      POSTGRES_USER: ${EVOLUTION_POSTGRES_USER:-evolution}
+      POSTGRES_PASSWORD: ${EVOLUTION_POSTGRES_PASSWORD:-evolution_password}
+    volumes:
+      - evolution_postgres_data:/var/lib/postgresql/data
+
+  evolution-redis:
+    image: redis:7-alpine
+    container_name: atlas-evolution-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - evolution_redis_data:/data
+
+  evolution-api:
+    build:
+      context: ./upstream/evolution-api
+      dockerfile: Dockerfile
+    container_name: atlas-evolution-api
+    restart: unless-stopped
+    depends_on:
+      - evolution-postgres
+      - evolution-redis
+    env_file:
+      - .env.production
+    environment:
+      SERVER_TYPE: http
+      SERVER_PORT: 8080
+      SERVER_URL: ${EVOLUTION_SERVER_URL:-http://evolution-api:8080}
+      DATABASE_PROVIDER: postgresql
+      DATABASE_CONNECTION_URI: postgresql://${EVOLUTION_POSTGRES_USER:-evolution}:${EVOLUTION_POSTGRES_PASSWORD:-evolution_password}@evolution-postgres:5432/${EVOLUTION_POSTGRES_DB:-evolution_api}
+      CACHE_REDIS_ENABLED: "true"
+      CACHE_REDIS_URI: redis://evolution-redis:6379
+      AUTHENTICATION_API_KEY: ${EVOLUTION_API_KEY:-change_me}
+      WEBHOOK_GLOBAL_ENABLED: ${EVOLUTION_WEBHOOK_ENABLED:-true}
+      WEBHOOK_GLOBAL_URL: ${EVOLUTION_WEBHOOK_URL:-http://whatsapp-sidecar:8790/webhooks/evolution}
+      CHATWOOT_ENABLED: "false"
+      CHATWOOT_MESSAGE_READ: "false"
+      CHATWOOT_MESSAGE_DELETE: "false"
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - evolution_instances:/evolution/instances
+
+volumes:
+  evolution_postgres_data:
+  evolution_redis_data:
+  evolution_instances:

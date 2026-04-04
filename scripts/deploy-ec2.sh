@@ -26,8 +26,8 @@ cd "$APP_DIR"
 [[ -f "$COMPOSE_FILE" ]] || fail "compose nao encontrado em $APP_DIR/$COMPOSE_FILE"
 [[ -f ".env.production" ]] || fail ".env.production nao encontrado em $APP_DIR"
 
-log "Subindo $SERVICE_NAME com rebuild controlado"
-sudo docker compose -f "$COMPOSE_FILE" up -d --build --force-recreate "$SERVICE_NAME"
+log "Subindo stack de producao com rebuild controlado"
+sudo docker compose -f "$COMPOSE_FILE" up -d --build --force-recreate
 
 deadline=$((SECONDS + HEALTH_TIMEOUT_SECONDS))
 last_status="unknown"
