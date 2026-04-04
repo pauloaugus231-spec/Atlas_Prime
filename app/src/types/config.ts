@@ -104,6 +104,8 @@ export interface WhatsAppConfig {
   apiUrl?: string;
   apiKey?: string;
   defaultInstanceName?: string;
+  defaultAccountAlias: string;
+  instanceAccounts: Record<string, string>;
   sidecarEnabled: boolean;
   sidecarPort: number;
   webhookPath: string;

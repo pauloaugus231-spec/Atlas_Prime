@@ -280,7 +280,29 @@ export class CommunicationRouter {
       };
     }
 
-    if (includesAny(normalized, ["abrigo", "encaminhamento", "familia referenciada", "paefi", "cadunico", "cadúnico", "vulnerabilidade"])) {
+    if (includesAny(normalized, [
+      "abrigo",
+      "encaminhamento",
+      "familia referenciada",
+      "paefi",
+      "cadunico",
+      "cadúnico",
+      "vulnerabilidade",
+      "abordagem",
+      "creas",
+      "caps",
+      "acolhida",
+      "banho",
+      "espaco de cuidados",
+      "espaço de cuidados",
+      "casa da sopa",
+      "amurt",
+      "muralismo",
+      "extremo sul",
+      "restinga",
+      "equipe adulto",
+      "adulto",
+    ])) {
       return {
         channel,
         identifier,

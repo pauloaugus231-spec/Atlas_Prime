@@ -50,6 +50,7 @@ interface PendingEmailDraft {
 interface PendingWhatsAppReplyDraft {
   kind: "whatsapp_reply";
   instanceName?: string;
+  account?: string;
   remoteJid: string;
   number: string;
   pushName?: string;
@@ -660,6 +661,7 @@ function parsePendingActionDraftPayload(payload: string): PendingActionDraft | u
       return {
         kind: "whatsapp_reply",
         instanceName: typeof parsed.instanceName === "string" ? parsed.instanceName : undefined,
+        account: typeof parsed.account === "string" ? parsed.account : undefined,
         remoteJid: parsed.remoteJid,
         number: parsed.number,
         pushName: typeof parsed.pushName === "string" ? parsed.pushName : undefined,
@@ -882,6 +884,8 @@ function buildCompactPendingActionReply(draft: PendingActionDraft): string | und
   if (draft.kind === "whatsapp_reply") {
     return [
       `Rascunho WhatsApp pronto para ${draft.pushName ?? draft.number}.`,
+      ...(draft.account ? [`Conta: ${draft.account}.`] : []),
+      ...(draft.instanceName ? [`Instância: ${draft.instanceName}.`] : []),
       `Resposta: ${draft.replyText}`,
       "Use os botões `Enviar`, `Editar` ou `Ignorar`.",
     ].join("\n");
@@ -937,7 +941,7 @@ function buildPendingActionSubject(draft: PendingActionDraft): string {
     return `Email UID ${draft.uid}`;
   }
   if (draft.kind === "whatsapp_reply") {
-    return `WhatsApp: ${draft.pushName ?? draft.number}`;
+    return `WhatsApp${draft.account ? ` ${draft.account}` : ""}: ${draft.pushName ?? draft.number}`;
   }
   if (draft.kind === "google_task") {
     return `Tarefa Google: ${draft.title}`;
@@ -962,6 +966,8 @@ function buildWhatsAppSendSuccessMessage(rawResult: unknown, draft: PendingWhats
   return [
     "Resposta de WhatsApp enviada com sucesso.",
     `Contato: ${draft.pushName ?? draft.number}`,
+    ...(draft.account ? [`Conta: ${draft.account}`] : []),
+    ...(draft.instanceName ? [`Instância: ${draft.instanceName}`] : []),
     record ? `Retorno: ${JSON.stringify(record).slice(0, 300)}` : undefined,
   ].filter(Boolean).join("\n");
 }
@@ -1782,6 +1788,8 @@ export class TelegramService {
         draft.kind === "whatsapp_reply"
           ? [
               `Rascunho carregado para edição: WhatsApp para ${draft.pushName ?? draft.number}.`,
+              ...(draft.account ? [`Conta: ${draft.account}.`] : []),
+              ...(draft.instanceName ? [`Instância: ${draft.instanceName}.`] : []),
               `Mensagem atual: ${draft.replyText}`,
               "Envie a alteração em texto e eu atualizo antes de enviar.",
             ].join("\n")

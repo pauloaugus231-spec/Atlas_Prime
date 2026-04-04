@@ -213,6 +213,36 @@ function parseAliasMap(value: string | undefined, fallback?: Record<string, stri
   return Object.fromEntries(result.entries());
 }
 
+function parsePlainMap(
+  value: string | undefined,
+  fallback?: Record<string, string>,
+): Record<string, string> {
+  const result = new Map<string, string>();
+
+  for (const [key, mappedValue] of Object.entries(fallback ?? {})) {
+    const normalizedKey = key.trim();
+    const normalizedValue = mappedValue.trim();
+    if (normalizedKey && normalizedValue) {
+      result.set(normalizedKey, normalizedValue);
+    }
+  }
+
+  if (!value?.trim()) {
+    return Object.fromEntries(result.entries());
+  }
+
+  for (const entry of value.split("|")) {
+    const [rawKey, ...rawValueParts] = entry.split(":");
+    const key = rawKey?.trim();
+    const mappedValue = rawValueParts.join(":").trim();
+    if (key && mappedValue) {
+      result.set(key, mappedValue);
+    }
+  }
+
+  return Object.fromEntries(result.entries());
+}
+
 function buildEmailConfig(env: NodeJS.ProcessEnv, prefix = "EMAIL_", defaults?: EmailConfig): EmailConfig {
   const fallback = defaults;
   return {
@@ -507,6 +537,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       apiUrl: (env.EVOLUTION_API_URL ?? env.EVOLUTION_SERVER_URL)?.trim() || undefined,
       apiKey: env.EVOLUTION_API_KEY?.trim() || undefined,
       defaultInstanceName: env.EVOLUTION_INSTANCE_NAME?.trim() || undefined,
+      defaultAccountAlias: normalizeAccountAlias(env.WHATSAPP_DEFAULT_ACCOUNT ?? "primary") || "primary",
+      instanceAccounts: parsePlainMap(
+        env.WHATSAPP_INSTANCE_ACCOUNTS,
+        env.EVOLUTION_INSTANCE_NAME?.trim()
+          ? { [env.EVOLUTION_INSTANCE_NAME.trim()]: normalizeAccountAlias(env.WHATSAPP_DEFAULT_ACCOUNT ?? "primary") || "primary" }
+          : undefined,
+      ),
       sidecarEnabled: parseBoolean(env.WHATSAPP_SIDECAR_ENABLED, false),
       sidecarPort: parsePositiveInteger(env.WHATSAPP_SIDECAR_PORT, 8790),
       webhookPath: env.WHATSAPP_SIDECAR_WEBHOOK_PATH?.trim() || "/webhooks/evolution",

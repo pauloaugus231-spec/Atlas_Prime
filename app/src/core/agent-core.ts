@@ -42,6 +42,10 @@ import {
   WhatsAppMessageStore,
   type WhatsAppMessageRecord,
 } from "./whatsapp-message-store.js";
+import {
+  describeWhatsAppRoute,
+  resolveWhatsAppAccountAlias,
+} from "./whatsapp-routing.js";
 import { WorkflowOrchestratorStore } from "./workflow-orchestrator.js";
 import { buildOrchestrationContext, buildOrchestrationSystemMessage } from "./orchestration.js";
 import { buildSystemPrompt } from "./system-prompt.js";
@@ -2886,6 +2890,7 @@ function buildContactListReply(contacts: ContactProfileRecord[]): string {
 
 function buildWhatsAppDraftMarker(draft: {
   instanceName?: string;
+  account?: string;
   remoteJid: string;
   number: string;
   pushName?: string;
@@ -2899,6 +2904,7 @@ function buildWhatsAppDraftMarker(draft: {
     JSON.stringify({
       kind: "whatsapp_reply",
       instanceName: draft.instanceName,
+      account: draft.account,
       remoteJid: draft.remoteJid,
       number: draft.number,
       pushName: draft.pushName,
@@ -2915,12 +2921,16 @@ function buildWhatsAppDirectDraftReply(input: {
   nameOrNumber: string;
   number: string;
   text: string;
+  account?: string;
+  instanceName?: string;
   marker: string;
 }): string {
   return [
     input.marker,
     `Rascunho WhatsApp pronto para ${input.nameOrNumber}.`,
     `Número: ${input.number}`,
+    ...(input.account ? [`Conta operacional: ${input.account}`] : []),
+    ...(input.instanceName ? [`Instância: ${input.instanceName}`] : []),
     `Mensagem: ${input.text}`,
     "Confirme com `enviar` ou use os botões `Enviar`, `Editar` ou `Ignorar`.",
   ].join("\n");
@@ -6689,8 +6699,32 @@ export class AgentCore {
       };
     }
 
+    const whatsappRoutingContext = [recentSendPrompt, baseTargetPrompt, activeUserPrompt]
+      .filter(Boolean)
+      .join("\n");
+    const accountAlias = resolveWhatsAppAccountAlias(this.config.whatsapp, {
+      text: whatsappRoutingContext,
+      fallback: "primary",
+    });
+    const route = describeWhatsAppRoute(this.config.whatsapp, {
+      accountAlias,
+      text: whatsappRoutingContext,
+    });
+    if (!route.instanceName) {
+      return {
+        requestId,
+        reply: [
+          `Não encontrei uma instância de WhatsApp configurada para a conta ${accountAlias}.`,
+          "Defina `WHATSAPP_INSTANCE_ACCOUNTS` para mapear a instância correta antes de enviar.",
+        ].join("\n"),
+        messages: buildBaseMessages(activeUserPrompt, orchestration),
+        toolExecutions: [],
+      };
+    }
+
     const marker = buildWhatsAppDraftMarker({
-      instanceName: this.config.whatsapp.defaultInstanceName,
+      instanceName: route.instanceName,
+      account: route.accountAlias,
       remoteJid: target.remoteJid ?? `${target.number}@s.whatsapp.net`,
       number: target.number,
       pushName: target.displayName,
@@ -6706,6 +6740,8 @@ export class AgentCore {
         nameOrNumber: target.displayName ?? target.number,
         number: target.number,
         text: body,
+        account: route.accountAlias,
+        instanceName: route.instanceName,
         marker,
       }),
       messages: buildBaseMessages(activeUserPrompt, orchestration),
