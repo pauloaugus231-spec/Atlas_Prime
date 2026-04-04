@@ -8,6 +8,7 @@ SERVICE_NAME="${ATLAS_SERVICE_NAME:-agent}"
 CONTAINER_NAME="${ATLAS_CONTAINER_NAME:-atlas-core}"
 HEALTH_TIMEOUT_SECONDS="${ATLAS_HEALTH_TIMEOUT_SECONDS:-180}"
 HEALTH_POLL_SECONDS="${ATLAS_HEALTH_POLL_SECONDS:-5}"
+LOCK_FILE="${ATLAS_DEPLOY_LOCK_FILE:-/tmp/atlas-deploy.lock}"
 
 log() {
   printf '[deploy-ec2] %s\n' "$*"
@@ -20,14 +21,20 @@ fail() {
 
 command -v sudo >/dev/null 2>&1 || fail "sudo nao encontrado"
 command -v docker >/dev/null 2>&1 || fail "docker nao encontrado"
+command -v flock >/dev/null 2>&1 || fail "flock nao encontrado"
 
 cd "$APP_DIR"
 
 [[ -f "$COMPOSE_FILE" ]] || fail "compose nao encontrado em $APP_DIR/$COMPOSE_FILE"
 [[ -f ".env.production" ]] || fail ".env.production nao encontrado em $APP_DIR"
 
-log "Subindo stack de producao com rebuild controlado"
-sudo docker compose -f "$COMPOSE_FILE" up -d --build --force-recreate
+exec 9>"$LOCK_FILE"
+if ! flock -w 300 9; then
+  fail "timeout aguardando lock de deploy em $LOCK_FILE"
+fi
+
+log "Subindo stack de producao com lock exclusivo"
+sudo docker compose -f "$COMPOSE_FILE" up -d --build --remove-orphans
 
 deadline=$((SECONDS + HEALTH_TIMEOUT_SECONDS))
 last_status="unknown"
