@@ -14,6 +14,15 @@ interface UpdateContentItemParameters {
   notes?: string;
   target_date?: string;
   asset_path?: string;
+  channel_key?: string;
+  series_key?: string;
+  format_template_key?: string;
+  idea_score?: number;
+  score_reason?: string;
+  queue_priority?: number;
+  review_feedback_category?: string;
+  review_feedback_reason?: string;
+  last_reviewed_at?: string;
 }
 
 export default defineToolPlugin<UpdateContentItemParameters>({
@@ -34,6 +43,15 @@ export default defineToolPlugin<UpdateContentItemParameters>({
       notes: { type: "string" },
       target_date: { type: "string" },
       asset_path: { type: "string" },
+      channel_key: { type: "string" },
+      series_key: { type: "string" },
+      format_template_key: { type: "string" },
+      idea_score: { type: "number", minimum: 0, maximum: 100 },
+      score_reason: { type: "string" },
+      queue_priority: { type: "integer", minimum: 0, maximum: 100 },
+      review_feedback_category: { type: "string" },
+      review_feedback_reason: { type: "string" },
+      last_reviewed_at: { type: "string" },
     },
     required: ["id"],
     additionalProperties: false,
@@ -52,6 +70,15 @@ export default defineToolPlugin<UpdateContentItemParameters>({
       notes: parameters.notes,
       targetDate: parameters.target_date,
       assetPath: parameters.asset_path,
+      channelKey: parameters.channel_key,
+      seriesKey: parameters.series_key,
+      formatTemplateKey: parameters.format_template_key,
+      ideaScore: parameters.idea_score,
+      scoreReason: parameters.score_reason,
+      queuePriority: parameters.queue_priority,
+      reviewFeedbackCategory: parameters.review_feedback_category,
+      reviewFeedbackReason: parameters.review_feedback_reason,
+      lastReviewedAt: parameters.last_reviewed_at,
     });
 
     return {

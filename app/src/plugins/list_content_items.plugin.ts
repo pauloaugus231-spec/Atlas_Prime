@@ -4,6 +4,8 @@ import { defineToolPlugin } from "../types/plugin.js";
 interface ListContentItemsParameters {
   platform?: (typeof CONTENT_PLATFORMS)[number];
   status?: (typeof CONTENT_STATUSES)[number];
+  channel_key?: string;
+  series_key?: string;
   search?: string;
   limit?: number;
 }
@@ -16,6 +18,8 @@ export default defineToolPlugin<ListContentItemsParameters>({
     properties: {
       platform: { type: "string", enum: [...CONTENT_PLATFORMS] },
       status: { type: "string", enum: [...CONTENT_STATUSES] },
+      channel_key: { type: "string" },
+      series_key: { type: "string" },
       search: { type: "string" },
       limit: { type: "integer", minimum: 1, maximum: 100, default: 20 },
     },
@@ -25,6 +29,8 @@ export default defineToolPlugin<ListContentItemsParameters>({
     const items = context.contentOps.listItems({
       platform: parameters.platform,
       status: parameters.status,
+      channelKey: parameters.channel_key,
+      seriesKey: parameters.series_key,
       search: parameters.search,
       limit: parameters.limit,
     });

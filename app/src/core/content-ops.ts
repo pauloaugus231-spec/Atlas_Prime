@@ -147,6 +147,11 @@ function mapContentItem(row: Record<string, unknown>): ContentItemRecord {
     ideaScore: row.idea_score == null ? null : Number(row.idea_score),
     scoreReason: row.score_reason == null ? null : String(row.score_reason),
     queuePriority: row.queue_priority == null ? null : Number(row.queue_priority),
+    reviewFeedbackCategory:
+      row.review_feedback_category == null ? null : String(row.review_feedback_category),
+    reviewFeedbackReason:
+      row.review_feedback_reason == null ? null : String(row.review_feedback_reason),
+    lastReviewedAt: row.last_reviewed_at == null ? null : String(row.last_reviewed_at),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
   };
@@ -266,6 +271,9 @@ export class ContentOpsStore {
         idea_score REAL,
         score_reason TEXT,
         queue_priority INTEGER,
+        review_feedback_category TEXT,
+        review_feedback_reason TEXT,
+        last_reviewed_at TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
@@ -363,6 +371,9 @@ export class ContentOpsStore {
     this.ensureColumn("content_items", "idea_score", "REAL");
     this.ensureColumn("content_items", "score_reason", "TEXT");
     this.ensureColumn("content_items", "queue_priority", "INTEGER");
+    this.ensureColumn("content_items", "review_feedback_category", "TEXT");
+    this.ensureColumn("content_items", "review_feedback_reason", "TEXT");
+    this.ensureColumn("content_items", "last_reviewed_at", "TEXT");
   }
 
   private ensureEditorialScaffold(): void {
@@ -470,8 +481,9 @@ export class ContentOpsStore {
         title, platform, format, status, pillar, audience, hook,
         call_to_action, notes, target_date, asset_path, channel_key,
         series_key, format_template_key, idea_score, score_reason,
-        queue_priority, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        queue_priority, review_feedback_category, review_feedback_reason,
+        last_reviewed_at, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       RETURNING *
     `).get(
       input.title.trim(),
@@ -491,6 +503,9 @@ export class ContentOpsStore {
       normalizeScore(input.ideaScore ?? score?.score),
       normalizeOptionalText(input.scoreReason ?? score?.reason),
       normalizeInteger(input.queuePriority ?? input.ideaScore ?? score?.score),
+      normalizeOptionalText(input.reviewFeedbackCategory),
+      normalizeOptionalText(input.reviewFeedbackReason),
+      normalizeOptionalText(input.lastReviewedAt),
       now,
       now,
     ) as Record<string, unknown>;
@@ -509,6 +524,14 @@ export class ContentOpsStore {
     if (filters.status) {
       whereClauses.push("status = ?");
       params.push(filters.status);
+    }
+    if (filters.channelKey?.trim()) {
+      whereClauses.push("channel_key = ?");
+      params.push(filters.channelKey.trim());
+    }
+    if (filters.seriesKey?.trim()) {
+      whereClauses.push("series_key = ?");
+      params.push(filters.seriesKey.trim());
     }
     if (filters.search?.trim()) {
       whereClauses.push("(title LIKE ? OR pillar LIKE ? OR notes LIKE ? OR audience LIKE ? OR channel_key LIKE ? OR series_key LIKE ?)");
@@ -588,6 +611,9 @@ export class ContentOpsStore {
     patch("idea_score", normalizeScore(input.ideaScore ?? recomputedScore?.score));
     patch("score_reason", normalizeOptionalText(input.scoreReason ?? recomputedScore?.reason));
     patch("queue_priority", normalizeInteger(input.queuePriority ?? input.ideaScore ?? recomputedScore?.score));
+    patch("review_feedback_category", normalizeOptionalText(input.reviewFeedbackCategory));
+    patch("review_feedback_reason", normalizeOptionalText(input.reviewFeedbackReason));
+    patch("last_reviewed_at", normalizeOptionalText(input.lastReviewedAt));
 
     if (!assignments.length) {
       throw new Error("No content fields were provided for update.");

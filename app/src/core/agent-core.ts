@@ -1218,6 +1218,10 @@ function isContentOverviewPrompt(prompt: string): boolean {
   return [
     "calendario editorial",
     "calendário editorial",
+    "fila editorial",
+    "queue editorial",
+    "fila de conteudo",
+    "fila de conteúdo",
     "plano de conteudo",
     "plano de conteúdo",
     "conteudo da semana",
@@ -1226,6 +1230,56 @@ function isContentOverviewPrompt(prompt: string): boolean {
     "meus conteúdos",
     "itens de conteudo",
     "itens de conteúdo",
+  ].some((token) => normalized.includes(token));
+}
+
+function isContentChannelsPrompt(prompt: string): boolean {
+  const normalized = normalizeEmailAnalysisText(prompt);
+  return [
+    "canais editoriais",
+    "canais de conteudo",
+    "canais de conteúdo",
+    "meus canais de conteudo",
+    "meus canais de conteúdo",
+    "canais do riqueza despertada",
+    "canal riqueza despertada",
+  ].some((token) => normalized.includes(token));
+}
+
+function isContentSeriesPrompt(prompt: string): boolean {
+  const normalized = normalizeEmailAnalysisText(prompt);
+  return [
+    "series editoriais",
+    "séries editoriais",
+    "series de conteudo",
+    "séries de conteúdo",
+    "series do canal",
+    "séries do canal",
+    "series do riqueza despertada",
+    "séries do riqueza despertada",
+  ].some((token) => normalized.includes(token));
+}
+
+function isContentFormatLibraryPrompt(prompt: string): boolean {
+  const normalized = normalizeEmailAnalysisText(prompt);
+  return [
+    "formatos de conteudo",
+    "formatos de conteúdo",
+    "biblioteca de formatos",
+    "templates de formato",
+    "modelos de formato",
+  ].some((token) => normalized.includes(token));
+}
+
+function isContentHookLibraryPrompt(prompt: string): boolean {
+  const normalized = normalizeEmailAnalysisText(prompt);
+  return [
+    "biblioteca de hooks",
+    "templates de hooks",
+    "hooks de conteudo",
+    "hooks de conteúdo",
+    "ganchos de conteudo",
+    "ganchos de conteúdo",
   ].some((token) => normalized.includes(token));
 }
 
@@ -1377,6 +1431,25 @@ function extractContentPlatform(prompt: string): string | undefined {
   const normalized = normalizeEmailAnalysisText(prompt);
   const tokens = ["instagram", "tiktok", "youtube", "shorts", "reels", "linkedin", "blog", "email", "telegram"];
   return tokens.find((token) => normalized.includes(token));
+}
+
+function extractContentChannelKey(prompt: string): string | undefined {
+  const normalized = normalizeEmailAnalysisText(prompt);
+  if (normalized.includes("riqueza_despertada_youtube")) {
+    return "riqueza_despertada_youtube";
+  }
+  if (normalized.includes("riqueza_despertada_tiktok")) {
+    return "riqueza_despertada_tiktok";
+  }
+  if (normalized.includes("riqueza despertada")) {
+    if (normalized.includes("tiktok")) {
+      return "riqueza_despertada_tiktok";
+    }
+    if (normalized.includes("youtube") || normalized.includes("shorts")) {
+      return "riqueza_despertada_youtube";
+    }
+  }
+  return undefined;
 }
 
 function extractProjectRoot(prompt: string): ReadableRootKey {
@@ -4255,6 +4328,12 @@ function buildContentOverviewReply(items: Array<{
   status: string;
   targetDate: string | null;
   pillar: string | null;
+  channelKey?: string | null;
+  seriesKey?: string | null;
+  ideaScore?: number | null;
+  queuePriority?: number | null;
+  reviewFeedbackCategory?: string | null;
+  reviewFeedbackReason?: string | null;
 }>): string {
   if (!items.length) {
     return "Nao ha itens de conteudo salvos para os filtros informados.";
@@ -4263,7 +4342,97 @@ function buildContentOverviewReply(items: Array<{
   return [
     `Conteudo encontrado: ${items.length} item(ns).`,
     ...items.map((item) =>
-      `- #${item.id} | ${item.platform} | ${item.format} | ${item.status} | ${item.title}${item.targetDate ? ` | data: ${item.targetDate}` : ""}${item.pillar ? ` | pilar: ${item.pillar}` : ""}`,
+      [
+        `- #${item.id}`,
+        item.channelKey ? `canal: ${item.channelKey}` : item.platform,
+        item.format,
+        item.status,
+        item.title,
+        item.seriesKey ? `serie: ${item.seriesKey}` : undefined,
+        item.targetDate ? `data: ${item.targetDate}` : undefined,
+        item.pillar ? `pilar: ${item.pillar}` : undefined,
+        item.ideaScore != null ? `score: ${item.ideaScore}` : undefined,
+        item.queuePriority != null ? `prioridade: ${item.queuePriority}` : undefined,
+        item.reviewFeedbackCategory ? `feedback: ${item.reviewFeedbackCategory}` : undefined,
+        item.reviewFeedbackReason ? `motivo: ${truncateBriefText(item.reviewFeedbackReason, 56)}` : undefined,
+      ].filter(Boolean).join(" | "),
+    ),
+  ].join("\n");
+}
+
+function buildContentChannelsReply(channels: Array<{
+  key: string;
+  name: string;
+  platform: string;
+  status: string;
+  frequencyPerWeek: number | null;
+  primaryGoal: string | null;
+}>): string {
+  if (!channels.length) {
+    return "Nao encontrei canais editoriais configurados.";
+  }
+
+  return [
+    `Canais editoriais: ${channels.length}.`,
+    ...channels.map((channel) =>
+      `- ${channel.name} | key: ${channel.key} | plataforma: ${channel.platform} | status: ${channel.status}${channel.frequencyPerWeek ? ` | freq: ${channel.frequencyPerWeek}/semana` : ""}${channel.primaryGoal ? ` | objetivo: ${channel.primaryGoal}` : ""}`,
+    ),
+  ].join("\n");
+}
+
+function buildContentSeriesReply(series: Array<{
+  key: string;
+  channelKey: string;
+  title: string;
+  cadence: string | null;
+  status: string;
+  premise: string | null;
+}>): string {
+  if (!series.length) {
+    return "Nao encontrei series editoriais para os filtros atuais.";
+  }
+
+  return [
+    `Series editoriais: ${series.length}.`,
+    ...series.map((item) =>
+      `- ${item.title} | key: ${item.key} | canal: ${item.channelKey} | status: ${item.status}${item.cadence ? ` | cadencia: ${item.cadence}` : ""}${item.premise ? ` | premissa: ${truncateBriefText(item.premise, 72)}` : ""}`,
+    ),
+  ].join("\n");
+}
+
+function buildContentFormatsReply(templates: Array<{
+  key: string;
+  label: string;
+  active: boolean;
+  structure: string;
+  description: string | null;
+}>): string {
+  if (!templates.length) {
+    return "Nao encontrei formatos editoriais configurados.";
+  }
+
+  return [
+    `Formatos editoriais: ${templates.length}.`,
+    ...templates.map((template) =>
+      `- ${template.label} | key: ${template.key} | ${template.active ? "ativo" : "inativo"} | estrutura: ${truncateBriefText(template.structure, 72)}${template.description ? ` | uso: ${truncateBriefText(template.description, 56)}` : ""}`,
+    ),
+  ].join("\n");
+}
+
+function buildContentHooksReply(hooks: Array<{
+  label: string;
+  category: string | null;
+  effectivenessScore: number | null;
+  template: string;
+}>): string {
+  if (!hooks.length) {
+    return "Nao encontrei hooks salvos na biblioteca editorial.";
+  }
+
+  return [
+    `Hooks salvos: ${hooks.length}.`,
+    ...hooks.map((hook) =>
+      `- ${hook.label}${hook.category ? ` | categoria: ${hook.category}` : ""}${hook.effectivenessScore != null ? ` | score: ${hook.effectivenessScore}` : ""} | template: ${truncateBriefText(hook.template, 84)}`,
     ),
   ].join("\n");
 }
@@ -4816,6 +4985,42 @@ export class AgentCore {
     );
     if (directSafeExecResult) {
       return directSafeExecResult;
+    }
+    const directContentChannelsResult = await this.tryRunDirectContentChannels(
+      activeUserPrompt,
+      requestId,
+      requestLogger,
+      orchestration,
+    );
+    if (directContentChannelsResult) {
+      return directContentChannelsResult;
+    }
+    const directContentSeriesResult = await this.tryRunDirectContentSeries(
+      activeUserPrompt,
+      requestId,
+      requestLogger,
+      orchestration,
+    );
+    if (directContentSeriesResult) {
+      return directContentSeriesResult;
+    }
+    const directContentFormatLibraryResult = await this.tryRunDirectContentFormatLibrary(
+      activeUserPrompt,
+      requestId,
+      requestLogger,
+      orchestration,
+    );
+    if (directContentFormatLibraryResult) {
+      return directContentFormatLibraryResult;
+    }
+    const directContentHookLibraryResult = await this.tryRunDirectContentHookLibrary(
+      activeUserPrompt,
+      requestId,
+      requestLogger,
+      orchestration,
+    );
+    if (directContentHookLibraryResult) {
+      return directContentHookLibraryResult;
     }
     const directContentOverviewResult = await this.tryRunDirectContentOverview(
       activeUserPrompt,
@@ -7708,13 +7913,16 @@ export class AgentCore {
       | "email"
       | "telegram"
       | undefined;
+    const channelKey = extractContentChannelKey(userPrompt);
     requestLogger.info("Using direct content overview route", {
       limit,
       platform,
+      channelKey,
     });
 
     const items = this.contentOps.listItems({
       platform,
+      channelKey,
       limit,
     });
 
@@ -7729,6 +7937,172 @@ export class AgentCore {
             {
               total: items.length,
               platform,
+              channelKey,
+              limit,
+            },
+            null,
+            2,
+          ),
+        },
+      ],
+    };
+  }
+
+  private async tryRunDirectContentChannels(
+    userPrompt: string,
+    requestId: string,
+    requestLogger: Logger,
+    orchestration: OrchestrationContext,
+  ): Promise<AgentRunResult | null> {
+    if (!isContentChannelsPrompt(userPrompt)) {
+      return null;
+    }
+
+    const limit = extractPromptLimit(userPrompt, 10, 30);
+    const platform = extractContentPlatform(userPrompt);
+    requestLogger.info("Using direct content channels route", {
+      limit,
+      platform,
+    });
+
+    const channels = this.contentOps.listChannels({
+      platform,
+      limit,
+    });
+
+    return {
+      requestId,
+      reply: buildContentChannelsReply(channels),
+      messages: buildBaseMessages(userPrompt, orchestration),
+      toolExecutions: [
+        {
+          toolName: "list_content_channels",
+          resultPreview: JSON.stringify(
+            {
+              total: channels.length,
+              platform,
+              limit,
+            },
+            null,
+            2,
+          ),
+        },
+      ],
+    };
+  }
+
+  private async tryRunDirectContentSeries(
+    userPrompt: string,
+    requestId: string,
+    requestLogger: Logger,
+    orchestration: OrchestrationContext,
+  ): Promise<AgentRunResult | null> {
+    if (!isContentSeriesPrompt(userPrompt)) {
+      return null;
+    }
+
+    const limit = extractPromptLimit(userPrompt, 10, 30);
+    const channelKey = extractContentChannelKey(userPrompt);
+    requestLogger.info("Using direct content series route", {
+      limit,
+      channelKey,
+    });
+
+    const series = this.contentOps.listSeries({
+      channelKey,
+      limit,
+    });
+
+    return {
+      requestId,
+      reply: buildContentSeriesReply(series),
+      messages: buildBaseMessages(userPrompt, orchestration),
+      toolExecutions: [
+        {
+          toolName: "list_content_series",
+          resultPreview: JSON.stringify(
+            {
+              total: series.length,
+              channelKey,
+              limit,
+            },
+            null,
+            2,
+          ),
+        },
+      ],
+    };
+  }
+
+  private async tryRunDirectContentFormatLibrary(
+    userPrompt: string,
+    requestId: string,
+    requestLogger: Logger,
+    orchestration: OrchestrationContext,
+  ): Promise<AgentRunResult | null> {
+    if (!isContentFormatLibraryPrompt(userPrompt)) {
+      return null;
+    }
+
+    const limit = extractPromptLimit(userPrompt, 10, 30);
+    requestLogger.info("Using direct content format library route", {
+      limit,
+    });
+
+    const templates = this.contentOps.listFormatTemplates({
+      activeOnly: true,
+      limit,
+    });
+
+    return {
+      requestId,
+      reply: buildContentFormatsReply(templates),
+      messages: buildBaseMessages(userPrompt, orchestration),
+      toolExecutions: [
+        {
+          toolName: "list_content_format_templates",
+          resultPreview: JSON.stringify(
+            {
+              total: templates.length,
+              limit,
+            },
+            null,
+            2,
+          ),
+        },
+      ],
+    };
+  }
+
+  private async tryRunDirectContentHookLibrary(
+    userPrompt: string,
+    requestId: string,
+    requestLogger: Logger,
+    orchestration: OrchestrationContext,
+  ): Promise<AgentRunResult | null> {
+    if (!isContentHookLibraryPrompt(userPrompt)) {
+      return null;
+    }
+
+    const limit = extractPromptLimit(userPrompt, 10, 30);
+    requestLogger.info("Using direct content hook library route", {
+      limit,
+    });
+
+    const hooks = this.contentOps.listHookTemplates({
+      limit,
+    });
+
+    return {
+      requestId,
+      reply: buildContentHooksReply(hooks),
+      messages: buildBaseMessages(userPrompt, orchestration),
+      toolExecutions: [
+        {
+          toolName: "list_content_hook_templates",
+          resultPreview: JSON.stringify(
+            {
+              total: hooks.length,
               limit,
             },
             null,

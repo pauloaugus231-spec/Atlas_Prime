@@ -171,6 +171,9 @@ export interface CreateContentItemInput {
   ideaScore?: number;
   scoreReason?: string;
   queuePriority?: number;
+  reviewFeedbackCategory?: string;
+  reviewFeedbackReason?: string;
+  lastReviewedAt?: string;
 }
 
 export interface UpdateContentItemInput {
@@ -192,11 +195,16 @@ export interface UpdateContentItemInput {
   ideaScore?: number | null;
   scoreReason?: string | null;
   queuePriority?: number | null;
+  reviewFeedbackCategory?: string | null;
+  reviewFeedbackReason?: string | null;
+  lastReviewedAt?: string | null;
 }
 
 export interface ListContentItemsFilters {
   platform?: (typeof CONTENT_PLATFORMS)[number];
   status?: (typeof CONTENT_STATUSES)[number];
+  channelKey?: string;
+  seriesKey?: string;
   search?: string;
   limit?: number;
 }
@@ -220,6 +228,9 @@ export interface ContentItemRecord {
   ideaScore: number | null;
   scoreReason: string | null;
   queuePriority: number | null;
+  reviewFeedbackCategory: string | null;
+  reviewFeedbackReason: string | null;
+  lastReviewedAt: string | null;
   createdAt: string;
   updatedAt: string;
 }
