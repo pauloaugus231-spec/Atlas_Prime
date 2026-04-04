@@ -1504,6 +1504,26 @@ function extractContentItemId(prompt: string): number | undefined {
   return undefined;
 }
 
+function extractContentQueueOrdinal(prompt: string): number | undefined {
+  const normalized = normalizeEmailAnalysisText(prompt);
+  if (normalized.includes("primeiro item") || normalized.includes("primeira pauta")) {
+    return 1;
+  }
+  if (normalized.includes("segundo item") || normalized.includes("segunda pauta")) {
+    return 2;
+  }
+  if (normalized.includes("terceiro item") || normalized.includes("terceira pauta")) {
+    return 3;
+  }
+  if (normalized.includes("quarto item") || normalized.includes("quarta pauta")) {
+    return 4;
+  }
+  if (normalized.includes("quinto item") || normalized.includes("quinta pauta")) {
+    return 5;
+  }
+  return undefined;
+}
+
 function extractContentReviewReason(prompt: string): string | undefined {
   const reasonMatch = prompt.match(/(?:porque|motivo|raz[aã]o)\s+(.+)$/i);
   return reasonMatch?.[1]?.trim();
@@ -4568,6 +4588,27 @@ function buildContentReviewReply(input: {
     `- Motivo: ${input.item.reviewFeedbackReason ?? "sem motivo registrado"}`,
     `- Revisado em: ${input.item.lastReviewedAt ?? "agora"}`,
   ].join("\n");
+}
+
+function buildContentReviewNotFoundReply(input: {
+  requestedId: number;
+  channelKey?: string;
+  queue: Array<{ id: number; title: string }>;
+}): string {
+  const lines = [
+    `Nao encontrei o item editorial #${input.requestedId}.`,
+  ];
+  if (input.channelKey) {
+    lines.push(`- Canal considerado: ${input.channelKey}`);
+  }
+  if (input.queue.length > 0) {
+    lines.push("- Itens atuais da fila:");
+    for (const item of input.queue.slice(0, 5)) {
+      lines.push(`  - #${item.id} | ${truncateBriefText(item.title, 64)}`);
+    }
+    lines.push("- Você também pode usar posição ordinal, por exemplo: `aprove o primeiro item`.");
+  }
+  return lines.join("\n");
 }
 
 function buildCaseNotesReply(notes: Array<{
@@ -8309,11 +8350,12 @@ export class AgentCore {
       return null;
     }
 
-    const itemId = extractContentItemId(userPrompt);
-    if (!itemId) {
+    const requestedItemId = extractContentItemId(userPrompt);
+    const requestedOrdinal = extractContentQueueOrdinal(userPrompt);
+    if (!requestedItemId && !requestedOrdinal) {
       return {
         requestId,
-        reply: "Diga qual item editorial devo revisar, por exemplo: `aprove o item #12`.",
+        reply: "Diga qual item editorial devo revisar, por exemplo: `aprove o item #12` ou `aprove o primeiro item`.",
         messages: buildBaseMessages(userPrompt, orchestration),
         toolExecutions: [],
       };
@@ -8323,14 +8365,54 @@ export class AgentCore {
     const action: "approved" | "rejected" = includesAny(normalized, ["reprovar", "reprove"]) ? "rejected" : "approved";
     const reason = extractContentReviewReason(userPrompt);
     const now = new Date().toISOString();
+    const channelKey = extractContentChannelKey(userPrompt) ?? inferDefaultContentChannelKey(userPrompt);
+    const queueItems = this.contentOps.listItems({
+      channelKey,
+      limit: 20,
+    });
+    let resolvedItemId = requestedItemId;
+    if (requestedOrdinal && requestedOrdinal >= 1 && requestedOrdinal <= queueItems.length) {
+      resolvedItemId = queueItems[requestedOrdinal - 1]?.id;
+    }
+    const directItem = requestedItemId ? this.contentOps.getItemById(requestedItemId) : null;
+    if (!directItem && !resolvedItemId) {
+      return {
+        requestId,
+        reply: buildContentReviewNotFoundReply({
+          requestedId: requestedItemId ?? requestedOrdinal ?? 0,
+          channelKey,
+          queue: queueItems.map((item) => ({ id: item.id, title: item.title })),
+        }),
+        messages: buildBaseMessages(userPrompt, orchestration),
+        toolExecutions: [],
+      };
+    }
+    if (directItem) {
+      resolvedItemId = directItem.id;
+    }
+
+    if (!resolvedItemId) {
+      return {
+        requestId,
+        reply: buildContentReviewNotFoundReply({
+          requestedId: requestedItemId ?? requestedOrdinal ?? 0,
+          channelKey,
+          queue: queueItems.map((item) => ({ id: item.id, title: item.title })),
+        }),
+        messages: buildBaseMessages(userPrompt, orchestration),
+        toolExecutions: [],
+      };
+    }
 
     requestLogger.info("Using direct content review route", {
-      itemId,
+      requestedItemId,
+      resolvedItemId,
+      requestedOrdinal,
       action,
     });
 
     const item = this.contentOps.updateItem({
-      id: itemId,
+      id: resolvedItemId,
       status: action === "approved" ? "draft" : "archived",
       reviewFeedbackCategory: action === "rejected" ? classifyContentReviewFeedback(reason) ?? "reprovado_manual" : null,
       reviewFeedbackReason: action === "rejected" ? reason ?? "reprovado sem motivo detalhado" : null,

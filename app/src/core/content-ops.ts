@@ -513,6 +513,11 @@ export class ContentOpsStore {
     return mapContentItem(row);
   }
 
+  getItemById(id: number): ContentItemRecord | null {
+    const row = this.db.prepare(`SELECT * FROM content_items WHERE id = ? LIMIT 1`).get(id) as Record<string, unknown> | undefined;
+    return row ? mapContentItem(row) : null;
+  }
+
   listItems(filters: ListContentItemsFilters = {}): ContentItemRecord[] {
     const whereClauses: string[] = [];
     const params: SqlValue[] = [];
