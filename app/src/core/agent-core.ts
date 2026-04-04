@@ -6876,22 +6876,21 @@ export class AgentCore {
       text: [activeUserPrompt, fullPrompt].join("\n"),
     });
     const isScopedAccountQuery = normalizedQuery === route.accountAlias || normalizedQuery === normalizeEmailAnalysisText(route.instanceName ?? "");
-    const messages = isScopedAccountQuery && route.instanceName
-      ? this.whatsappMessages.listRecentByInstance(route.instanceName, 8)
-      : this.whatsappMessages.searchRecent(query, 8);
-    if (isScopedAccountQuery && route.instanceName && messages.length === 0 && this.config.whatsapp.enabled) {
+    if (isScopedAccountQuery && route.instanceName && this.config.whatsapp.enabled) {
       try {
         const whatsapp = new EvolutionApiClient(
           this.config.whatsapp,
           this.logger.child({ scope: "whatsapp-evolution" }),
         );
         const chats = await whatsapp.findChats(route.instanceName, 8);
-        return {
-          requestId,
-          reply: buildWhatsAppScopedRecentChatsReply(route.accountAlias, chats),
-          messages: buildBaseMessages(activeUserPrompt, orchestration),
-          toolExecutions: [],
-        };
+        if (chats.length > 0) {
+          return {
+            requestId,
+            reply: buildWhatsAppScopedRecentChatsReply(route.accountAlias, chats),
+            messages: buildBaseMessages(activeUserPrompt, orchestration),
+            toolExecutions: [],
+          };
+        }
       } catch (error) {
         this.logger.warn("WhatsApp recent chat fallback failed", {
           account: route.accountAlias,
@@ -6900,6 +6899,9 @@ export class AgentCore {
         });
       }
     }
+    const messages = isScopedAccountQuery && route.instanceName
+      ? this.whatsappMessages.listRecentByInstance(route.instanceName, 8)
+      : this.whatsappMessages.searchRecent(query, 8);
     return {
       requestId,
       reply: isScopedAccountQuery && route.instanceName
