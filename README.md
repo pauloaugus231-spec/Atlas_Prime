@@ -226,7 +226,7 @@ O repositorio ja inclui um workflow de deploy automatico da branch `main` para E
 - script remoto: [deploy-ec2.sh](/Users/user/Documents/agente_ai/scripts/deploy-ec2.sh)
 - guia rapido: [aws-ec2-autodeploy.md](/Users/user/Documents/agente_ai/docs/aws-ec2-autodeploy.md)
 
-Esse fluxo exige secrets no GitHub Actions antes de entrar em operacao.
+Esse fluxo usa um `self-hosted runner` na propria EC2 e faz deploy do `atlas-core` a cada push na `main`.
 
 Se alterar `.env`, recrie o container:
 

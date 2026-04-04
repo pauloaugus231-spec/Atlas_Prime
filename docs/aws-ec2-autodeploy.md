@@ -2,54 +2,30 @@
 
 O fluxo de producao atual faz deploy do `atlas-core` na EC2 sempre que houver push na branch `main`.
 
-Se os secrets obrigatorios ainda nao estiverem cadastrados, o workflow falha na etapa de validacao e nao tenta publicar nada.
+Ele roda em um `self-hosted runner` chamado `atlas-ec2`, instalado na propria instancia.
 
 ## O que o workflow faz
 
-1. faz checkout do repositorio no GitHub Actions
-2. abre conexao SSH com a EC2
+1. faz checkout do repositorio no runner local da EC2
+2. valida `/srv/atlas/app/.env.production`
 3. sincroniza os arquivos do repositorio para `/srv/atlas/app`
 4. preserva `.env.production` e o estado local da instancia
 5. executa `scripts/deploy-ec2.sh`
 6. aguarda o container `atlas-core` ficar `healthy`
 
-## Secrets necessarios no GitHub
+## Secrets no GitHub
 
-Cadastre estes secrets em:
+Para o fluxo atual por self-hosted runner, o workflow de deploy **nao depende de secrets de SSH**.
 
-- `Settings -> Secrets and variables -> Actions`
-
-Obrigatorios:
+Se voce ja criou secrets como:
 
 - `AWS_EC2_HOST`
 - `AWS_EC2_SSH_KEY`
+- `AWS_EC2_PORT`
+- `AWS_EC2_USER`
+- `AWS_EC2_DEPLOY_PATH`
 
-Opcionais:
-
-- `AWS_EC2_PORT` (default: `22`)
-- `AWS_EC2_USER` (default: `ubuntu`)
-- `AWS_EC2_DEPLOY_PATH` (default: `/srv/atlas/app`)
-
-## Valores para o ambiente atual
-
-Para a instancia atual:
-
-- `AWS_EC2_HOST`: IP publico da EC2
-- `AWS_EC2_USER`: `ubuntu`
-- `AWS_EC2_DEPLOY_PATH`: `/srv/atlas/app`
-- `AWS_EC2_PORT`: `22`
-
-## Conteudo do secret `AWS_EC2_SSH_KEY`
-
-Cole o conteudo completo da chave privada usada para acessar a EC2.
-
-Exemplo de formato:
-
-```text
------BEGIN OPENSSH PRIVATE KEY-----
-...
------END OPENSSH PRIVATE KEY-----
-```
+eles podem ficar cadastrados por enquanto, mas **nao sao mais necessarios** para este deploy.
 
 ## O que nao e sincronizado
 
@@ -67,7 +43,11 @@ O workflow exclui do `rsync`:
 
 Isso evita sobrescrever segredos, build local e estado operacional.
 
-## Ajustes no servidor
+## Ajustes necessarios no servidor
+
+A EC2 precisa manter um runner registrado para o repositorio com a label:
+
+- `atlas-ec2`
 
 O servidor precisa manter estes arquivos/diretorios fora do Git:
 
@@ -88,5 +68,4 @@ Se o container nao ficar `healthy` dentro do timeout:
 Depois de validar 2 ou 3 deploys automaticos com sucesso, vale adicionar:
 
 - branch de homologacao
-- deploy manual para producao via `workflow_dispatch`
 - notificacao no Telegram em caso de falha
