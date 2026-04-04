@@ -89,9 +89,7 @@ services:
       - evolution_redis_data:/data
 
   evolution-api:
-    build:
-      context: ${EVOLUTION_BUILD_CONTEXT:-/srv/atlas/vendor/evolution-api}
-      dockerfile: Dockerfile
+    image: ${EVOLUTION_IMAGE:-evoapicloud/evolution-api:v2.3.7}
     container_name: atlas-evolution-api
     restart: unless-stopped
     depends_on:
