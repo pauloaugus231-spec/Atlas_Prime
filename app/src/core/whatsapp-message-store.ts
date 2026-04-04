@@ -149,6 +149,24 @@ export class WhatsAppMessageStore {
     return rows.map((row) => mapRecord(row));
   }
 
+  listRecentByInstance(instanceName: string, limit = 10): WhatsAppMessageRecord[] {
+    const safeLimit = Math.max(1, Math.min(50, Math.floor(limit)));
+    const normalizedInstance = normalizeText(instanceName);
+    if (!normalizedInstance) {
+      return [];
+    }
+
+    const rows = this.db.prepare(`
+      SELECT *
+      FROM whatsapp_messages
+      WHERE instance_name = ?
+      ORDER BY created_at DESC, id DESC
+      LIMIT ?
+    `).all(normalizedInstance, safeLimit) as Array<Record<string, unknown>>;
+
+    return rows.map((row) => mapRecord(row));
+  }
+
   searchContacts(query: string, limit = 10): WhatsAppContactRecord[] {
     const safeLimit = Math.max(1, Math.min(50, Math.floor(limit)));
     const normalized = `%${query.trim().toLowerCase()}%`;

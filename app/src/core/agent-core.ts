@@ -68,6 +68,7 @@ import { GoogleWorkspaceAccountsService } from "../integrations/google/google-wo
 import { GoogleWorkspaceService } from "../integrations/google/google-workspace.js";
 import { SupabaseMacCommandQueue } from "../integrations/supabase/mac-command-queue.js";
 import type { OrchestrationContext } from "../types/orchestration.js";
+import type { ApprovalInboxItemRecord } from "../types/approval-inbox.js";
 import type { UserPreferences } from "../types/user-preferences.js";
 import type {
   CreateWorkflowPlanInput,
@@ -591,23 +592,40 @@ function isWhatsAppSendPrompt(prompt: string): boolean {
 
 function isWhatsAppRecentSearchPrompt(prompt: string): boolean {
   const normalized = normalizeEmailAnalysisText(prompt);
-  return includesAny(normalized, ["whatsapp", "zap"]) && includesAny(normalized, [
+  const hasMessageLookupIntent = includesAny(normalized, [
     "mensagem recente",
     "mensagens recentes",
     "ultima mensagem",
     "última mensagem",
     "ultimas mensagens",
     "últimas mensagens",
+    "liste mensagens",
+    "listar mensagens",
+    "mostre mensagens",
+    "ver mensagens",
     "procure no whatsapp",
     "busque no whatsapp",
     "veja no whatsapp",
     "conversa recente",
   ]);
+  const hasWhatsAppContext = includesAny(normalized, ["whatsapp", "zap", "abordagem"]);
+  return hasMessageLookupIntent && hasWhatsAppContext;
 }
 
 function isGenericWhatsAppFollowUp(prompt: string): boolean {
   const normalized = normalizeEmailAnalysisText(prompt);
   return normalized === "procure no whatsapp" || normalized === "busque no whatsapp" || normalized === "veja no whatsapp";
+}
+
+function isWhatsAppPendingApprovalsPrompt(prompt: string): boolean {
+  const normalized = normalizeEmailAnalysisText(prompt);
+  return includesAny(normalized, ["whatsapp", "zap"]) && includesAny(normalized, [
+    "aprovações pendentes",
+    "aprovacoes pendentes",
+    "pendencias",
+    "pendências",
+    "rascunhos pendentes",
+  ]);
 }
 
 function findRecentWhatsAppSendPrompt(fullPrompt: string): string | undefined {
@@ -688,7 +706,7 @@ function extractWhatsAppTargetReference(prompt: string): string | undefined {
     /(?:procure|busque|veja)\s+(?:no\s+)?(?:whatsapp|zap)\s+por\s+(.+?)(?=(?:[?.!,;]|$))/i,
     /(?:whatsapp|zap)\s+(?:de|do|da|para|pro|pra)\s+(.+?)(?=(?:\s+(?:mensagem|texto|dizendo|com a mensagem|com o texto)|\s*[:|]|[?.!,;]|$))/i,
     /(?:mande|manda|envie|enviar|responda|responde)\s+(?:mensagem\s+)?(?:para|pro|pra)\s+(.+?)(?=(?:\s+(?:no\s+)?(?:whatsapp|zap)|\s+(?:mensagem|texto|dizendo|com a mensagem|com o texto)|\s*[:|]|[?.!,;]|$))/i,
-    /(?:mensagem(?:\s+recente)?|conversa(?:\s+recente)?)\s+(?:de|do|da|com)\s+(.+?)(?=(?:[?.!,;]|$))/i,
+    /(?:mensagens?(?:\s+recentes?)?|conversas?(?:\s+recentes?)?)\s+(?:de|do|da|com)\s+(.+?)(?=(?:[?.!,;]|$))/i,
   ];
   for (const pattern of patterns) {
     const match = prompt.match(pattern);
@@ -2963,6 +2981,44 @@ function buildWhatsAppRecentMessagesReply(query: string, messages: WhatsAppMessa
   ].join("\n");
 }
 
+function buildWhatsAppScopedRecentMessagesReply(label: string, messages: WhatsAppMessageRecord[]): string {
+  if (messages.length === 0) {
+    return [
+      `Não encontrei mensagens registradas no WhatsApp da conta ${label}.`,
+      "Envie uma mensagem nova para essa instância e tente novamente.",
+    ].join("\n");
+  }
+
+  const formatter = new Intl.DateTimeFormat("pt-BR", {
+    timeZone: "America/Sao_Paulo",
+    day: "2-digit",
+    month: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+
+  return [
+    `Mensagens recentes do WhatsApp ${label}: ${messages.length}.`,
+    ...messages.map((item) => {
+      const when = formatter.format(new Date(item.createdAt));
+      const who = item.pushName ?? item.number ?? item.remoteJid;
+      const direction = item.direction === "inbound" ? "recebida" : "enviada";
+      return `- ${direction} | ${when} | ${who} | ${item.text}`;
+    }),
+  ].join("\n");
+}
+
+function buildWhatsAppPendingApprovalsReply(items: ApprovalInboxItemRecord[]): string {
+  if (items.length === 0) {
+    return "Não há aprovações pendentes de WhatsApp.";
+  }
+
+  return [
+    `Aprovações pendentes de WhatsApp: ${items.length}.`,
+    ...items.map((item) => `- #${item.id} | ${item.subject}`),
+  ].join("\n");
+}
+
 function shouldAutoCreateGoogleEvent(prompt: string, draft: PendingGoogleEventDraft, writeReady: boolean): boolean {
   if (!writeReady) {
     return false;
@@ -4621,6 +4677,14 @@ export class AgentCore {
     );
     if (directWhatsAppRecentSearchResult) {
       return directWhatsAppRecentSearchResult;
+    }
+    const directWhatsAppPendingApprovalsResult = await this.tryRunDirectWhatsAppPendingApprovals(
+      activeUserPrompt,
+      requestId,
+      orchestration,
+    );
+    if (directWhatsAppPendingApprovalsResult) {
+      return directWhatsAppPendingApprovalsResult;
     }
     const directWeatherResult = await this.tryRunDirectWeather(
       activeUserPrompt,
@@ -6778,10 +6842,40 @@ export class AgentCore {
       };
     }
 
-    const messages = this.whatsappMessages.searchRecent(query, 8);
+    const normalizedQuery = normalizeEmailAnalysisText(query);
+    const route = describeWhatsAppRoute(this.config.whatsapp, {
+      text: [activeUserPrompt, fullPrompt].join("\n"),
+    });
+    const isScopedAccountQuery = normalizedQuery === route.accountAlias || normalizedQuery === normalizeEmailAnalysisText(route.instanceName ?? "");
+    const messages = isScopedAccountQuery && route.instanceName
+      ? this.whatsappMessages.listRecentByInstance(route.instanceName, 8)
+      : this.whatsappMessages.searchRecent(query, 8);
     return {
       requestId,
-      reply: buildWhatsAppRecentMessagesReply(query, messages),
+      reply: isScopedAccountQuery && route.instanceName
+        ? buildWhatsAppScopedRecentMessagesReply(route.accountAlias, messages)
+        : buildWhatsAppRecentMessagesReply(query, messages),
+      messages: buildBaseMessages(activeUserPrompt, orchestration),
+      toolExecutions: [],
+    };
+  }
+
+  private async tryRunDirectWhatsAppPendingApprovals(
+    activeUserPrompt: string,
+    requestId: string,
+    orchestration: OrchestrationContext,
+  ): Promise<AgentRunResult | null> {
+    if (!isWhatsAppPendingApprovalsPrompt(activeUserPrompt)) {
+      return null;
+    }
+
+    const pending = this.approvals
+      .listPendingAll(12)
+      .filter((item) => item.actionKind === "whatsapp_reply");
+
+    return {
+      requestId,
+      reply: buildWhatsAppPendingApprovalsReply(pending),
       messages: buildBaseMessages(activeUserPrompt, orchestration),
       toolExecutions: [],
     };
