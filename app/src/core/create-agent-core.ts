@@ -12,6 +12,7 @@ import { ApprovalInboxStore } from "./approval-inbox.js";
 import { CommunicationRouter, ContactIntelligenceStore } from "./contact-intelligence.js";
 import { ContentOpsStore } from "./content-ops.js";
 import { FileAccessPolicy } from "./file-access-policy.js";
+import { FounderOpsService } from "./founder-ops.js";
 import { GrowthOpsStore } from "./growth-ops.js";
 import { OpenAIClient } from "./openai-client.js";
 import { OllamaClient } from "./ollama-client.js";
@@ -88,6 +89,10 @@ export async function createAgentCore() {
     config.googleMaps,
     logger.child({ scope: "google-maps" }),
   );
+  const founderOps = new FounderOpsService(
+    config.altiva,
+    logger.child({ scope: "founder-ops" }),
+  );
   const pexelsMedia = new PexelsMediaService(
     config.media,
     logger.child({ scope: "pexels-media" }),
@@ -154,6 +159,7 @@ export async function createAgentCore() {
     googleWorkspace,
     googleWorkspaces,
     googleMaps,
+    founderOps,
     pexelsMedia,
     projectOps,
     safeExec,
@@ -183,6 +189,7 @@ export async function createAgentCore() {
     googleWorkspace,
     googleWorkspaces,
     googleMaps,
+    founderOps,
     pexelsMedia,
     growthOps,
     projectOps,

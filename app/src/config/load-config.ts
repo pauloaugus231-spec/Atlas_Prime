@@ -1,6 +1,6 @@
 import path from "node:path";
 import { existsSync, readFileSync } from "node:fs";
-import type { AppConfig, EmailConfig, GoogleMapsConfig, GoogleWorkspaceConfig, MediaConfig } from "../types/config.js";
+import type { AltivaConfig, AppConfig, EmailConfig, GoogleMapsConfig, GoogleWorkspaceConfig, MediaConfig } from "../types/config.js";
 import type { LogLevel } from "../types/logger.js";
 
 const DEFAULT_OLLAMA_BASE_URL = "http://host.docker.internal:11434";
@@ -376,6 +376,26 @@ function buildGoogleMapsConfig(env: NodeJS.ProcessEnv): GoogleMapsConfig {
   };
 }
 
+function buildAltivaConfig(env: NodeJS.ProcessEnv, fallbackTimezone: string): AltivaConfig {
+  const apiBaseUrl = env.ALTIVA_API_BASE_URL?.trim() || undefined;
+  const apiKey = env.ALTIVA_API_KEY?.trim() || undefined;
+  const snapshotPath = env.ALTIVA_SNAPSHOT_PATH?.trim() || undefined;
+  const enabled = parseBoolean(env.ALTIVA_ENABLED, Boolean(apiBaseUrl || snapshotPath));
+
+  return {
+    enabled,
+    companyName: env.ALTIVA_COMPANY_NAME?.trim() || "Altiva",
+    siteUrl: env.ALTIVA_SITE_URL?.trim() || undefined,
+    apiBaseUrl,
+    apiKey,
+    snapshotPath,
+    timezone: env.ALTIVA_TIMEZONE?.trim() || fallbackTimezone,
+    trackedMetrics: parseStringList(env.ALTIVA_TRACKED_METRICS)
+      .map((item) => item.trim())
+      .filter(Boolean),
+  };
+}
+
 function buildMediaConfig(env: NodeJS.ProcessEnv): MediaConfig {
   const pexelsApiKey = env.PEXELS_API_KEY?.trim() || undefined;
   const pexelsEnabled = parseBoolean(env.PEXELS_ENABLED, Boolean(pexelsApiKey));
@@ -561,6 +581,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     google: baseGoogleConfig,
     googleAccounts,
     googleMaps: buildGoogleMapsConfig(env),
+    altiva: buildAltivaConfig(env, env.GOOGLE_DEFAULT_TIMEZONE?.trim() || "America/Sao_Paulo"),
     media: buildMediaConfig(env),
     safeExec: {
       enabled: parseBoolean(env.SAFE_EXEC_ENABLED, true),

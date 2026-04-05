@@ -80,6 +80,17 @@ export interface GoogleMapsConfig {
   defaultLanguageCode: string;
 }
 
+export interface AltivaConfig {
+  enabled: boolean;
+  companyName: string;
+  siteUrl?: string;
+  apiBaseUrl?: string;
+  apiKey?: string;
+  snapshotPath?: string;
+  timezone: string;
+  trackedMetrics: string[];
+}
+
 export interface MediaConfig {
   enabled: boolean;
   providerStrategy: "balanced" | "premium" | "cost";
@@ -154,6 +165,7 @@ export interface AppConfig {
   google: GoogleWorkspaceConfig;
   googleAccounts: Record<string, GoogleWorkspaceConfig>;
   googleMaps: GoogleMapsConfig;
+  altiva: AltivaConfig;
   media: MediaConfig;
   safeExec: SafeExecConfig;
   supabaseMacQueue: SupabaseMacQueueConfig;

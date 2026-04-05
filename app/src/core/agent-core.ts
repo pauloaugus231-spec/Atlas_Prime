@@ -13,6 +13,7 @@ import type {
 import { FileAccessPolicy, type ReadableRootKey } from "./file-access-policy.js";
 import { ContentOpsStore } from "./content-ops.js";
 import { GrowthOpsStore } from "./growth-ops.js";
+import { FounderOpsService, type FounderOpsSnapshot } from "./founder-ops.js";
 import { inferPreferredDomains, resolveKnowledgeAlias } from "./knowledge-aliases.js";
 import { LocalKnowledgeService } from "./local-knowledge.js";
 import {
@@ -3064,6 +3065,7 @@ function buildMorningBriefReply(input: {
   approvals: Array<{ subject: string; actionKind: string; channel: string }>;
   workflows: Array<{ id: number; title: string; status: string; nextAction: string | null }>;
   focus: Array<{ title: string; nextAction: string }>;
+  founderSnapshot: FounderOpsSnapshot;
   nextAction?: string;
 }): string {
   const attentionNow: string[] = [];
@@ -3111,6 +3113,17 @@ function buildMorningBriefReply(input: {
     for (const item of attentionNow.slice(0, 3)) {
       lines.push(`- ${item}`);
     }
+  }
+
+  lines.push("", "Founder Brief:");
+  lines.push(`- ${input.founderSnapshot.executiveLine}`);
+  for (const section of input.founderSnapshot.sections) {
+    lines.push(
+      `- ${section.title}: ${section.summary}${section.requiredInputs.length > 0 ? ` | entradas esperadas: ${section.requiredInputs.join(", ")}` : ""}`,
+    );
+  }
+  if (input.founderSnapshot.trackedMetrics.length > 0) {
+    lines.push(`- Métricas-alvo: ${input.founderSnapshot.trackedMetrics.join(", ")}`);
   }
 
   lines.push("", "Agenda de hoje:");
@@ -7214,6 +7227,7 @@ export class AgentCore {
     private readonly googleWorkspace: GoogleWorkspaceService,
     private readonly googleWorkspaces: GoogleWorkspaceAccountsService,
     private readonly googleMaps: GoogleMapsService,
+    private readonly founderOps: FounderOpsService,
     private readonly pexelsMedia: PexelsMediaService,
     private readonly projectOps: ProjectOpsService,
     private readonly safeExec: SafeExecService,
@@ -8792,6 +8806,7 @@ export class AgentCore {
       nextAction: item.nextAction,
     }));
     const visibleFocus = focus.filter((item) => !isOperationalNoise(item.title));
+    const founderSnapshot = this.founderOps.getDailySnapshot();
 
     const nextAction =
       approvals.length > 0
@@ -8814,6 +8829,7 @@ export class AgentCore {
         approvals,
         workflows: visibleWorkflows,
         focus: visibleFocus,
+        founderSnapshot,
         nextAction,
       }),
       messages: buildBaseMessages(userPrompt, orchestration),
@@ -8827,6 +8843,7 @@ export class AgentCore {
               emails: visibleEmails.length,
               approvals: approvals.length,
               workflows: visibleWorkflows.length,
+              founderSections: founderSnapshot.sections.length,
             },
             null,
             2,
