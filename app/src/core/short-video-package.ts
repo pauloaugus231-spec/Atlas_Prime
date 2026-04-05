@@ -85,17 +85,22 @@ function extractLatestPackageBlock(notes: string): { version: 2 | 3; block: stri
   ];
 
   let selected:
-    | { start: number; version: 2 | 3; endToken: string; token: string }
+    | { start: number; version: 2 | 3; endToken: string }
     | undefined;
 
   for (const candidate of starts) {
-    const start = notes.lastIndexOf(candidate.token);
-    if (start >= 0 && (!selected || start > selected.start)) {
+    const pattern = new RegExp(`(^|\\n)${candidate.token}(?=\\n|$)`, "g");
+    let match: RegExpExecArray | null;
+    let latestStart = -1;
+    while ((match = pattern.exec(notes)) !== null) {
+      latestStart = match.index + (match[1]?.length ?? 0);
+    }
+
+    if (latestStart >= 0 && (!selected || latestStart > selected.start)) {
       selected = {
-        start,
+        start: latestStart,
         version: candidate.version,
         endToken: candidate.endToken,
-        token: candidate.token,
       };
     }
   }
