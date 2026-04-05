@@ -11,6 +11,12 @@ export interface ParsedShortPlatformVariants {
   };
 }
 
+export interface ParsedShortQualityAssessment {
+  score: number;
+  passed: boolean;
+  reasons: string[];
+}
+
 export interface ParsedShortProductionScene {
   order: number;
   subtitleLine: string;
@@ -22,10 +28,22 @@ export interface ParsedShortProductionScene {
 export interface ParsedShortScene {
   order: number;
   durationSeconds: number;
+  narrativeFunction?: string;
+  scenePurpose?: string;
   voiceover: string;
   overlay: string;
+  overlayHighlightWords?: string[];
+  emotionalTrigger?: string;
+  proofType?: string;
   visualDirection: string;
+  visualEnvironment?: string;
+  visualAction?: string;
+  visualCamera?: string;
+  visualPacing?: string;
   assetSearchQuery: string;
+  assetFallbackQuery?: string;
+  forbiddenVisuals?: string[];
+  retentionDriver?: string;
   assetSuggestions: string[];
   selectedAsset?: string;
   production?: ParsedShortProductionScene;
@@ -56,6 +74,7 @@ export interface ParsedShortPackage {
   platformVariants: ParsedShortPlatformVariants;
   script: string;
   description: string;
+  qualityAssessment?: ParsedShortQualityAssessment;
 }
 
 function normalizeLineValue(value: string | undefined): string {
@@ -136,6 +155,60 @@ function parseScenePlanLine(line: string): ParsedShortScene | null {
     assetSearchQuery: normalizeLineValue(match[6]),
     assetSuggestions: [],
   };
+}
+
+function parseSceneMetaLine(line: string): { order: number; patch: Partial<ParsedShortScene> } | null {
+  const prefixMatch = line.match(/^scene_(\d+)\.meta:\s*(.*)$/);
+  if (!prefixMatch) {
+    return null;
+  }
+
+  const order = Number.parseInt(prefixMatch[1] ?? "0", 10);
+  const patch: Partial<ParsedShortScene> = {};
+  const parts = (prefixMatch[2] ?? "")
+    .split(" | ")
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  for (const part of parts) {
+    const parsed = parseKeyValue(part);
+    if (!parsed) {
+      continue;
+    }
+    if (parsed.key === "narrative") {
+      patch.narrativeFunction = parsed.value || undefined;
+    } else if (parsed.key === "purpose") {
+      patch.scenePurpose = parsed.value || undefined;
+    } else if (parsed.key === "highlights") {
+      patch.overlayHighlightWords = parsed.value
+        .split(",")
+        .map((value) => value.trim())
+        .filter(Boolean);
+    } else if (parsed.key === "emotional") {
+      patch.emotionalTrigger = parsed.value || undefined;
+    } else if (parsed.key === "proof") {
+      patch.proofType = parsed.value || undefined;
+    } else if (parsed.key === "env") {
+      patch.visualEnvironment = parsed.value || undefined;
+    } else if (parsed.key === "action") {
+      patch.visualAction = parsed.value || undefined;
+    } else if (parsed.key === "camera") {
+      patch.visualCamera = parsed.value || undefined;
+    } else if (parsed.key === "pacing") {
+      patch.visualPacing = parsed.value || undefined;
+    } else if (parsed.key === "fallback_search") {
+      patch.assetFallbackQuery = parsed.value || undefined;
+    } else if (parsed.key === "forbidden") {
+      patch.forbiddenVisuals = parsed.value
+        .split(",")
+        .map((value) => value.trim())
+        .filter(Boolean);
+    } else if (parsed.key === "retention") {
+      patch.retentionDriver = parsed.value || undefined;
+    }
+  }
+
+  return { order, patch };
 }
 
 function parseProductionSceneLine(line: string): ParsedShortProductionScene | null {
@@ -229,13 +302,16 @@ export function extractLatestShortPackage(notes: string | null | undefined): Par
     | "title_options"
     | "scene_plan"
     | "scene_assets"
+    | "scene_meta"
     | "production_pack"
     | "distribution_plan"
     | "platform_variants"
     | "script"
     | "description"
+    | "quality_gate"
     | null = null;
   let currentAssetSceneOrder: number | null = null;
+  let qualityAssessment: ParsedShortQualityAssessment | undefined;
 
   for (const rawLine of lines) {
     const line = rawLine.trim();
@@ -254,6 +330,10 @@ export function extractLatestShortPackage(notes: string | null | undefined): Par
     if (line === "scene_assets:") {
       activeSection = "scene_assets";
       currentAssetSceneOrder = null;
+      continue;
+    }
+    if (line === "scene_meta:") {
+      activeSection = "scene_meta";
       continue;
     }
     if (line === "production_pack:") {
@@ -276,6 +356,10 @@ export function extractLatestShortPackage(notes: string | null | undefined): Par
     if (line === "description:") {
       activeSection = "description";
       description = "";
+      continue;
+    }
+    if (line === "quality_gate:") {
+      activeSection = "quality_gate";
       continue;
     }
 
@@ -330,6 +414,17 @@ export function extractLatestShortPackage(notes: string | null | undefined): Par
       continue;
     }
 
+    if (activeSection === "scene_meta") {
+      const meta = parseSceneMetaLine(line);
+      if (meta) {
+        const scene = scenes.get(meta.order);
+        if (scene) {
+          Object.assign(scene, meta.patch);
+        }
+      }
+      continue;
+    }
+
     if (activeSection === "production_pack") {
       if (line.startsWith("voice_style:")) {
         voiceStyle = normalizeLineValue(line.slice("voice_style:".length));
@@ -347,6 +442,34 @@ export function extractLatestShortPackage(notes: string | null | undefined): Par
       const productionScene = parseProductionSceneLine(line);
       if (productionScene) {
         productionScenes.set(productionScene.order, productionScene);
+      }
+      continue;
+    }
+
+    if (activeSection === "quality_gate") {
+      const parsed = parseKeyValue(line);
+      if (!parsed) {
+        continue;
+      }
+      if (!qualityAssessment) {
+        qualityAssessment = {
+          score: 0,
+          passed: false,
+          reasons: [],
+        };
+      }
+      if (parsed.key === "score") {
+        const value = Number.parseInt(parsed.value, 10);
+        if (Number.isFinite(value)) {
+          qualityAssessment.score = value;
+        }
+      } else if (parsed.key === "passed") {
+        qualityAssessment.passed = parsed.value.toLowerCase() === "true";
+      } else if (parsed.key === "reasons") {
+        qualityAssessment.reasons = parsed.value
+          .split("|")
+          .map((value) => value.trim())
+          .filter(Boolean);
       }
       continue;
     }
@@ -448,5 +571,6 @@ export function extractLatestShortPackage(notes: string | null | undefined): Par
     platformVariants,
     script: script.trim(),
     description: description.trim(),
+    qualityAssessment,
   };
 }

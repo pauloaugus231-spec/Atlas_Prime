@@ -341,6 +341,11 @@ export class ShortVideoRenderService {
     if (!this.speech) {
       throw new Error("OpenAI TTS não está disponível. Configure OPENAI_API_KEY com provider OpenAI.");
     }
+    if (input.shortPackage.qualityAssessment && !input.shortPackage.qualityAssessment.passed) {
+      throw new Error(
+        `Quality gate bloqueou o render (${input.shortPackage.qualityAssessment.score}/5): ${input.shortPackage.qualityAssessment.reasons.join("; ")}`,
+      );
+    }
 
     const renderRoot = path.join(this.config.paths.workspaceDir, "renders");
     await mkdir(renderRoot, { recursive: true });
@@ -540,12 +545,26 @@ export class ShortVideoRenderService {
         return {
           order: scene.order,
           durationSeconds: scene.durationSeconds,
+          narrativeFunction: scene.narrativeFunction,
+          scenePurpose: scene.scenePurpose,
           subtitle: scene.production?.subtitleLine ?? scene.voiceover,
           overlay: scene.overlay,
+          overlayHighlightWords: scene.overlayHighlightWords ?? [],
+          emotionalTrigger: scene.emotionalTrigger,
+          proofType: scene.proofType,
+          visualEnvironment: scene.visualEnvironment,
+          visualAction: scene.visualAction,
+          visualCamera: scene.visualCamera,
+          visualPacing: scene.visualPacing,
+          assetSearchQuery: scene.assetSearchQuery,
+          assetFallbackQuery: scene.assetFallbackQuery,
+          forbiddenVisuals: scene.forbiddenVisuals ?? [],
+          retentionDriver: scene.retentionDriver,
           sourceUrl: artifact?.sourceUrl,
           clipPath: artifact?.clipPath,
         };
       }),
+      qualityAssessment: input.shortPackage.qualityAssessment,
       outputPath,
     };
     await writeFile(manifestPath, JSON.stringify(manifest, null, 2), "utf8");

@@ -5046,10 +5046,14 @@ function buildContentScriptReply(input: {
   scenes: Array<{
     order: number;
     durationSeconds: number;
+    narrativeFunction?: string;
+    scenePurpose?: string;
     voiceover: string;
     overlay: string;
     visualDirection: string;
     assetSearchQuery: string;
+    assetFallbackQuery?: string;
+    retentionDriver?: string;
   }>;
   platformVariants: {
     youtubeShort: {
@@ -5070,6 +5074,7 @@ function buildContentScriptReply(input: {
   }>;
   productionPack: ShortProductionPack;
   distributionPlan: DistributionPlan;
+  qualityAssessment?: ShortQualityAssessment;
 }): string {
   return [
     `Roteiro pronto para o item #${input.item.id}.`,
@@ -5079,6 +5084,7 @@ function buildContentScriptReply(input: {
     `- Duração alvo: ${input.targetDurationSeconds}s`,
     ...(input.item.hook ? [`- Hook final: ${input.item.hook}`] : []),
     ...(input.item.callToAction ? [`- CTA: ${input.item.callToAction}`] : []),
+    ...(input.qualityAssessment ? [`- Quality gate: ${input.qualityAssessment.score}/5 | ${input.qualityAssessment.passed ? "aprovado" : "bloqueado"}`] : []),
     "",
     "Sugestões de título:",
     ...input.headlineOptions.slice(0, 3).map((title) => `- ${title}`),
@@ -5088,8 +5094,11 @@ function buildContentScriptReply(input: {
     "",
     "Plano por cena:",
     ...input.scenes.map((scene) =>
-      `- Cena ${scene.order} | ${scene.durationSeconds}s | VO: ${scene.voiceover} | overlay: ${scene.overlay} | visual: ${scene.visualDirection} | busca: ${scene.assetSearchQuery}`,
+      `- Cena ${scene.order} | ${scene.durationSeconds}s | ${scene.narrativeFunction ?? "scene"} | VO: ${scene.voiceover} | overlay: ${scene.overlay} | visual: ${scene.visualDirection} | busca: ${scene.assetSearchQuery}${scene.assetFallbackQuery ? ` | fallback: ${scene.assetFallbackQuery}` : ""}${scene.retentionDriver ? ` | retention: ${scene.retentionDriver}` : ""}`,
     ),
+    ...(input.qualityAssessment?.reasons?.length
+      ? ["", "Quality gate:", ...input.qualityAssessment.reasons.map((reason) => `- ${reason}`)]
+      : []),
     "",
     "Assets sugeridos:",
     ...(input.sceneAssets.length > 0
@@ -5131,13 +5140,51 @@ function buildContentScriptReply(input: {
 type ShortScenePlan = {
   order: number;
   durationSeconds: number;
+  narrativeFunction?: SceneNarrativeFunction;
+  scenePurpose?: string;
   voiceover: string;
   overlay: string;
+  overlayHighlightWords?: string[];
+  emotionalTrigger?: SceneEmotionalTrigger;
+  proofType?: SceneProofType;
   visualDirection: string;
+  visualEnvironment?: SceneVisualEnvironment;
+  visualAction?: string;
+  visualCamera?: SceneVisualCamera;
+  visualPacing?: SceneVisualPacing;
   assetSearchQuery: string;
+  assetFallbackQuery?: string;
+  forbiddenVisuals?: string[];
+  retentionDriver?: SceneRetentionDriver;
 };
 
 type ShortStyleMode = "operator" | "motivational" | "emotional" | "contrarian";
+type SceneNarrativeFunction = "hook" | "pain" | "identification" | "mechanism" | "action" | "payoff";
+type SceneEmotionalTrigger = "shock" | "urgency" | "identification" | "curiosity" | "proof" | "relief";
+type SceneProofType = "none" | "action" | "interface" | "social_proof" | "money" | "result";
+type SceneRetentionDriver =
+  | "pattern_interrupt"
+  | "pain_identification"
+  | "specific_mechanism"
+  | "micro_action"
+  | "visual_proof"
+  | "payoff_contrast";
+type SceneVisualEnvironment =
+  | "phone_ui"
+  | "small_business"
+  | "money_desk"
+  | "dashboard"
+  | "street_business"
+  | "abstract_dark"
+  | "workspace";
+type SceneVisualCamera = "macro" | "screen_capture" | "over_shoulder" | "top_down" | "punch_in";
+type SceneVisualPacing = "burst" | "fast" | "steady" | "escalating";
+
+type ShortQualityAssessment = {
+  score: number;
+  passed: boolean;
+  reasons: string[];
+};
 
 type ShortProductionPack = {
   voiceStyle: string;
@@ -5185,6 +5232,7 @@ type ShortFormPackage = {
   titleOptions: string[];
   scenes: ShortScenePlan[];
   platformVariants: ShortPlatformVariants;
+  qualityAssessment?: ShortQualityAssessment;
 };
 
 function normalizeShortComparableText(value: string): string {
@@ -5331,13 +5379,31 @@ function buildSceneEditInstruction(scene: ShortScenePlan, styleMode: ShortStyleM
       : styleMode === "contrarian"
         ? "Bata o contraste visual junto da punchline."
         : "Priorize clareza visual e número na tela.";
+  const pacingInstruction = scene.visualPacing === "burst"
+    ? "Cortes agressivos em 1-2 segundos."
+    : scene.visualPacing === "escalating"
+      ? "Aumente a intensidade visual até o payoff."
+      : scene.visualPacing === "fast"
+        ? "Mantenha troca visual rápida e sem respiro morto."
+        : "Mantenha leitura limpa e movimento constante.";
+  const narrativeInstruction = scene.narrativeFunction === "hook"
+    ? "Abra com pattern interrupt imediato."
+    : scene.narrativeFunction === "pain"
+      ? "Mostre a dor concreta, não conceito abstrato."
+      : scene.narrativeFunction === "identification"
+        ? "Faça o espectador se ver na cena."
+        : scene.narrativeFunction === "mechanism"
+          ? "Explique o mecanismo com UI, números ou prova."
+          : scene.narrativeFunction === "action"
+            ? "Mostre a execução acontecendo."
+            : "Feche com payoff ou prova tangível.";
   if (scene.durationSeconds <= 4) {
-    return `1 corte rápido + zoom leve no texto; segure 2 a 3 frames no punchline. ${accent}`;
+    return `1 corte rápido + zoom leve no texto; segure 2 a 3 frames no punchline. ${narrativeInstruction} ${pacingInstruction} ${accent}`;
   }
   if (scene.durationSeconds <= 8) {
-    return `2 cortes secos; trocar plano no meio da frase e manter texto na zona segura vertical. ${accent}`;
+    return `2 cortes secos; trocar plano no meio da frase e manter texto na zona segura vertical. ${narrativeInstruction} ${pacingInstruction} ${accent}`;
   }
-  return `3 blocos visuais: abertura, reforço e fechamento; manter cortes a cada 2 a 3 segundos. ${accent}`;
+  return `3 blocos visuais: abertura, reforço e fechamento; manter cortes a cada 2 a 3 segundos. ${narrativeInstruction} ${pacingInstruction} ${accent}`;
 }
 
 function inferDistributionHypothesis(item: {
@@ -5511,6 +5577,17 @@ const FORBIDDEN_SHORT_PROMISES = [
   "confira o checklist",
 ];
 
+const GLOBAL_VISUAL_BLACKLIST = [
+  "business meeting",
+  "corporate office",
+  "whiteboard",
+  "presentation",
+  "team discussion",
+  "generic laptop typing",
+  "people pointing screen",
+  "stock office smiling",
+];
+
 const FORBIDDEN_FACELESS_VISUAL_TERMS = [
   "apresentador",
   "rosto",
@@ -5519,6 +5596,12 @@ const FORBIDDEN_FACELESS_VISUAL_TERMS = [
   "camera talking head",
   "talking head",
   "host speaking",
+  "corporate office",
+  "business meeting",
+  "team discussion",
+  "stock office smiling",
+  "presentation",
+  "whiteboard",
 ];
 
 const FORBIDDEN_FACELESS_ASSET_TERMS = [
@@ -5534,13 +5617,21 @@ const FORBIDDEN_FACELESS_ASSET_TERMS = [
   "talking head",
   "person talking",
   "close-up",
+  "business meeting",
+  "corporate office",
+  "team discussion",
+  "presentation",
+  "generic laptop typing",
+  "people pointing screen",
+  "stock office smiling",
+  "whiteboard",
 ];
 
-function clampShortTargetDuration(value: number | undefined, fallback = 42): number {
+function clampShortTargetDuration(value: number | undefined, fallback = 30): number {
   if (typeof value !== "number" || Number.isNaN(value)) {
     return fallback;
   }
-  return Math.max(28, Math.min(55, Math.round(value)));
+  return Math.max(22, Math.min(32, Math.round(value)));
 }
 
 function clampSceneDuration(value: number | undefined, fallback = 8): number {
@@ -5571,10 +5662,26 @@ function normalizeScenePlan(scenes: ShortScenePlan[] | undefined, fallbackScenes
     .map((scene, index) => ({
       order: index + 1,
       durationSeconds: clampSceneDuration(scene.durationSeconds, 8),
+      narrativeFunction: scene.narrativeFunction,
+      scenePurpose: typeof scene.scenePurpose === "string" ? scene.scenePurpose.trim() : undefined,
       voiceover: scene.voiceover.trim(),
       overlay: scene.overlay.trim(),
+      overlayHighlightWords: Array.isArray(scene.overlayHighlightWords)
+        ? scene.overlayHighlightWords.map((value) => value.trim()).filter(Boolean).slice(0, 3)
+        : undefined,
+      emotionalTrigger: scene.emotionalTrigger,
+      proofType: scene.proofType,
       visualDirection: scene.visualDirection.trim(),
+      visualEnvironment: scene.visualEnvironment,
+      visualAction: typeof scene.visualAction === "string" ? scene.visualAction.trim() : undefined,
+      visualCamera: scene.visualCamera,
+      visualPacing: scene.visualPacing,
       assetSearchQuery: scene.assetSearchQuery.trim(),
+      assetFallbackQuery: typeof scene.assetFallbackQuery === "string" ? scene.assetFallbackQuery.trim() : undefined,
+      forbiddenVisuals: Array.isArray(scene.forbiddenVisuals)
+        ? scene.forbiddenVisuals.map((value) => value.trim()).filter(Boolean)
+        : undefined,
+      retentionDriver: scene.retentionDriver,
     }));
 }
 
@@ -5654,7 +5761,7 @@ function compressOverlayText(text: string | undefined, fallback: string): string
     .replace(/\s+/g, " ")
     .trim();
   const words = base.split(/\s+/).filter(Boolean);
-  const compact = words.length > 6 ? words.slice(0, 6).join(" ") : base;
+  const compact = words.length > 4 ? words.slice(0, 4).join(" ") : base;
   return truncateBriefText(compact.toUpperCase(), 48);
 }
 
@@ -5798,12 +5905,12 @@ function refineAssetSearchQuery(
   }
   if (/(whiteboard)/.test(next)) {
     if (profile === "finance") {
-      return "financial planning whiteboard vertical";
+      return "financial planning desk vertical";
     }
     if (profile === "sales") {
-      return "sales funnel whiteboard vertical";
+      return "sales planning desk vertical";
     }
-    return "business whiteboard planning vertical";
+    return "business planning desk vertical";
   }
   if (/(smartphone|mobile app|app ui|hands smartphone|banking app|investment app)/.test(next)) {
     if (profile === "finance") {
@@ -5845,6 +5952,343 @@ function refineAssetSearchQuery(
   return next;
 }
 
+function inferSceneNarrativeFunction(index: number, totalScenes: number, voiceover: string): SceneNarrativeFunction {
+  const normalized = normalizeEmailAnalysisText(voiceover);
+  if (index === 0) {
+    return "hook";
+  }
+  if (index === totalScenes - 1) {
+    return includesAny(normalized, ["comente", "agora", "hoje", "comece", "faca", "faça"]) ? "action" : "payoff";
+  }
+  if (includesAny(normalized, ["nao precisa", "não precisa", "voce tambem", "você também", "igual", "mesmo sem", "sem investimento"])) {
+    return "identification";
+  }
+  if (includesAny(normalized, ["passo", "escolhe", "oferece", "posta", "responde", "organiza", "automatiza", "teste", "mede"])) {
+    return "action";
+  }
+  if (includesAny(normalized, ["resultado", "vira", "ganha", "pagamento", "notificacao", "notificação", "cheio", "lucro"])) {
+    return "payoff";
+  }
+  if (includesAny(normalized, ["erro", "parado", "caro", "perde", "dor", "problema", "nao sabem", "não sabem"])) {
+    return index <= 1 ? "pain" : "identification";
+  }
+  return index <= Math.floor(totalScenes / 2) ? "mechanism" : "action";
+}
+
+function inferSceneEmotionalTrigger(fn: SceneNarrativeFunction): SceneEmotionalTrigger {
+  switch (fn) {
+    case "hook":
+      return "shock";
+    case "pain":
+      return "urgency";
+    case "identification":
+      return "identification";
+    case "mechanism":
+      return "curiosity";
+    case "action":
+      return "proof";
+    case "payoff":
+    default:
+      return "relief";
+  }
+}
+
+function inferSceneProofType(fn: SceneNarrativeFunction, profile: ShortAssetSemanticProfile): SceneProofType {
+  if (fn === "action") {
+    return "action";
+  }
+  if (fn === "payoff") {
+    return profile === "finance" ? "money" : "result";
+  }
+  if (fn === "mechanism") {
+    return "interface";
+  }
+  if (fn === "identification" || fn === "pain") {
+    return "social_proof";
+  }
+  return "none";
+}
+
+function inferSceneRetentionDriver(fn: SceneNarrativeFunction): SceneRetentionDriver {
+  switch (fn) {
+    case "hook":
+      return "pattern_interrupt";
+    case "pain":
+      return "pain_identification";
+    case "identification":
+      return "pain_identification";
+    case "mechanism":
+      return "specific_mechanism";
+    case "action":
+      return "micro_action";
+    case "payoff":
+    default:
+      return "payoff_contrast";
+  }
+}
+
+function buildOverlayHighlightWords(overlay: string, voiceover: string): string[] {
+  const preferred = extractEmphasisWords(`${overlay} ${voiceover}`);
+  return preferred.slice(0, 3);
+}
+
+function normalizeForbiddenVisuals(values: string[] | undefined): string[] {
+  return [...new Set([...(values ?? []), ...GLOBAL_VISUAL_BLACKLIST])]
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+function inferSceneQueryPreset(input: {
+  fn: SceneNarrativeFunction;
+  profile: ShortAssetSemanticProfile;
+}): {
+  primaryQuery: string;
+  fallbackQuery: string;
+  visualEnvironment: SceneVisualEnvironment;
+  visualAction: string;
+  visualCamera: SceneVisualCamera;
+  visualPacing: SceneVisualPacing;
+} {
+  const finance = {
+    hook: { primaryQuery: "bank transfer success screen", fallbackQuery: "payment notification phone", visualEnvironment: "phone_ui", visualAction: "mostrar prova financeira imediata em tela", visualCamera: "punch_in", visualPacing: "burst" },
+    pain: { primaryQuery: "grocery expensive price tag", fallbackQuery: "wallet empty close", visualEnvironment: "money_desk", visualAction: "mostrar custo real e aperto no bolso", visualCamera: "macro", visualPacing: "fast" },
+    identification: { primaryQuery: "bills table stressed", fallbackQuery: "cash counting hands", visualEnvironment: "money_desk", visualAction: "mostrar rotina de contas e pressão financeira", visualCamera: "top_down", visualPacing: "steady" },
+    mechanism: { primaryQuery: "finance analytics dashboard vertical", fallbackQuery: "investment app ui vertical", visualEnvironment: "dashboard", visualAction: "explicar o mecanismo via interface e números", visualCamera: "screen_capture", visualPacing: "steady" },
+    action: { primaryQuery: "mobile banking app ui", fallbackQuery: "typing message phone close", visualEnvironment: "phone_ui", visualAction: "mostrar execução concreta no celular", visualCamera: "over_shoulder", visualPacing: "fast" },
+    payoff: { primaryQuery: "cash counting hands", fallbackQuery: "bank transfer success screen", visualEnvironment: "money_desk", visualAction: "mostrar resultado tangível e específico", visualCamera: "macro", visualPacing: "escalating" },
+  } satisfies Record<SceneNarrativeFunction, {
+    primaryQuery: string;
+    fallbackQuery: string;
+    visualEnvironment: SceneVisualEnvironment;
+    visualAction: string;
+    visualCamera: SceneVisualCamera;
+    visualPacing: SceneVisualPacing;
+  }>;
+
+  const saas = {
+    hook: { primaryQuery: "saas analytics dashboard vertical", fallbackQuery: "pricing page software vertical", visualEnvironment: "dashboard", visualAction: "abrir com gráfico, alerta ou queda visível", visualCamera: "punch_in", visualPacing: "burst" },
+    pain: { primaryQuery: "pricing page software vertical", fallbackQuery: "customer support inbox vertical", visualEnvironment: "dashboard", visualAction: "mostrar erro caro em tela de produto", visualCamera: "screen_capture", visualPacing: "fast" },
+    identification: { primaryQuery: "customer support inbox vertical", fallbackQuery: "saas onboarding ui vertical", visualEnvironment: "workspace", visualAction: "mostrar fricção real de operação ou cliente", visualCamera: "over_shoulder", visualPacing: "steady" },
+    mechanism: { primaryQuery: "saas analytics dashboard vertical", fallbackQuery: "saas onboarding ui vertical", visualEnvironment: "dashboard", visualAction: "explicar mecanismo por métrica ou fluxo", visualCamera: "screen_capture", visualPacing: "steady" },
+    action: { primaryQuery: "saas onboarding ui vertical", fallbackQuery: "typing message phone close", visualEnvironment: "phone_ui", visualAction: "mostrar ajuste concreto, setup ou teste", visualCamera: "over_shoulder", visualPacing: "fast" },
+    payoff: { primaryQuery: "multiple notifications phone", fallbackQuery: "calendar full schedule", visualEnvironment: "phone_ui", visualAction: "mostrar tração, conversão ou demanda entrando", visualCamera: "punch_in", visualPacing: "escalating" },
+  } satisfies Record<SceneNarrativeFunction, {
+    primaryQuery: string;
+    fallbackQuery: string;
+    visualEnvironment: SceneVisualEnvironment;
+    visualAction: string;
+    visualCamera: SceneVisualCamera;
+    visualPacing: SceneVisualPacing;
+  }>;
+
+  const sales = {
+    hook: { primaryQuery: "payment notification phone", fallbackQuery: "whatsapp chat business", visualEnvironment: "phone_ui", visualAction: "mostrar dinheiro ou lead entrando logo no início", visualCamera: "punch_in", visualPacing: "burst" },
+    pain: { primaryQuery: "grocery expensive price tag", fallbackQuery: "small business storefront vertical", visualEnvironment: "street_business", visualAction: "mostrar o custo de ficar parado ou vendendo mal", visualCamera: "macro", visualPacing: "fast" },
+    identification: { primaryQuery: "small business storefront vertical", fallbackQuery: "instagram profile small business", visualEnvironment: "small_business", visualAction: "mostrar a realidade de negócio pequeno e demanda desorganizada", visualCamera: "over_shoulder", visualPacing: "steady" },
+    mechanism: { primaryQuery: "instagram profile small business", fallbackQuery: "whatsapp chat business", visualEnvironment: "phone_ui", visualAction: "mostrar o mecanismo de venda ou aquisição", visualCamera: "screen_capture", visualPacing: "steady" },
+    action: { primaryQuery: "typing message phone close", fallbackQuery: "whatsapp chat business", visualEnvironment: "phone_ui", visualAction: "mostrar mensagem, oferta ou follow-up sendo feito", visualCamera: "over_shoulder", visualPacing: "fast" },
+    payoff: { primaryQuery: "payment notification phone", fallbackQuery: "client message confirmed", visualEnvironment: "phone_ui", visualAction: "mostrar confirmação de cliente ou pagamento", visualCamera: "macro", visualPacing: "escalating" },
+  } satisfies Record<SceneNarrativeFunction, {
+    primaryQuery: string;
+    fallbackQuery: string;
+    visualEnvironment: SceneVisualEnvironment;
+    visualAction: string;
+    visualCamera: SceneVisualCamera;
+    visualPacing: SceneVisualPacing;
+  }>;
+
+  const execution = {
+    hook: { primaryQuery: "typing message phone close", fallbackQuery: "multiple notifications phone", visualEnvironment: "phone_ui", visualAction: "abrir com ação visível em vez de pose", visualCamera: "punch_in", visualPacing: "burst" },
+    pain: { primaryQuery: "calendar full schedule", fallbackQuery: "small business storefront vertical", visualEnvironment: "workspace", visualAction: "mostrar atraso, bagunça ou oportunidade passando", visualCamera: "top_down", visualPacing: "fast" },
+    identification: { primaryQuery: "hands smartphone app", fallbackQuery: "small business storefront vertical", visualEnvironment: "workspace", visualAction: "mostrar alguém comum operando pelo celular", visualCamera: "over_shoulder", visualPacing: "steady" },
+    mechanism: { primaryQuery: "instagram business phone vertical", fallbackQuery: "whatsapp chat business", visualEnvironment: "phone_ui", visualAction: "mostrar o passo a passo em UI", visualCamera: "screen_capture", visualPacing: "steady" },
+    action: { primaryQuery: "typing message phone close", fallbackQuery: "whatsapp chat business", visualEnvironment: "phone_ui", visualAction: "mostrar execução concreta e simples", visualCamera: "over_shoulder", visualPacing: "fast" },
+    payoff: { primaryQuery: "client message confirmed", fallbackQuery: "multiple notifications phone", visualEnvironment: "phone_ui", visualAction: "mostrar sinal concreto de resultado", visualCamera: "macro", visualPacing: "escalating" },
+  } satisfies Record<SceneNarrativeFunction, {
+    primaryQuery: string;
+    fallbackQuery: string;
+    visualEnvironment: SceneVisualEnvironment;
+    visualAction: string;
+    visualCamera: SceneVisualCamera;
+    visualPacing: SceneVisualPacing;
+  }>;
+
+  const business = {
+    hook: { primaryQuery: "startup analytics dashboard vertical", fallbackQuery: "payment notification phone", visualEnvironment: "dashboard", visualAction: "abrir com prova ou contraste imediato", visualCamera: "punch_in", visualPacing: "burst" },
+    pain: { primaryQuery: "wallet empty close", fallbackQuery: "small business storefront vertical", visualEnvironment: "workspace", visualAction: "mostrar dor concreta em vez de escritório genérico", visualCamera: "macro", visualPacing: "fast" },
+    identification: { primaryQuery: "small business storefront vertical", fallbackQuery: "hands smartphone app", visualEnvironment: "small_business", visualAction: "mostrar contexto de vida real e execução", visualCamera: "over_shoulder", visualPacing: "steady" },
+    mechanism: { primaryQuery: "startup analytics dashboard vertical", fallbackQuery: "mobile app interface vertical", visualEnvironment: "dashboard", visualAction: "mostrar mecanismo em interface real", visualCamera: "screen_capture", visualPacing: "steady" },
+    action: { primaryQuery: "typing message phone close", fallbackQuery: "instagram business phone vertical", visualEnvironment: "phone_ui", visualAction: "mostrar o passo que gera movimento", visualCamera: "over_shoulder", visualPacing: "fast" },
+    payoff: { primaryQuery: "payment notification phone", fallbackQuery: "calendar full schedule", visualEnvironment: "phone_ui", visualAction: "mostrar consequência positiva e específica", visualCamera: "macro", visualPacing: "escalating" },
+  } satisfies Record<SceneNarrativeFunction, {
+    primaryQuery: string;
+    fallbackQuery: string;
+    visualEnvironment: SceneVisualEnvironment;
+    visualAction: string;
+    visualCamera: SceneVisualCamera;
+    visualPacing: SceneVisualPacing;
+  }>;
+
+  const library = input.profile === "finance"
+    ? finance
+    : input.profile === "saas"
+      ? saas
+      : input.profile === "sales"
+        ? sales
+        : input.profile === "execution"
+          ? execution
+          : business;
+
+  return library[input.fn];
+}
+
+function enrichShortScenePlanV2(
+  scene: ShortScenePlan,
+  index: number,
+  allScenes: ShortScenePlan[],
+  context: {
+    title: string;
+    pillar?: string | null;
+    hook?: string | null;
+    formatTemplateKey?: string | null;
+    seriesKey?: string | null;
+    notes?: string | null;
+    styleMode: ShortStyleMode;
+  },
+): ShortScenePlan {
+  const fn = scene.narrativeFunction ?? inferSceneNarrativeFunction(index, allScenes.length, scene.voiceover);
+  const profile = inferAssetSemanticProfile({
+    ...context,
+    sceneVoiceover: scene.voiceover,
+    sceneOverlay: scene.overlay,
+  });
+  const preset = inferSceneQueryPreset({ fn, profile });
+  const primaryQuery = refineAssetSearchQuery(scene.assetSearchQuery || preset.primaryQuery, preset.primaryQuery, {
+    ...context,
+    sceneVoiceover: scene.voiceover,
+    sceneOverlay: scene.overlay,
+  });
+  const fallbackQuery = refineAssetSearchQuery(scene.assetFallbackQuery || preset.fallbackQuery, preset.fallbackQuery, {
+    ...context,
+    sceneVoiceover: scene.voiceover,
+    sceneOverlay: scene.overlay,
+  });
+
+  return {
+    ...scene,
+    narrativeFunction: fn,
+    scenePurpose: scene.scenePurpose || preset.visualAction,
+    emotionalTrigger: scene.emotionalTrigger ?? inferSceneEmotionalTrigger(fn),
+    proofType: scene.proofType ?? inferSceneProofType(fn, profile),
+    overlay: compressOverlayText(scene.overlay, fn === "hook" ? "COMECE HOJE" : fn === "pain" ? "ERRO CARO" : fn === "action" ? "FAÇA ISSO" : "RESULTADO REAL"),
+    overlayHighlightWords: buildOverlayHighlightWords(scene.overlay, scene.voiceover),
+    visualEnvironment: scene.visualEnvironment ?? preset.visualEnvironment,
+    visualAction: scene.visualAction ?? preset.visualAction,
+    visualCamera: scene.visualCamera ?? preset.visualCamera,
+    visualPacing: scene.visualPacing ?? preset.visualPacing,
+    visualDirection: normalizeFacelessVisualDirection(
+      scene.visualDirection,
+      `${preset.visualAction}; ambiente ${preset.visualEnvironment}; câmera ${preset.visualCamera}; pacing ${preset.visualPacing}`,
+    ),
+    assetSearchQuery: primaryQuery,
+    assetFallbackQuery: fallbackQuery,
+    forbiddenVisuals: normalizeForbiddenVisuals(scene.forbiddenVisuals),
+    retentionDriver: scene.retentionDriver ?? inferSceneRetentionDriver(fn),
+  };
+}
+
+function assessShortQualityV2(payload: ShortFormPackage): ShortQualityAssessment {
+  let score = 0;
+  const reasons: string[] = [];
+  const scenes = payload.scenes;
+  const normalizedHook = normalizeEmailAnalysisText(payload.hook);
+  const hasStrongHook = normalizedHook.length >= 16 && includesAny(normalizedHook, [
+    "erro",
+    "mentira",
+    "pare",
+    "hoje",
+    "agora",
+    "ninguem",
+    "ninguem",
+    "sem",
+    "ganhando",
+    "dinheiro",
+    "comecar",
+    "comecar",
+    "começar",
+  ]);
+  if (hasStrongHook) {
+    score += 1;
+    reasons.push("hook com tensão imediata");
+  }
+
+  const nonGenericScenes = scenes.filter((scene) => {
+    const query = normalizeEmailAnalysisText(`${scene.assetSearchQuery} ${scene.assetFallbackQuery ?? ""}`);
+    return !includesAny(query, FORBIDDEN_FACELESS_ASSET_TERMS) && !includesAny(query, GLOBAL_VISUAL_BLACKLIST);
+  });
+  if (nonGenericScenes.length >= Math.max(3, Math.ceil(scenes.length * 0.7))) {
+    score += 1;
+    reasons.push("cenas com busca visual específica");
+  }
+
+  const hasProof = scenes.some((scene) => scene.proofType && scene.proofType !== "none");
+  if (hasProof) {
+    score += 1;
+    reasons.push("prova visual presente");
+  }
+
+  const hasAction = scenes.some((scene) => scene.narrativeFunction === "action" || includesAny(normalizeEmailAnalysisText(scene.voiceover), ["passo", "faca", "faça", "comece", "manda", "poste", "responde", "oferece", "automatiza"]));
+  if (hasAction) {
+    score += 1;
+    reasons.push("ação clara para o espectador");
+  }
+
+  const hasContrast = payload.styleMode === "contrarian" || scenes.some((scene) => scene.narrativeFunction === "pain" || scene.narrativeFunction === "payoff");
+  if (hasContrast) {
+    score += 1;
+    reasons.push("contraste narrativo entre dor e payoff");
+  }
+
+  if (score < 4) {
+    reasons.push("abaixo do gate mínimo de retenção");
+  }
+
+  return {
+    score,
+    passed: score >= 4,
+    reasons,
+  };
+}
+
+function applyAtlasV2SceneEngine(
+  payload: ShortFormPackage,
+  context: {
+    title: string;
+    pillar?: string | null;
+    hook?: string | null;
+    formatTemplateKey?: string | null;
+    seriesKey?: string | null;
+    notes?: string | null;
+  },
+): ShortFormPackage {
+  const enrichedScenes = payload.scenes.map((scene, index, allScenes) =>
+    enrichShortScenePlanV2(scene, index, allScenes, {
+      ...context,
+      styleMode: payload.styleMode,
+    }),
+  );
+  const qualityAssessment = assessShortQualityV2({
+    ...payload,
+    scenes: enrichedScenes,
+  });
+
+  return {
+    ...payload,
+    scenes: enrichedScenes,
+    qualityAssessment,
+  };
+}
+
 async function resolveSceneAssets(
   pexelsMedia: PexelsMediaService,
   scenes: ShortScenePlan[],
@@ -5867,20 +6311,27 @@ async function resolveSceneAssets(
   const sceneLimit = Math.min(8, Math.max(1, scenes.length > 0 ? scenes.length : maxScenes));
   for (const scene of scenes.slice(0, sceneLimit)) {
     try {
-      const suggestions = await pexelsMedia.searchVideos(
+      let suggestions = await pexelsMedia.searchVideos(
         scene.assetSearchQuery,
         3,
         scene.durationSeconds,
       );
+      if (suggestions.length === 0 && scene.assetFallbackQuery && scene.assetFallbackQuery !== scene.assetSearchQuery) {
+        suggestions = await pexelsMedia.searchVideos(
+          scene.assetFallbackQuery,
+          3,
+          scene.durationSeconds,
+        );
+      }
       results.push({
         order: scene.order,
-        searchQuery: scene.assetSearchQuery,
+        searchQuery: suggestions.length > 0 ? scene.assetSearchQuery : (scene.assetFallbackQuery ?? scene.assetSearchQuery),
         suggestions,
       });
     } catch {
       results.push({
         order: scene.order,
-        searchQuery: scene.assetSearchQuery,
+        searchQuery: scene.assetFallbackQuery ?? scene.assetSearchQuery,
         suggestions: [],
       });
     }
@@ -5991,7 +6442,7 @@ function buildManualSceneVisualDirection(
 ): string {
   const explicit = fallbackDirections[index]?.trim();
   const normalized = normalizeEmailAnalysisText(voiceover);
-  let contextual = "cortes rápidos com celular, interface social e pequenos negócios";
+  let contextual = "cortes rápidos com celular, interface social, prova em tela e pequenos negócios";
   if (includesAny(normalized, ["sem investimento", "celular"])) {
     contextual = "mãos com celular, interface social, texto grande e fundo escuro";
   } else if (includesAny(normalized, ["instagram", "perfil", "posta"])) {
@@ -6005,7 +6456,7 @@ function buildManualSceneVisualDirection(
   }
 
   if (explicit) {
-    return `${explicit}; ${contextual}`;
+    return normalizeFacelessVisualDirection(`${explicit}; ${contextual}`, contextual);
   }
 
   return contextual;
@@ -6297,7 +6748,7 @@ function validateShortFormPackage(
   }));
   const script = deriveScriptFromScenes(resolvedScenes);
 
-  return {
+  const validated: ShortFormPackage = {
     ...payload,
     styleMode,
     mode: "viral_short",
@@ -6327,6 +6778,8 @@ function validateShortFormPackage(
       },
     },
   };
+
+  return applyAtlasV2SceneEngine(validated, context);
 }
 
 function buildShortFormFallbackPackage(input: {
@@ -6354,43 +6807,51 @@ function buildShortFormFallbackPackage(input: {
   const scenes: ShortScenePlan[] = [
     {
       order: 1,
-      durationSeconds: 7,
+      durationSeconds: 4,
       voiceover: hook,
       overlay: "ERRO QUE CUSTA CARO",
-      visualDirection: "motion text forte + dashboard desfocado + tela de trabalho com corte rápido",
-      assetSearchQuery: "startup dashboard laptop vertical",
+      visualDirection: "motion text forte, contraste imediato e prova em tela sem rosto",
+      assetSearchQuery: "startup analytics dashboard vertical",
     },
     {
       order: 2,
-      durationSeconds: 8,
-      voiceover: `A maioria olha só para ${input.item.pillar ?? "o resultado"} e ignora o mecanismo que gera caixa.`,
+      durationSeconds: 5,
+      voiceover: `A maioria olha só para ${input.item.pillar ?? "o resultado"} e ignora o problema real que está drenando dinheiro.`,
       overlay: "OLHAR SÓ O RESULTADO É ARMADILHA",
-      visualDirection: "b-roll de dashboard, vendas, computador ou rotina de trabalho",
-      assetSearchQuery: "startup whiteboard planning vertical",
+      visualDirection: "dor concreta em tela, preço, conta ou fricção de operação",
+      assetSearchQuery: "wallet empty close",
     },
     {
       order: 3,
-      durationSeconds: 10,
-      voiceover: `A regra prática aqui é simples: ${titleBase.toLowerCase()} precisa aumentar valor percebido sem travar conversão.`,
-      overlay: "REGRA PRÁTICA",
-      visualDirection: "close em planilha, pricing page, números ou cards de oferta",
-      assetSearchQuery: "saas analytics dashboard vertical",
+      durationSeconds: 5,
+      voiceover: "Se você já passou por isso, não falta talento. Falta enxergar o mecanismo certo.",
+      overlay: "NAO É FALTA DE TALENTO",
+      visualDirection: "identificação imediata com operação real e celular em uso",
+      assetSearchQuery: "hands smartphone app",
     },
     {
       order: 4,
-      durationSeconds: 9,
-      voiceover: "Se não melhorar retenção, margem ou conversão, não é estratégia. É só ruído.",
-      overlay: "SEM RETENÇÃO, MARGEM OU CONVERSÃO = RUÍDO",
-      visualDirection: "comparação antes/depois, gráficos simples, setas e cortes secos",
-      assetSearchQuery: "software pricing page vertical",
+      durationSeconds: 6,
+      voiceover: `A regra prática aqui é simples: ${titleBase.toLowerCase()} precisa mostrar mecanismo, prova e ação clara.`,
+      overlay: "REGRA PRATICA",
+      visualDirection: "mecanismo em dashboard, interface ou fluxo claro",
+      assetSearchQuery: "startup analytics dashboard vertical",
     },
     {
       order: 5,
-      durationSeconds: 6,
+      durationSeconds: 5,
+      voiceover: "Faça o passo mais simples primeiro e corte tudo que parece bonito, mas não gera movimento.",
+      overlay: "COMECE PELO PASSO 1",
+      visualDirection: "execução concreta no celular, mensagem, clique ou configuração",
+      assetSearchQuery: "typing message phone close",
+    },
+    {
+      order: 6,
+      durationSeconds: 5,
       voiceover: cta,
       overlay: "COMENTE SUA MÉTRICA",
-      visualDirection: "encerramento com texto forte, interface de comentário, app vertical e tela limpa",
-      assetSearchQuery: "mobile app comments vertical",
+      visualDirection: "resultado ou comentário na tela com fechamento limpo e contraste alto",
+      assetSearchQuery: "mobile app comments interface vertical",
     },
   ];
   const script = scenes.map((scene) => scene.voiceover).join(" ");
@@ -6411,7 +6872,7 @@ function buildShortFormFallbackPackage(input: {
   return {
     styleMode,
     mode: "viral_short",
-    targetDurationSeconds: 40,
+    targetDurationSeconds: 30,
     hook,
     script,
     cta,
@@ -10931,18 +11392,21 @@ export class AgentCore {
               content: [
                 "Você é roteirista de short-form content para o canal Riqueza Despertada.",
                 "Sua tarefa é gerar um short com retenção forte para YouTube Shorts e TikTok.",
+                "O Atlas não cria vídeos; o Atlas cria retenção.",
                 "Responda somente JSON válido.",
                 "Formato: styleMode, mode, targetDurationSeconds, hook, script, cta, description, titleOptions, scenes, platformVariants.",
                 "styleMode deve ser um destes: operator, motivational, emotional, contrarian.",
                 "mode deve ser viral_short.",
-                "targetDurationSeconds entre 35 e 50.",
+                "targetDurationSeconds entre 22 e 32.",
                 "titleOptions deve ser array com 3 títulos curtos.",
                 "Crie cenas curtas com os campos order, durationSeconds, voiceover, overlay, visualDirection, assetSearchQuery.",
                 "assetSearchQuery deve ser uma busca curta em inglês, de 2 a 5 palavras, boa para achar b-roll em banco de vídeo.",
-                "O canal é dark/faceless: assetSearchQuery deve priorizar dashboard, laptop, hands, UI, whiteboard, app interface e escritório.",
-                "Nunca use termos como presenter, speaker, host, selfie, portrait, face, webcam ou person talking.",
+                "O canal é dark/faceless: assetSearchQuery deve priorizar dashboard, laptop, hands, UI, app interface, small business, money desk e phone UI.",
+                "Nunca use termos como presenter, speaker, host, selfie, portrait, face, webcam, person talking, business meeting, corporate office, whiteboard, presentation, generic laptop typing ou stock office smiling.",
                 "Cada vídeo deve ter UMA ideia central. Sem lista longa, sem densidade excessiva, sem jargão demais.",
                 "O hook precisa abrir tensão real em até 2 segundos.",
+                "Overlay principal com no máximo 4 palavras. Texto punch, não frase corporativa.",
+                "Cenas genéricas ou intercambiáveis com qualquer canal financeiro devem ser rejeitadas.",
                 "O CTA deve ser curto. Não invente link, checklist ou oferta que ainda não existem.",
                 "Mantenha tom pragmático, sem promessa milagrosa.",
               ].join(" "),
@@ -11074,6 +11538,11 @@ export class AgentCore {
         `${scene.order}. ${scene.durationSeconds}s | VO=${scene.voiceover} | overlay=${scene.overlay} | visual=${scene.visualDirection} | search=${scene.assetSearchQuery}`,
       ),
       "",
+      "scene_meta:",
+      ...payload.scenes.map((scene) =>
+        `scene_${scene.order}.meta: narrative=${scene.narrativeFunction ?? "mechanism"} | purpose=${scene.scenePurpose ?? "mostrar ação ou prova"} | highlights=${(scene.overlayHighlightWords ?? []).join(", ")} | emotional=${scene.emotionalTrigger ?? "curiosity"} | proof=${scene.proofType ?? "none"} | env=${scene.visualEnvironment ?? "workspace"} | action=${scene.visualAction ?? "mostrar contexto real"} | camera=${scene.visualCamera ?? "over_shoulder"} | pacing=${scene.visualPacing ?? "steady"} | fallback_search=${scene.assetFallbackQuery ?? scene.assetSearchQuery} | forbidden=${(scene.forbiddenVisuals ?? []).join(", ")} | retention=${scene.retentionDriver ?? "specific_mechanism"}`,
+      ),
+      "",
       "scene_assets:",
       ...(sceneAssets.length > 0
         ? sceneAssets.flatMap((scene) => [
@@ -11111,6 +11580,11 @@ export class AgentCore {
       "",
       "description:",
       payload.description,
+      "",
+      "quality_gate:",
+      `score: ${payload.qualityAssessment?.score ?? 0}`,
+      `passed: ${payload.qualityAssessment?.passed === true ? "true" : "false"}`,
+      `reasons: ${(payload.qualityAssessment?.reasons ?? []).join(" | ")}`,
       "END_SHORT_PACKAGE_V3",
     ].join("\n");
 
@@ -11137,6 +11611,7 @@ export class AgentCore {
         sceneAssets,
         productionPack,
         distributionPlan,
+        qualityAssessment: payload.qualityAssessment,
       }),
       messages: buildBaseMessages(userPrompt, orchestration),
       toolExecutions: [
@@ -11302,18 +11777,21 @@ export class AgentCore {
               content: [
                 "Você é roteirista de short-form content para o canal Riqueza Despertada.",
                 "Sua tarefa é gerar um short com retenção forte para YouTube Shorts e TikTok.",
+                "O Atlas não cria vídeos; o Atlas cria retenção.",
                 "Responda somente JSON válido.",
                 "Formato: styleMode, mode, targetDurationSeconds, hook, script, cta, description, titleOptions, scenes, platformVariants.",
                 "styleMode deve ser um destes: operator, motivational, emotional, contrarian.",
                 "mode deve ser viral_short.",
-                "targetDurationSeconds entre 35 e 50.",
+                "targetDurationSeconds entre 22 e 32.",
                 "titleOptions deve ser array com 3 títulos curtos.",
                 "Crie cenas curtas com os campos order, durationSeconds, voiceover, overlay, visualDirection, assetSearchQuery.",
                 "assetSearchQuery deve ser uma busca curta em inglês, de 2 a 5 palavras, boa para achar b-roll em banco de vídeo.",
-                "O canal é dark/faceless: assetSearchQuery deve priorizar dashboard, laptop, hands, UI, whiteboard, app interface e escritório.",
-                "Nunca use termos como presenter, speaker, host, selfie, portrait, face, webcam ou person talking.",
+                "O canal é dark/faceless: assetSearchQuery deve priorizar dashboard, laptop, hands, UI, app interface, small business, money desk e phone UI.",
+                "Nunca use termos como presenter, speaker, host, selfie, portrait, face, webcam, person talking, business meeting, corporate office, whiteboard, presentation, generic laptop typing ou stock office smiling.",
                 "Cada vídeo deve ter UMA ideia central. Sem lista longa, sem densidade excessiva, sem jargão demais.",
                 "O hook precisa abrir tensão real em até 2 segundos.",
+                "Overlay principal com no máximo 4 palavras. Texto punch, não frase corporativa.",
+                "Cenas genéricas ou intercambiáveis com qualquer canal financeiro devem ser rejeitadas.",
                 "O CTA deve ser curto. Não invente link, checklist ou oferta que ainda não existem.",
                 "Mantenha tom pragmático, sem promessa milagrosa.",
               ].join(" "),
@@ -11444,6 +11922,11 @@ export class AgentCore {
           `${scene.order}. ${scene.durationSeconds}s | VO=${scene.voiceover} | overlay=${scene.overlay} | visual=${scene.visualDirection} | search=${scene.assetSearchQuery}`,
         ),
         "",
+        "scene_meta:",
+        ...payload.scenes.map((scene) =>
+          `scene_${scene.order}.meta: narrative=${scene.narrativeFunction ?? "mechanism"} | purpose=${scene.scenePurpose ?? "mostrar ação ou prova"} | highlights=${(scene.overlayHighlightWords ?? []).join(", ")} | emotional=${scene.emotionalTrigger ?? "curiosity"} | proof=${scene.proofType ?? "none"} | env=${scene.visualEnvironment ?? "workspace"} | action=${scene.visualAction ?? "mostrar contexto real"} | camera=${scene.visualCamera ?? "over_shoulder"} | pacing=${scene.visualPacing ?? "steady"} | fallback_search=${scene.assetFallbackQuery ?? scene.assetSearchQuery} | forbidden=${(scene.forbiddenVisuals ?? []).join(", ")} | retention=${scene.retentionDriver ?? "specific_mechanism"}`,
+        ),
+        "",
         "scene_assets:",
         ...(sceneAssets.length > 0
           ? sceneAssets.flatMap((scene) => [
@@ -11481,6 +11964,11 @@ export class AgentCore {
         "",
         "description:",
         payload.description,
+        "",
+        "quality_gate:",
+        `score: ${payload.qualityAssessment?.score ?? 0}`,
+        `passed: ${payload.qualityAssessment?.passed === true ? "true" : "false"}`,
+        `reasons: ${(payload.qualityAssessment?.reasons ?? []).join(" | ")}`,
         "END_SHORT_PACKAGE_V3",
       ].join("\n");
 

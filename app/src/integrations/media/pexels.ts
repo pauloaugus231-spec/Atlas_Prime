@@ -53,10 +53,10 @@ function rewriteQuery(value: string): string {
     next = next.replace(/dashboard/g, "analytics dashboard");
   }
   if (next.includes("whiteboard sketch")) {
-    next = next.replace(/whiteboard sketch/g, "business whiteboard planning");
+    next = next.replace(/whiteboard sketch/g, "business planning desk");
   }
   if (next.includes("whiteboard finance")) {
-    next = next.replace(/whiteboard finance/g, "financial planning whiteboard");
+    next = next.replace(/whiteboard finance/g, "financial planning desk");
   }
   if (next.includes("pricing table") && !/(software|saas|app)/.test(next)) {
     next = `software ${next}`;
