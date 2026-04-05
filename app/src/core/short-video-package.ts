@@ -40,6 +40,7 @@ export interface ParsedShortScene {
   visualAction?: string;
   visualCamera?: string;
   visualPacing?: string;
+  assetProviderHint?: "pexels" | "fal" | "kling";
   assetSearchQuery: string;
   assetFallbackQuery?: string;
   forbiddenVisuals?: string[];
@@ -196,6 +197,10 @@ function parseSceneMetaLine(line: string): { order: number; patch: Partial<Parse
       patch.visualCamera = parsed.value || undefined;
     } else if (parsed.key === "pacing") {
       patch.visualPacing = parsed.value || undefined;
+    } else if (parsed.key === "provider") {
+      patch.assetProviderHint = parsed.value === "fal" || parsed.value === "kling" || parsed.value === "pexels"
+        ? parsed.value
+        : undefined;
     } else if (parsed.key === "fallback_search") {
       patch.assetFallbackQuery = parsed.value || undefined;
     } else if (parsed.key === "forbidden") {

@@ -2,6 +2,7 @@ import type { MediaConfig } from "../../types/config.js";
 import type { Logger } from "../../types/logger.js";
 
 export interface PexelsVideoSuggestion {
+  provider?: "pexels" | "fal" | "kling";
   id: number;
   width: number;
   height: number;
@@ -148,6 +149,7 @@ export class PexelsMediaService {
 
     const payload = await response.json() as PexelsResponse;
     const results = (payload.videos ?? []).map((video) => ({
+      provider: "pexels" as const,
       id: video.id,
       width: video.width,
       height: video.height,

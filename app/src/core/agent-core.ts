@@ -5051,6 +5051,7 @@ function buildContentScriptReply(input: {
     voiceover: string;
     overlay: string;
     visualDirection: string;
+    assetProviderHint?: string;
     assetSearchQuery: string;
     assetFallbackQuery?: string;
     retentionDriver?: string;
@@ -5094,7 +5095,7 @@ function buildContentScriptReply(input: {
     "",
     "Plano por cena:",
     ...input.scenes.map((scene) =>
-      `- Cena ${scene.order} | ${scene.durationSeconds}s | ${scene.narrativeFunction ?? "scene"} | VO: ${scene.voiceover} | overlay: ${scene.overlay} | visual: ${scene.visualDirection} | busca: ${scene.assetSearchQuery}${scene.assetFallbackQuery ? ` | fallback: ${scene.assetFallbackQuery}` : ""}${scene.retentionDriver ? ` | retention: ${scene.retentionDriver}` : ""}`,
+      `- Cena ${scene.order} | ${scene.durationSeconds}s | ${scene.narrativeFunction ?? "scene"} | VO: ${scene.voiceover} | overlay: ${scene.overlay} | visual: ${scene.visualDirection}${scene.assetProviderHint ? ` | mídia: ${scene.assetProviderHint}` : ""} | busca: ${scene.assetSearchQuery}${scene.assetFallbackQuery ? ` | fallback: ${scene.assetFallbackQuery}` : ""}${scene.retentionDriver ? ` | retention: ${scene.retentionDriver}` : ""}`,
     ),
     ...(input.qualityAssessment?.reasons?.length
       ? ["", "Quality gate:", ...input.qualityAssessment.reasons.map((reason) => `- ${reason}`)]
@@ -5105,7 +5106,7 @@ function buildContentScriptReply(input: {
       ? input.sceneAssets.flatMap((scene) => [
           `- Cena ${scene.order} | busca: ${scene.searchQuery}`,
           ...scene.suggestions.slice(0, 2).map((asset) =>
-            `  - ${asset.videoUrl ?? asset.pageUrl}${asset.creator ? ` | creator: ${asset.creator}` : ""}${asset.durationSeconds ? ` | ${asset.durationSeconds}s` : ""}`,
+            `  - ${asset.videoUrl ?? asset.pageUrl}${asset.provider ? ` | provider: ${asset.provider}` : ""}${asset.creator ? ` | creator: ${asset.creator}` : ""}${asset.durationSeconds ? ` | ${asset.durationSeconds}s` : ""}`,
           ),
         ])
       : ["- Sem assets resolvidos por API. Use a busca por cena para procurar b-roll manualmente."]),
@@ -5152,6 +5153,7 @@ type ShortScenePlan = {
   visualAction?: string;
   visualCamera?: SceneVisualCamera;
   visualPacing?: SceneVisualPacing;
+  assetProviderHint?: SceneAssetProvider;
   assetSearchQuery: string;
   assetFallbackQuery?: string;
   forbiddenVisuals?: string[];
@@ -5159,6 +5161,7 @@ type ShortScenePlan = {
 };
 
 type ShortStyleMode = "operator" | "motivational" | "emotional" | "contrarian";
+type SceneAssetProvider = "pexels" | "fal" | "kling";
 type SceneNarrativeFunction = "hook" | "pain" | "identification" | "mechanism" | "action" | "payoff";
 type SceneEmotionalTrigger = "shock" | "urgency" | "identification" | "curiosity" | "proof" | "relief";
 type SceneProofType = "none" | "action" | "interface" | "social_proof" | "money" | "result";
@@ -6027,6 +6030,16 @@ function inferSceneRetentionDriver(fn: SceneNarrativeFunction): SceneRetentionDr
   }
 }
 
+function inferSceneAssetProvider(
+  fn: SceneNarrativeFunction,
+  proofType: SceneProofType,
+): SceneAssetProvider {
+  if ((fn === "hook" || fn === "payoff") && proofType !== "interface") {
+    return "fal";
+  }
+  return "pexels";
+}
+
 function buildOverlayHighlightWords(overlay: string, voiceover: string): string[] {
   const preferred = extractEmphasisWords(`${overlay} ${voiceover}`);
   return preferred.slice(0, 3);
@@ -6189,6 +6202,10 @@ function enrichShortScenePlanV2(
     visualDirection: normalizeFacelessVisualDirection(
       scene.visualDirection,
       `${preset.visualAction}; ambiente ${preset.visualEnvironment}; câmera ${preset.visualCamera}; pacing ${preset.visualPacing}`,
+    ),
+    assetProviderHint: scene.assetProviderHint ?? inferSceneAssetProvider(
+      fn,
+      scene.proofType ?? inferSceneProofType(fn, profile),
     ),
     assetSearchQuery: primaryQuery,
     assetFallbackQuery: fallbackQuery,
@@ -11540,7 +11557,7 @@ export class AgentCore {
       "",
       "scene_meta:",
       ...payload.scenes.map((scene) =>
-        `scene_${scene.order}.meta: narrative=${scene.narrativeFunction ?? "mechanism"} | purpose=${scene.scenePurpose ?? "mostrar ação ou prova"} | highlights=${(scene.overlayHighlightWords ?? []).join(", ")} | emotional=${scene.emotionalTrigger ?? "curiosity"} | proof=${scene.proofType ?? "none"} | env=${scene.visualEnvironment ?? "workspace"} | action=${scene.visualAction ?? "mostrar contexto real"} | camera=${scene.visualCamera ?? "over_shoulder"} | pacing=${scene.visualPacing ?? "steady"} | fallback_search=${scene.assetFallbackQuery ?? scene.assetSearchQuery} | forbidden=${(scene.forbiddenVisuals ?? []).join(", ")} | retention=${scene.retentionDriver ?? "specific_mechanism"}`,
+        `scene_${scene.order}.meta: narrative=${scene.narrativeFunction ?? "mechanism"} | purpose=${scene.scenePurpose ?? "mostrar ação ou prova"} | highlights=${(scene.overlayHighlightWords ?? []).join(", ")} | emotional=${scene.emotionalTrigger ?? "curiosity"} | proof=${scene.proofType ?? "none"} | env=${scene.visualEnvironment ?? "workspace"} | action=${scene.visualAction ?? "mostrar contexto real"} | camera=${scene.visualCamera ?? "over_shoulder"} | pacing=${scene.visualPacing ?? "steady"} | provider=${scene.assetProviderHint ?? "pexels"} | fallback_search=${scene.assetFallbackQuery ?? scene.assetSearchQuery} | forbidden=${(scene.forbiddenVisuals ?? []).join(", ")} | retention=${scene.retentionDriver ?? "specific_mechanism"}`,
       ),
       "",
       "scene_assets:",
@@ -11924,7 +11941,7 @@ export class AgentCore {
         "",
         "scene_meta:",
         ...payload.scenes.map((scene) =>
-          `scene_${scene.order}.meta: narrative=${scene.narrativeFunction ?? "mechanism"} | purpose=${scene.scenePurpose ?? "mostrar ação ou prova"} | highlights=${(scene.overlayHighlightWords ?? []).join(", ")} | emotional=${scene.emotionalTrigger ?? "curiosity"} | proof=${scene.proofType ?? "none"} | env=${scene.visualEnvironment ?? "workspace"} | action=${scene.visualAction ?? "mostrar contexto real"} | camera=${scene.visualCamera ?? "over_shoulder"} | pacing=${scene.visualPacing ?? "steady"} | fallback_search=${scene.assetFallbackQuery ?? scene.assetSearchQuery} | forbidden=${(scene.forbiddenVisuals ?? []).join(", ")} | retention=${scene.retentionDriver ?? "specific_mechanism"}`,
+          `scene_${scene.order}.meta: narrative=${scene.narrativeFunction ?? "mechanism"} | purpose=${scene.scenePurpose ?? "mostrar ação ou prova"} | highlights=${(scene.overlayHighlightWords ?? []).join(", ")} | emotional=${scene.emotionalTrigger ?? "curiosity"} | proof=${scene.proofType ?? "none"} | env=${scene.visualEnvironment ?? "workspace"} | action=${scene.visualAction ?? "mostrar contexto real"} | camera=${scene.visualCamera ?? "over_shoulder"} | pacing=${scene.visualPacing ?? "steady"} | provider=${scene.assetProviderHint ?? "pexels"} | fallback_search=${scene.assetFallbackQuery ?? scene.assetSearchQuery} | forbidden=${(scene.forbiddenVisuals ?? []).join(", ")} | retention=${scene.retentionDriver ?? "specific_mechanism"}`,
         ),
         "",
         "scene_assets:",

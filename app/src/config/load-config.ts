@@ -43,9 +43,13 @@ function parseEnvFile(filePath: string): Record<string, string> {
 function mergeEnvWithFiles(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const candidates = [
     env.ENV_FILE?.trim(),
+    path.resolve(process.cwd(), ".env.local"),
     path.resolve(process.cwd(), ".env"),
+    path.resolve(process.cwd(), "..", ".env.local"),
     path.resolve(process.cwd(), "..", ".env"),
+    path.resolve(process.cwd(), "..", "..", ".env.local"),
     path.resolve(process.cwd(), "..", "..", ".env"),
+    env.APP_HOME ? path.resolve(env.APP_HOME, ".env.local") : undefined,
     env.APP_HOME ? path.resolve(env.APP_HOME, ".env") : undefined,
   ].filter((value): value is string => Boolean(value));
 
@@ -375,14 +379,45 @@ function buildGoogleMapsConfig(env: NodeJS.ProcessEnv): GoogleMapsConfig {
 function buildMediaConfig(env: NodeJS.ProcessEnv): MediaConfig {
   const pexelsApiKey = env.PEXELS_API_KEY?.trim() || undefined;
   const pexelsEnabled = parseBoolean(env.PEXELS_ENABLED, Boolean(pexelsApiKey));
+  const falApiKey = env.FAL_API_KEY?.trim() || undefined;
+  const falEnabled = parseBoolean(env.FAL_ENABLED, Boolean(falApiKey));
+  const klingAccessKey = env.KLING_ACCESS_KEY?.trim() || undefined;
+  const klingSecretKey = env.KLING_SECRET_KEY?.trim() || undefined;
+  const klingEnabled = parseBoolean(
+    env.KLING_ENABLED,
+    Boolean(klingAccessKey && klingSecretKey),
+  );
+  const providerStrategy = (env.MEDIA_PROVIDER_STRATEGY?.trim().toLowerCase() ?? "balanced");
+  const premiumSceneProvider = (env.MEDIA_PREMIUM_SCENE_PROVIDER?.trim().toLowerCase() ?? "fal");
   return {
-    enabled: pexelsEnabled,
+    enabled: pexelsEnabled || falEnabled || klingEnabled,
+    providerStrategy:
+      providerStrategy === "premium" || providerStrategy === "cost"
+        ? providerStrategy
+        : "balanced",
+    premiumSceneProvider: premiumSceneProvider === "kling" ? "kling" : "fal",
     pexelsEnabled,
     pexelsApiKey,
     pexelsMaxResultsPerScene: parsePositiveInteger(env.PEXELS_MAX_RESULTS_PER_SCENE, 1),
     pexelsMaxScenesPerRequest: parsePositiveInteger(env.PEXELS_MAX_SCENES_PER_REQUEST, 5),
     pexelsMinDurationSeconds: parsePositiveInteger(env.PEXELS_MIN_DURATION_SECONDS, 4),
     pexelsCacheTtlSeconds: parsePositiveInteger(env.PEXELS_CACHE_TTL_SECONDS, 86400),
+    falEnabled,
+    falApiKey,
+    falTextToVideoModel: env.FAL_TEXT_TO_VIDEO_MODEL?.trim() || "fal-ai/wan/v2.7/text-to-video",
+    falRequestTimeoutSeconds: parsePositiveInteger(env.FAL_REQUEST_TIMEOUT_SECONDS, 45),
+    falMaxPollSeconds: parsePositiveInteger(env.FAL_MAX_POLL_SECONDS, 300),
+    falDefaultResolution:
+      env.FAL_DEFAULT_RESOLUTION?.trim() === "1080p"
+        ? "1080p"
+        : "720p",
+    klingEnabled,
+    klingAccessKey,
+    klingSecretKey,
+    klingApiBaseUrl: env.KLING_API_BASE_URL?.trim() || "https://api.klingai.com",
+    klingTextToVideoModel: env.KLING_TEXT_TO_VIDEO_MODEL?.trim() || "kling-v1",
+    klingDirectGenerationEnabled: parseBoolean(env.KLING_DIRECT_GENERATION_ENABLED, false),
+    klingRequestTimeoutSeconds: parsePositiveInteger(env.KLING_REQUEST_TIMEOUT_SECONDS, 90),
   };
 }
 

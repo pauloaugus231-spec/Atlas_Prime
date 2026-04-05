@@ -674,6 +674,7 @@ function buildVideoPipelineReadinessReply(input: {
     `- Upload YouTube: ${input.youtubeUploadReady ? "pronto" : "bloqueado por autenticação/escopo"}`,
     "",
     "Regras do runtime:",
+    "- o pipeline nativo hoje usa OpenAI TTS e pode combinar Pexels com providers premium de vídeo quando configurados",
     "- o pipeline nativo hoje não usa ElevenLabs nem CapCut .capproj",
     "- o render nativo parte de um item editorial com SHORT_PACKAGE_V3 salvo",
     "- se faltar uma credencial, o Atlas deve dizer isso explicitamente e não inventar outro fornecedor",

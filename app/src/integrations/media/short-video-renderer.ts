@@ -8,6 +8,10 @@ import type { ContentItemRecord } from "../../types/content-ops.js";
 import type { Logger } from "../../types/logger.js";
 import type { ParsedShortPackage, ParsedShortScene } from "../../core/short-video-package.js";
 import { OpenAiAudioSpeechService } from "../openai/audio-speech.js";
+import { FalMediaService } from "./fal.js";
+import { KlingMediaService } from "./kling.js";
+import { MediaOrchestratorService } from "./media-orchestrator.js";
+import { PexelsMediaService } from "./pexels.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -16,6 +20,7 @@ interface RenderSceneArtifact {
   sourcePath?: string;
   clipPath: string;
   sourceUrl?: string;
+  provider?: string;
 }
 
 interface RenderSceneAudioArtifact {
@@ -41,7 +46,7 @@ export interface ShortVideoRenderReadiness {
   renderEngine: string;
   ttsProvider: "openai" | "none";
   ttsReady: boolean;
-  assetsProvider: "pexels" | "manual";
+  assetsProvider: string;
   assetsReady: boolean;
 }
 
@@ -303,6 +308,7 @@ function buildSceneTimeline(scenes: ParsedShortScene[]): Array<{
 export class ShortVideoRenderService {
   private readonly speech?: OpenAiAudioSpeechService;
   private readonly fontPath?: string;
+  private readonly mediaOrchestrator: MediaOrchestratorService;
 
   constructor(
     private readonly config: AppConfig,
@@ -315,6 +321,13 @@ export class ShortVideoRenderService {
       );
     }
     this.fontPath = findFontPath();
+    this.mediaOrchestrator = new MediaOrchestratorService(
+      this.config.media,
+      this.logger.child({ scope: "media-orchestrator" }),
+      new PexelsMediaService(this.config.media, this.logger.child({ scope: "pexels-media" })),
+      new FalMediaService(this.config.media, this.logger.child({ scope: "fal-media" })),
+      new KlingMediaService(this.config.media, this.logger.child({ scope: "kling-media" })),
+    );
   }
 
   isReady(): boolean {
@@ -329,8 +342,8 @@ export class ShortVideoRenderService {
       renderEngine: "ffmpeg",
       ttsProvider: ttsReady ? "openai" : "none",
       ttsReady,
-      assetsProvider: this.config.media.pexelsEnabled && this.config.media.pexelsApiKey ? "pexels" : "manual",
-      assetsReady: Boolean(this.config.media.pexelsEnabled && this.config.media.pexelsApiKey),
+      assetsProvider: this.mediaOrchestrator.describeReadyProviders(),
+      assetsReady: this.mediaOrchestrator.hasAnyAssetProviderReady(),
     };
   }
 
@@ -433,7 +446,20 @@ export class ShortVideoRenderService {
     const sceneArtifacts: RenderSceneArtifact[] = [];
     for (const scene of input.shortPackage.scenes) {
       const sceneSlug = `scene-${scene.order}`;
-      const sourceUrl = scene.selectedAsset ?? scene.assetSuggestions[0];
+      const packageSourceUrl = scene.selectedAsset ?? scene.assetSuggestions[0];
+      let sourceUrl = packageSourceUrl;
+      let resolvedProvider = packageSourceUrl ? "package" : undefined;
+      const shouldTryProviderResolution = !packageSourceUrl
+        || scene.assetProviderHint === "fal"
+        || scene.assetProviderHint === "kling";
+      if (shouldTryProviderResolution && this.mediaOrchestrator.hasAnyAssetProviderReady()) {
+        const resolved = await this.mediaOrchestrator.resolveSceneSource(scene);
+        const preferredUrl = resolved.suggestions[0]?.videoUrl ?? resolved.suggestions[0]?.pageUrl;
+        if (preferredUrl) {
+          sourceUrl = preferredUrl;
+          resolvedProvider = resolved.provider;
+        }
+      }
       const sourcePath = sourceUrl
         ? path.join(sceneWorkDir, `${sceneSlug}.source.mp4`)
         : undefined;
@@ -480,6 +506,7 @@ export class ShortVideoRenderService {
         sourcePath,
         clipPath,
         sourceUrl,
+        provider: resolvedProvider,
       });
     }
 
@@ -556,10 +583,12 @@ export class ShortVideoRenderService {
           visualAction: scene.visualAction,
           visualCamera: scene.visualCamera,
           visualPacing: scene.visualPacing,
+          assetProviderHint: scene.assetProviderHint,
           assetSearchQuery: scene.assetSearchQuery,
           assetFallbackQuery: scene.assetFallbackQuery,
           forbiddenVisuals: scene.forbiddenVisuals ?? [],
           retentionDriver: scene.retentionDriver,
+          resolvedProvider: artifact?.provider,
           sourceUrl: artifact?.sourceUrl,
           clipPath: artifact?.clipPath,
         };

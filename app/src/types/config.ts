@@ -82,12 +82,27 @@ export interface GoogleMapsConfig {
 
 export interface MediaConfig {
   enabled: boolean;
+  providerStrategy: "balanced" | "premium" | "cost";
+  premiumSceneProvider: "kling" | "fal";
   pexelsEnabled: boolean;
   pexelsApiKey?: string;
   pexelsMaxResultsPerScene: number;
   pexelsMaxScenesPerRequest: number;
   pexelsMinDurationSeconds: number;
   pexelsCacheTtlSeconds: number;
+  falEnabled: boolean;
+  falApiKey?: string;
+  falTextToVideoModel: string;
+  falRequestTimeoutSeconds: number;
+  falMaxPollSeconds: number;
+  falDefaultResolution: "720p" | "1080p";
+  klingEnabled: boolean;
+  klingAccessKey?: string;
+  klingSecretKey?: string;
+  klingApiBaseUrl: string;
+  klingTextToVideoModel: string;
+  klingDirectGenerationEnabled: boolean;
+  klingRequestTimeoutSeconds: number;
 }
 
 export interface SafeExecConfig {
