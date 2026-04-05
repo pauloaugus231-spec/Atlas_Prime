@@ -87,6 +87,17 @@ type PendingActionDraft =
   | PendingGoogleEventDeleteBatchDraft
   | PendingGoogleEventImportBatchDraft;
 
+type ScheduledEditorialSlotKey = "morning_finance" | "lunch_income" | "night_trends";
+
+interface DailyEditorialResearchPayload {
+  createdItemIds?: number[];
+  packagedItemIds?: number[];
+  slots?: Array<{
+    id?: number;
+    slotKey?: string | null;
+  }>;
+}
+
 type CalendarUndoAction =
   | {
       kind: "create";
@@ -388,6 +399,49 @@ function extractContentItemIdFromText(text: string): number | undefined {
   }
   const parsed = Number.parseInt(match[1] ?? "", 10);
   return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function extractEditorialSlotKeyFromNotes(notes: string | null | undefined): ScheduledEditorialSlotKey | null {
+  const match = notes?.match(/\[slot:(morning_finance|lunch_income|night_trends)\]/i);
+  if (!match?.[1]) {
+    return null;
+  }
+  const normalized = match[1].trim().toLowerCase();
+  if (normalized === "morning_finance" || normalized === "lunch_income" || normalized === "night_trends") {
+    return normalized;
+  }
+  return null;
+}
+
+function getEditorialSlotSchedule(slotKey: ScheduledEditorialSlotKey): { label: string; time: string } {
+  switch (slotKey) {
+    case "morning_finance":
+      return { label: "07:00 | Notícias financeiras", time: "07:00" };
+    case "lunch_income":
+      return { label: "12:00 | Renda extra", time: "12:00" };
+    case "night_trends":
+      return { label: "20:00 | Trend adaptado", time: "20:00" };
+  }
+}
+
+function buildEditorialTargetDate(runDate: string, slotKey: ScheduledEditorialSlotKey): string {
+  return `${runDate}T${getEditorialSlotSchedule(slotKey).time}:00-03:00`;
+}
+
+function parseDailyEditorialResearchPayload(payloadJson: string | null | undefined): DailyEditorialResearchPayload | null {
+  if (!payloadJson?.trim()) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(payloadJson) as DailyEditorialResearchPayload;
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function scoreEditorialSelection(item: ContentItemRecord): number {
+  return item.queuePriority ?? item.ideaScore ?? 0;
 }
 
 function isVideoDraftRenderRequest(text: string): boolean {
@@ -1420,6 +1474,7 @@ export class TelegramService {
   private readonly youtubePublisher: YouTubePublisherService;
   private backgroundJobsStarted = false;
   private lastMorningBriefRunKey?: string;
+  private lastEditorialCutoffRunKey?: string;
 
   constructor(
     private readonly config: AppConfig,
@@ -1509,6 +1564,7 @@ export class TelegramService {
     this.backgroundJobsStarted = true;
     void this.runDailyEditorialResearchLoop(signal);
     void this.runWeekdayMorningBriefLoop(signal);
+    void this.runDailyEditorialCutoffLoop(signal);
   }
 
   private async runDailyEditorialResearchLoop(signal: AbortSignal): Promise<void> {
@@ -1525,7 +1581,7 @@ export class TelegramService {
             channelKey: "riqueza_despertada_youtube",
             timezone,
             trendsLimit: 10,
-            ideasLimit: 5,
+            ideasLimit: 6,
             now,
           });
 
@@ -1589,6 +1645,311 @@ export class TelegramService {
 
       await delay(60_000, undefined, { signal }).catch(() => undefined);
     }
+  }
+
+  private async runDailyEditorialCutoffLoop(signal: AbortSignal): Promise<void> {
+    const timezone = this.config.google.defaultTimezone || "America/Sao_Paulo";
+    const channelKey = "riqueza_despertada_youtube";
+    const cutoffRunType = "daily_slot_cutoff";
+
+    while (!signal.aborted) {
+      try {
+        const now = new Date();
+        const local = new Date(now.toLocaleString("en-US", { timeZone: timezone }));
+        const hour = local.getHours();
+        const minute = local.getMinutes();
+        const runKey = `${local.getFullYear()}-${String(local.getMonth() + 1).padStart(2, "0")}-${String(local.getDate()).padStart(2, "0")}`;
+        const existing = this.contentOps.getLatestResearchRun(channelKey, cutoffRunType, runKey);
+
+        if (existing?.status === "success") {
+          this.lastEditorialCutoffRunKey = runKey;
+        }
+
+        if (hour === 6 && minute >= 45 && minute < 50 && this.lastEditorialCutoffRunKey !== runKey) {
+          await this.executeDailyEditorialCutoff({
+            now,
+            timezone,
+            runDate: runKey,
+            channelKey,
+            cutoffRunType,
+          });
+          this.lastEditorialCutoffRunKey = runKey;
+        }
+      } catch (error) {
+        this.logger.error("Daily editorial cutoff loop failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+
+      await delay(60_000, undefined, { signal }).catch(() => undefined);
+    }
+  }
+
+  private async executeDailyEditorialCutoff(input: {
+    now: Date;
+    timezone: string;
+    runDate: string;
+    channelKey: string;
+    cutoffRunType: string;
+  }): Promise<void> {
+    const existing = this.contentOps.getLatestResearchRun(input.channelKey, input.cutoffRunType, input.runDate);
+    if (existing?.status === "success") {
+      return;
+    }
+
+    let researchRun = this.contentOps.getLatestResearchRun(input.channelKey, "daily_research_brief", input.runDate);
+    if (!researchRun || researchRun.status !== "success") {
+      await this.core.runDailyEditorialResearch({
+        channelKey: input.channelKey,
+        timezone: input.timezone,
+        trendsLimit: 10,
+        ideasLimit: 6,
+        now: input.now,
+      });
+      researchRun = this.contentOps.getLatestResearchRun(input.channelKey, "daily_research_brief", input.runDate);
+    }
+
+    if (!researchRun) {
+      const summary = `Cutoff editorial das 06:45 falhou: briefing diário não encontrado para ${input.runDate}.`;
+      this.contentOps.createResearchRun({
+        channelKey: input.channelKey,
+        runType: input.cutoffRunType,
+        runDate: input.runDate,
+        status: "failed",
+        summary,
+      });
+      for (const chatId of this.config.telegram.allowedUserIds) {
+        await this.sendText(chatId, summary, { disable_web_page_preview: true }).catch(() => undefined);
+      }
+      return;
+    }
+
+    const payload = parseDailyEditorialResearchPayload(researchRun.payloadJson);
+    const candidateIds = Array.isArray(payload?.createdItemIds)
+      ? payload!.createdItemIds.filter((value): value is number => Number.isFinite(value))
+      : [];
+    const candidates = candidateIds
+      .map((id) => this.contentOps.getItemById(id))
+      .filter((item): item is ContentItemRecord => Boolean(item))
+      .filter((item) => item.channelKey === input.channelKey && item.status !== "archived" && item.status !== "published");
+
+    const slotOrder: ScheduledEditorialSlotKey[] = ["morning_finance", "lunch_income", "night_trends"];
+    const winners: Array<{
+      slotKey: ScheduledEditorialSlotKey;
+      item: ContentItemRecord;
+      shortPackage: ParsedShortPackage;
+      scheduledFor: string;
+    }> = [];
+    const failures: Array<{ slotKey: ScheduledEditorialSlotKey; error: string }> = [];
+
+    for (const slotKey of slotOrder) {
+      const slotCandidates = candidates
+        .filter((item) => extractEditorialSlotKeyFromNotes(item.notes) === slotKey)
+        .sort((left, right) => {
+          const scoreDelta = scoreEditorialSelection(right) - scoreEditorialSelection(left);
+          if (scoreDelta !== 0) {
+            return scoreDelta;
+          }
+          return right.id - left.id;
+        });
+
+      const selected = slotCandidates[0];
+      if (!selected) {
+        failures.push({
+          slotKey,
+          error: "nenhum item disponível para este slot",
+        });
+        continue;
+      }
+
+      try {
+        const resolved = await this.ensureShortPackageForItem(selected.id);
+        if (!resolved.shortPackage) {
+          failures.push({
+            slotKey,
+            error: `item #${selected.id} sem SHORT_PACKAGE_V3 após tentativa de geração`,
+          });
+          continue;
+        }
+
+        winners.push({
+          slotKey,
+          item: resolved.item,
+          shortPackage: resolved.shortPackage,
+          scheduledFor: buildEditorialTargetDate(input.runDate, slotKey),
+        });
+      } catch (error) {
+        failures.push({
+          slotKey,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    if (winners.length === 0) {
+      const summary = [
+        `Cutoff editorial das 06:45 falhou para ${input.runDate}.`,
+        ...failures.map((failure) => `- ${getEditorialSlotSchedule(failure.slotKey).label}: ${failure.error}`),
+      ].join("\n");
+      this.contentOps.createResearchRun({
+        channelKey: input.channelKey,
+        runType: input.cutoffRunType,
+        runDate: input.runDate,
+        status: "failed",
+        summary,
+        payloadJson: JSON.stringify({ failures }),
+      });
+      for (const chatId of this.config.telegram.allowedUserIds) {
+        await this.sendText(chatId, summary, { disable_web_page_preview: true }).catch(() => undefined);
+      }
+      return;
+    }
+
+    const kickoffSummary = [
+      `Cutoff editorial das 06:45 concluído para ${input.runDate}.`,
+      "Vencedores por slot:",
+      ...winners.map((winner) => {
+        const slot = getEditorialSlotSchedule(winner.slotKey);
+        return `- ${slot.label} -> #${winner.item.id} | ${winner.item.title} | score: ${scoreEditorialSelection(winner.item)}`;
+      }),
+      ...(failures.length > 0
+        ? ["", "Slots com ajuste pendente:", ...failures.map((failure) => `- ${getEditorialSlotSchedule(failure.slotKey).label}: ${failure.error}`)]
+        : []),
+      "",
+      "Vou renderizar os rascunhos e colocar cada um na fila de publicação.",
+    ].join("\n");
+
+    for (const chatId of this.config.telegram.allowedUserIds) {
+      await this.sendText(chatId, kickoffSummary, {
+        disable_web_page_preview: true,
+      }).catch((error) => {
+        this.logger.warn("Failed to send editorial cutoff summary", {
+          chatId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    }
+
+    if (!this.videoRenderer.isReady()) {
+      const readiness = this.videoRenderer.getReadinessReport();
+      const readinessReply = buildVideoPipelineReadinessReply({
+        acceptedInput: readiness.acceptedInput,
+        ttsProvider: readiness.ttsProvider === "openai" ? "OpenAI TTS" : "nenhum",
+        ttsReady: readiness.ttsReady,
+        assetsProvider: readiness.assetsProvider === "pexels" ? "Pexels" : "manual",
+        assetsReady: readiness.assetsReady,
+        canRender: readiness.canRender,
+        youtubeUploadReady: this.youtubePublisher.canUpload(),
+      });
+      this.contentOps.createResearchRun({
+        channelKey: input.channelKey,
+        runType: input.cutoffRunType,
+        runDate: input.runDate,
+        status: "failed",
+        summary: readinessReply,
+        payloadJson: JSON.stringify({
+          winners: winners.map((winner) => ({
+            id: winner.item.id,
+            slotKey: winner.slotKey,
+            scheduledFor: winner.scheduledFor,
+          })),
+          failures,
+        }),
+      });
+      for (const chatId of this.config.telegram.allowedUserIds) {
+        await this.sendText(chatId, readinessReply, {
+          disable_web_page_preview: true,
+        }).catch(() => undefined);
+      }
+      return;
+    }
+
+    const renderedIds: number[] = [];
+    const renderFailures: Array<{ id: number; slotKey: ScheduledEditorialSlotKey; error: string }> = [];
+    for (const winner of winners) {
+      for (const chatId of this.config.telegram.allowedUserIds) {
+        try {
+          const updated = await this.renderVideoDraftForItem({
+            chatId,
+            item: winner.item,
+            shortPackage: winner.shortPackage,
+            scheduledFor: winner.scheduledFor,
+            slotKey: winner.slotKey,
+            autoSelected: true,
+          });
+          renderedIds.push(updated.id);
+          winner.item = updated;
+        } catch (error) {
+          renderFailures.push({
+            id: winner.item.id,
+            slotKey: winner.slotKey,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          this.logger.error("Automatic editorial cutoff render failed", {
+            chatId,
+            itemId: winner.item.id,
+            slotKey: winner.slotKey,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+    }
+
+    const summary = [
+      `Fila diária preparada para ${input.runDate}.`,
+      `Vencedores: ${winners.length}`,
+      `Rascunhos enfileirados: ${new Set(renderedIds).size}`,
+      `Falhas de render: ${renderFailures.length}`,
+      ...winners.map((winner) => {
+        const slot = getEditorialSlotSchedule(winner.slotKey);
+        return `- ${slot.label} -> #${winner.item.id} | ${winner.item.title} | agendado: ${slot.time}`;
+      }),
+      ...(renderFailures.length > 0
+        ? ["", "Falhas:", ...renderFailures.map((failure) => `- #${failure.id} | ${getEditorialSlotSchedule(failure.slotKey).label} | ${failure.error}`)]
+        : []),
+    ].join("\n");
+
+    this.contentOps.createResearchRun({
+      channelKey: input.channelKey,
+      runType: input.cutoffRunType,
+      runDate: input.runDate,
+      status: renderFailures.length === winners.length ? "failed" : "success",
+      summary,
+      payloadJson: JSON.stringify({
+        winners: winners.map((winner) => ({
+          id: winner.item.id,
+          slotKey: winner.slotKey,
+          scheduledFor: winner.scheduledFor,
+        })),
+        failures: [...failures, ...renderFailures.map((failure) => ({
+          slotKey: failure.slotKey,
+          error: failure.error,
+        }))],
+      }),
+    });
+  }
+
+  private async ensureShortPackageForItem(itemId: number): Promise<{
+    item: ContentItemRecord;
+    shortPackage: ParsedShortPackage | null;
+  }> {
+    let item = this.contentOps.getItemById(itemId);
+    if (!item) {
+      throw new Error(`Content item not found: ${itemId}`);
+    }
+
+    let shortPackage = extractLatestShortPackage(item.notes);
+    if (shortPackage) {
+      return { item, shortPackage };
+    }
+
+    await this.core.runUserPrompt(`gere roteiro para o item #${itemId}`);
+    item = this.contentOps.getItemById(itemId);
+    if (!item) {
+      throw new Error(`Content item not found after packaging: ${itemId}`);
+    }
+    shortPackage = extractLatestShortPackage(item.notes);
+    return { item, shortPackage };
   }
 
   private async handleUpdate(update: TelegramUpdate, bot: TelegramUser): Promise<void> {
@@ -2292,36 +2653,51 @@ export class TelegramService {
     );
   }
 
-  private async renderVideoDraftForItem(
-    message: TelegramMessage,
-    item: ContentItemRecord,
-    shortPackage: ParsedShortPackage,
-  ): Promise<void> {
+  private async renderVideoDraftForItem(input: {
+    chatId: number;
+    item: ContentItemRecord;
+    shortPackage: ParsedShortPackage;
+    replyToMessageId?: number;
+    scheduledFor?: string;
+    slotKey?: ScheduledEditorialSlotKey;
+    autoSelected?: boolean;
+  }): Promise<ContentItemRecord> {
     const rendered = await this.videoRenderer.renderDraft({
-      item,
-      shortPackage,
+      item: input.item,
+      shortPackage: input.shortPackage,
     });
 
     const nextNotes = [
-      item.notes?.trim() ?? "",
+      input.item.notes?.trim() ?? "",
       "",
       "VIDEO_RENDER_DRAFT",
       `rendered_at: ${new Date().toISOString()}`,
       `output_path: ${rendered.outputPath}`,
       `manifest_path: ${rendered.manifestPath}`,
       "END_VIDEO_RENDER_DRAFT",
+      ...(input.autoSelected && input.slotKey && input.scheduledFor
+        ? [
+            "",
+            "AUTO_SLOT_SELECTION",
+            `slot: ${input.slotKey}`,
+            `scheduled_for: ${input.scheduledFor}`,
+            `selected_at: ${new Date().toISOString()}`,
+            "END_AUTO_SLOT_SELECTION",
+          ]
+        : []),
     ].filter(Boolean).join("\n");
 
     const updated = this.contentOps.updateItem({
-      id: item.id,
+      id: input.item.id,
       assetPath: rendered.outputPath,
       notes: nextNotes,
-      status: "draft",
+      status: input.scheduledFor ? "scheduled" : "draft",
+      targetDate: input.scheduledFor ?? input.item.targetDate,
     });
 
-    await this.api.sendVideo(message.chat.id, rendered.outputPath, {
+    await this.api.sendVideo(input.chatId, rendered.outputPath, {
       caption: `Rascunho pronto: item #${updated.id} | ${updated.title}`,
-      reply_to_message_id: message.message_id,
+      reply_to_message_id: input.replyToMessageId,
       supports_streaming: true,
       duration: rendered.durationSeconds,
       width: 1080,
@@ -2331,30 +2707,35 @@ export class TelegramService {
     const publishDraft = this.buildYouTubePublishDraft({
       contentItemId: updated.id,
       filePath: rendered.outputPath,
-      title: shortPackage.platformVariants.youtubeShort.title || updated.title,
-      description: [shortPackage.description, "", shortPackage.platformVariants.youtubeShort.caption]
+      title: input.shortPackage.platformVariants.youtubeShort.title || updated.title,
+      description: [input.shortPackage.description, "", input.shortPackage.platformVariants.youtubeShort.caption]
         .filter((entry) => entry?.trim())
         .join("\n\n"),
       tags: this.buildYouTubeTags(updated),
     });
-    const approval = this.persistPendingApproval(message.chat.id, publishDraft);
+    const approval = this.persistPendingApproval(input.chatId, publishDraft);
+    const slotLabel = input.slotKey ? getEditorialSlotSchedule(input.slotKey).label : undefined;
 
     await this.sendText(
-      message.chat.id,
+      input.chatId,
       [
         "Vídeo rascunho entregue para revisão.",
         `- Item: #${updated.id}`,
         `- Arquivo: ${rendered.outputPath}`,
         `- Duração: ${rendered.durationSeconds}s`,
+        ...(input.scheduledFor
+          ? [`- Janela: ${formatLocalDateTime(input.scheduledFor) ?? input.scheduledFor}${slotLabel ? ` | ${slotLabel}` : ""}`]
+          : []),
         "",
         buildCompactPendingActionReply(publishDraft) ?? "Publicação pronta para aprovação.",
       ].join("\n"),
       {
-        reply_to_message_id: message.message_id,
+        reply_to_message_id: input.replyToMessageId,
         disable_web_page_preview: true,
         reply_markup: approval ? buildApprovalInlineKeyboard(approval.id) : undefined,
       },
     );
+    return updated;
   }
 
   private async handleManualVideoScriptRequest(message: TelegramMessage, rawText: string): Promise<void> {
@@ -2453,7 +2834,12 @@ export class TelegramService {
         },
       );
 
-      await this.renderVideoDraftForItem(message, refreshed, shortPackage);
+      await this.renderVideoDraftForItem({
+        chatId: message.chat.id,
+        item: refreshed,
+        shortPackage,
+        replyToMessageId: message.message_id,
+      });
     } catch (error) {
       await this.sendText(
         message.chat.id,
@@ -2547,7 +2933,12 @@ export class TelegramService {
     );
 
     try {
-      await this.renderVideoDraftForItem(message, item, shortPackage);
+      await this.renderVideoDraftForItem({
+        chatId: message.chat.id,
+        item,
+        shortPackage,
+        replyToMessageId: message.message_id,
+      });
     } catch (error) {
       this.logger.error("Short video render failed", {
         chatId: message.chat.id,
