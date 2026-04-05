@@ -1817,6 +1817,61 @@ function isRiquezaTrendEligible(input: {
   };
 }
 
+function isRiquezaContentItemEligible(item: {
+  title: string;
+  hook?: string | null;
+  pillar?: string | null;
+  notes?: string | null;
+  channelKey?: string | null;
+}): boolean {
+  if (!item.channelKey?.startsWith("riqueza_despertada")) {
+    return true;
+  }
+
+  const context = normalizeEmailAnalysisText(
+    [
+      item.title,
+      item.hook ?? "",
+      item.pillar ?? "",
+      item.notes ?? "",
+    ].join(" | "),
+  );
+
+  const hasAllowedSignal = includesAny(context, RIQUEZA_ALLOWED_TREND_KEYWORDS)
+    || includesAny(context, [
+      "riqueza",
+      "patrimonio",
+      "patrimônio",
+      "precificar",
+      "assinatura",
+      "conversao",
+      "conversão",
+      "pagina de vendas",
+      "pagina",
+      "freelancer",
+      "produto",
+      "produtos",
+      "execucao",
+      "execução",
+      "canal escalavel",
+      "canal escalável",
+      "poupanca",
+      "poupança",
+    ]);
+  const hasBlockedSignal = includesAny(context, [
+    ...RIQUEZA_BLOCKED_TREND_KEYWORDS,
+    "aposta",
+    "apostas",
+    "bet",
+    "cassino",
+    "cassino online",
+    "pre luta",
+    "pré luta",
+  ]);
+
+  return hasAllowedSignal && !hasBlockedSignal;
+}
+
 function filterSelectedTrendsForChannel(input: {
   channelKey: string;
   selectedTrends: Array<{
@@ -10161,6 +10216,7 @@ export class AgentCore {
     const limit = Math.min(10, extractPromptLimit(userPrompt, 5, 10));
     const items = this.contentOps
       .listItems({ channelKey, limit: 20 })
+      .filter((item) => isRiquezaContentItemEligible(item))
       .filter((item) => item.status !== "archived" && item.status !== "published")
       .sort((left, right) => {
         const statusWeight = (value: string) => value === "draft" ? 0 : value === "idea" ? 1 : value === "scheduled" ? 2 : 3;
@@ -10231,6 +10287,7 @@ export class AgentCore {
     const limit = Math.min(10, extractPromptLimit(userPrompt, 5, 10));
     const items = this.contentOps
       .listItems({ channelKey, limit: 20 })
+      .filter((item) => isRiquezaContentItemEligible(item))
       .filter((item) => item.status !== "archived" && item.status !== "published")
       .sort((left, right) =>
         (right.queuePriority ?? right.ideaScore ?? 0) - (left.queuePriority ?? left.ideaScore ?? 0)
