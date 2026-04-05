@@ -5188,7 +5188,11 @@ async function resolveSceneAssets(
 
   for (const scene of scenes.slice(0, Math.max(1, maxScenes))) {
     try {
-      const suggestions = await pexelsMedia.searchVideos(scene.assetSearchQuery);
+      const suggestions = await pexelsMedia.searchVideos(
+        scene.assetSearchQuery,
+        undefined,
+        scene.durationSeconds,
+      );
       results.push({
         order: scene.order,
         searchQuery: scene.assetSearchQuery,

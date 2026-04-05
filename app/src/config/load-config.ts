@@ -379,8 +379,10 @@ function buildMediaConfig(env: NodeJS.ProcessEnv): MediaConfig {
     enabled: pexelsEnabled,
     pexelsEnabled,
     pexelsApiKey,
-    pexelsMaxResultsPerScene: parsePositiveInteger(env.PEXELS_MAX_RESULTS_PER_SCENE, 2),
+    pexelsMaxResultsPerScene: parsePositiveInteger(env.PEXELS_MAX_RESULTS_PER_SCENE, 1),
     pexelsMaxScenesPerRequest: parsePositiveInteger(env.PEXELS_MAX_SCENES_PER_REQUEST, 5),
+    pexelsMinDurationSeconds: parsePositiveInteger(env.PEXELS_MIN_DURATION_SECONDS, 4),
+    pexelsCacheTtlSeconds: parsePositiveInteger(env.PEXELS_CACHE_TTL_SECONDS, 86400),
   };
 }
 

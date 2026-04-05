@@ -32,8 +32,33 @@ type PexelsResponse = {
 
 type PexelsVideoFile = NonNullable<NonNullable<PexelsResponse["videos"]>[number]["video_files"]>[number];
 
+type CachedSearchEntry = {
+  expiresAt: number;
+  results: PexelsVideoSuggestion[];
+};
+
 function normalizeQuery(value: string): string {
   return value.trim().replace(/\s+/g, " ");
+}
+
+function rewriteQuery(value: string): string {
+  let next = normalizeQuery(value).toLowerCase();
+  if (next.includes("dashboard") && !/(analytics|software|saas|startup|business)/.test(next)) {
+    next = next.replace(/dashboard/g, "analytics dashboard");
+  }
+  if (next.includes("whiteboard sketch")) {
+    next = next.replace(/whiteboard sketch/g, "startup whiteboard planning");
+  }
+  if (next.includes("pricing table") && !/(software|saas|app)/.test(next)) {
+    next = `software ${next}`;
+  }
+  if (next.includes("product onboarding") && !/(app|ui|mobile|software)/.test(next)) {
+    next = next.replace(/product onboarding/g, "mobile app onboarding ui");
+  }
+  if (next.includes("comment") && !/(app|mobile|ui|interface)/.test(next)) {
+    next = `mobile app ${next}`;
+  }
+  return next;
 }
 
 function selectBestVideoFile(files: PexelsVideoFile[] | undefined): string | undefined {
@@ -53,6 +78,8 @@ function selectBestVideoFile(files: PexelsVideoFile[] | undefined): string | und
 }
 
 export class PexelsMediaService {
+  private readonly cache = new Map<string, CachedSearchEntry>();
+
   constructor(
     private readonly config: MediaConfig,
     private readonly logger: Logger,
@@ -62,10 +89,20 @@ export class PexelsMediaService {
     return this.config.pexelsEnabled && Boolean(this.config.pexelsApiKey);
   }
 
-  async searchVideos(query: string, maxResults = this.config.pexelsMaxResultsPerScene): Promise<PexelsVideoSuggestion[]> {
-    const normalizedQuery = normalizeQuery(query);
+  async searchVideos(
+    query: string,
+    maxResults = this.config.pexelsMaxResultsPerScene,
+    targetDurationSeconds?: number,
+  ): Promise<PexelsVideoSuggestion[]> {
+    const normalizedQuery = rewriteQuery(query);
     if (!normalizedQuery || !this.isEnabled()) {
       return [];
+    }
+
+    const cacheKey = `${normalizedQuery}|${maxResults}|${targetDurationSeconds ?? 0}`;
+    const cached = this.cache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.results.slice(0, Math.max(1, Math.min(maxResults, 5)));
     }
 
     const url = new URL("https://api.pexels.com/videos/search");
@@ -96,11 +133,34 @@ export class PexelsMediaService {
       imageUrl: video.image,
       creator: video.user?.name?.trim() || undefined,
       videoUrl: selectBestVideoFile(video.video_files),
-    }));
+    }))
+      .filter((video) => video.durationSeconds >= this.config.pexelsMinDurationSeconds)
+      .sort((left, right) => {
+        const leftPortraitBoost = left.height > left.width ? 100 : 0;
+        const rightPortraitBoost = right.height > right.width ? 100 : 0;
+        const leftDurationPenalty = targetDurationSeconds
+          ? Math.abs(left.durationSeconds - targetDurationSeconds) * 5
+          : 0;
+        const rightDurationPenalty = targetDurationSeconds
+          ? Math.abs(right.durationSeconds - targetDurationSeconds) * 5
+          : 0;
+        const leftDurationBoost = targetDurationSeconds && left.durationSeconds >= targetDurationSeconds ? 50 : 0;
+        const rightDurationBoost = targetDurationSeconds && right.durationSeconds >= targetDurationSeconds ? 50 : 0;
+        const leftScore = leftPortraitBoost + leftDurationBoost - leftDurationPenalty;
+        const rightScore = rightPortraitBoost + rightDurationBoost - rightDurationPenalty;
+        return rightScore - leftScore;
+      })
+      .slice(0, Math.max(1, Math.min(maxResults, 5)));
 
     this.logger.info("Resolved Pexels video suggestions", {
       query: normalizedQuery,
       total: results.length,
+      targetDurationSeconds,
+    });
+
+    this.cache.set(cacheKey, {
+      expiresAt: Date.now() + (this.config.pexelsCacheTtlSeconds * 1000),
+      results,
     });
 
     return results;

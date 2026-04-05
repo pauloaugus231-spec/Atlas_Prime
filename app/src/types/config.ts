@@ -86,6 +86,8 @@ export interface MediaConfig {
   pexelsApiKey?: string;
   pexelsMaxResultsPerScene: number;
   pexelsMaxScenesPerRequest: number;
+  pexelsMinDurationSeconds: number;
+  pexelsCacheTtlSeconds: number;
 }
 
 export interface SafeExecConfig {
