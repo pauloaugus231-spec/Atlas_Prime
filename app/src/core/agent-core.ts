@@ -5000,6 +5000,7 @@ function buildContentScriptReply(input: {
     callToAction: string | null;
     notes: string | null;
   };
+  styleMode: ShortStyleMode;
   mode: string;
   targetDurationSeconds: number;
   headlineOptions: string[];
@@ -5037,6 +5038,7 @@ function buildContentScriptReply(input: {
     `Roteiro pronto para o item #${input.item.id}.`,
     `- Título de trabalho: ${input.item.title}`,
     `- Modo: ${input.mode}`,
+    `- Tom: ${input.styleMode}`,
     `- Duração alvo: ${input.targetDurationSeconds}s`,
     ...(input.item.hook ? [`- Hook final: ${input.item.hook}`] : []),
     ...(input.item.callToAction ? [`- CTA: ${input.item.callToAction}`] : []),
@@ -5098,6 +5100,8 @@ type ShortScenePlan = {
   assetSearchQuery: string;
 };
 
+type ShortStyleMode = "operator" | "motivational" | "emotional" | "contrarian";
+
 type ShortProductionPack = {
   voiceStyle: string;
   editRhythm: string;
@@ -5134,6 +5138,7 @@ type ShortPlatformVariants = {
 };
 
 type ShortFormPackage = {
+  styleMode: ShortStyleMode;
   mode: string;
   targetDurationSeconds: number;
   hook: string;
@@ -5145,9 +5150,130 @@ type ShortFormPackage = {
   platformVariants: ShortPlatformVariants;
 };
 
-function buildSceneSubtitleLine(scene: ShortScenePlan): string {
-  const candidate = scene.overlay.trim() || scene.voiceover.trim();
-  return truncateBriefText(candidate.replace(/\s+/g, " "), 72);
+function normalizeShortComparableText(value: string): string {
+  return normalizeEmailAnalysisText(value)
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function normalizeShortStyleMode(value: string | undefined, fallback: ShortStyleMode): ShortStyleMode {
+  if (value === "operator" || value === "motivational" || value === "emotional" || value === "contrarian") {
+    return value;
+  }
+  return fallback;
+}
+
+function inferShortStyleMode(input: {
+  title: string;
+  pillar?: string | null;
+  hook?: string | null;
+  formatTemplateKey?: string | null;
+  seriesKey?: string | null;
+  notes?: string | null;
+}): ShortStyleMode {
+  const normalized = normalizeEmailAnalysisText([
+    input.title,
+    input.pillar ?? "",
+    input.hook ?? "",
+    input.formatTemplateKey ?? "",
+    input.seriesKey ?? "",
+    input.notes ?? "",
+  ].join("\n"));
+
+  if (includesAny(normalized, ["belief_breaker", "mentira", "erro", "mito", "contrarian", "pare de"])) {
+    return "contrarian";
+  }
+  if (includesAny(normalized, ["short_narrative", "historia", "história", "narrativa", "virada", "caso real", "situação", "situacao"])) {
+    return "emotional";
+  }
+  if (includesAny(normalized, ["disciplina", "execucao", "execução", "constancia", "constância", "agir", "rotina", "foco"])) {
+    return "motivational";
+  }
+  return "operator";
+}
+
+function buildShortStyleProfile(styleMode: ShortStyleMode): {
+  voiceStyle: string;
+  editRhythm: string;
+  subtitleStyle: string;
+  youtubeCoverText: string;
+  tiktokCoverText: string;
+} {
+  switch (styleMode) {
+    case "motivational":
+      return {
+        voiceStyle: "voz firme, energética e disciplinada, com cadência de execução e sem soar coach",
+        editRhythm: "hook rápido; cortes secos e crescentes; motion text forte; terminar com energia de ação imediata",
+        subtitleStyle: "topo = tese curta; base = ação prática; blocos curtos, verbos fortes e contraste alto",
+        youtubeCoverText: "EXECUTE ISSO HOJE",
+        tiktokCoverText: "PARE DE ADIAR",
+      };
+    case "emotional":
+      return {
+        voiceStyle: "voz próxima, intensa e controlada, com peso emocional sem dramatizar demais",
+        editRhythm: "abrir com tensão; segurar a virada por alguns frames; alternar respiro curto com punchline visual",
+        subtitleStyle: "topo = dor ou virada; base = frase falada curta; palavras de impacto emocional em destaque",
+        youtubeCoverText: "ESSA VIRADA IMPORTA",
+        tiktokCoverText: "SE IDENTIFICOU?",
+      };
+    case "contrarian":
+      return {
+        voiceStyle: "voz cortante, confiante e direta, com ênfase nas palavras de ruptura e sem hype vazio",
+        editRhythm: "primeiros 2 segundos muito fortes; cortes rápidos; texto de confronto; fechamento seco para comentário",
+        subtitleStyle: "topo = quebra de crença; base = prova curta; poucas palavras, contraste alto e punchline visível",
+        youtubeCoverText: "ERRO QUE CUSTA CARO",
+        tiktokCoverText: "PARE DE PERDER DINHEIRO NISSO",
+      };
+    case "operator":
+    default:
+      return {
+        voiceStyle: "voz segura, objetiva e pragmática, com ritmo de operador de growth e sem hype",
+        editRhythm: "hook rápido; cortes secos a cada 2-3s; reforço visual de mecanismo; fechamento limpo para comentário",
+        subtitleStyle: "topo = mecanismo; base = fala objetiva; 3-6 palavras por bloco destacando número, ação e métrica",
+        youtubeCoverText: "MECANISMO QUE FUNCIONA",
+        tiktokCoverText: "ENTENDA O MECANISMO",
+      };
+  }
+}
+
+function buildSceneCtaSubtitle(styleMode: ShortStyleMode): string {
+  switch (styleMode) {
+    case "motivational":
+      return "Conta aqui embaixo.";
+    case "emotional":
+      return "Me diz isso nos comentários.";
+    case "contrarian":
+      return "Comenta aqui embaixo.";
+    case "operator":
+    default:
+      return "Deixe isso nos comentários.";
+  }
+}
+
+function buildSceneSubtitleLine(scene: ShortScenePlan, styleMode: ShortStyleMode): string {
+  const overlayComparable = normalizeShortComparableText(scene.overlay);
+  const voiceover = scene.voiceover.trim();
+  const clauses = voiceover
+    .split(/(?<=[.!?])\s+|\s+[–—-]\s+|;\s+|:\s+|,\s+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+
+  for (const clause of clauses) {
+    const comparable = normalizeShortComparableText(clause);
+    if (!comparable) {
+      continue;
+    }
+    if (!overlayComparable || (comparable !== overlayComparable && !comparable.includes(overlayComparable) && !overlayComparable.includes(comparable))) {
+      return truncateBriefText(clause.replace(/\s+/g, " "), 72);
+    }
+  }
+
+  if (normalizeShortComparableText(voiceover).includes("comente")) {
+    return buildSceneCtaSubtitle(styleMode);
+  }
+
+  return truncateBriefText(voiceover.replace(/\s+/g, " "), 72);
 }
 
 function extractEmphasisWords(text: string): string[] {
@@ -5160,14 +5286,21 @@ function extractEmphasisWords(text: string): string[] {
   )];
 }
 
-function buildSceneEditInstruction(scene: ShortScenePlan): string {
+function buildSceneEditInstruction(scene: ShortScenePlan, styleMode: ShortStyleMode): string {
+  const accent = styleMode === "motivational"
+    ? "Aumente a energia a cada troca de plano."
+    : styleMode === "emotional"
+      ? "Segure alguns frames extras no momento de virada."
+      : styleMode === "contrarian"
+        ? "Bata o contraste visual junto da punchline."
+        : "Priorize clareza visual e número na tela.";
   if (scene.durationSeconds <= 4) {
-    return "1 corte rápido + zoom leve no texto; segure 2 a 3 frames no punchline.";
+    return `1 corte rápido + zoom leve no texto; segure 2 a 3 frames no punchline. ${accent}`;
   }
   if (scene.durationSeconds <= 8) {
-    return "2 cortes secos; trocar plano no meio da frase e manter texto na zona segura vertical.";
+    return `2 cortes secos; trocar plano no meio da frase e manter texto na zona segura vertical. ${accent}`;
   }
-  return "3 blocos visuais: abertura, reforço e fechamento; manter cortes a cada 2 a 3 segundos.";
+  return `3 blocos visuais: abertura, reforço e fechamento; manter cortes a cada 2 a 3 segundos. ${accent}`;
 }
 
 function inferDistributionHypothesis(item: {
@@ -5212,6 +5345,7 @@ function buildDistributionPlan(input: {
 }
 
 function buildShortProductionPack(
+  styleMode: ShortStyleMode,
   scenes: ShortScenePlan[],
   sceneAssets: Array<{
     order: number;
@@ -5219,17 +5353,18 @@ function buildShortProductionPack(
     suggestions: PexelsVideoSuggestion[];
   }>,
 ): ShortProductionPack {
+  const styleProfile = buildShortStyleProfile(styleMode);
   return {
-    voiceStyle: "voz segura, direta, sem hype e com ritmo de operador de growth",
-    editRhythm: "hook muito rápido; cortes secos a cada 2-3s; reforço visual sem rosto; fechamento limpo para comentário",
-    subtitleStyle: "legendas curtas, alto contraste, 3-6 palavras por bloco, destacando mecanismo e métrica",
+    voiceStyle: styleProfile.voiceStyle,
+    editRhythm: styleProfile.editRhythm,
+    subtitleStyle: styleProfile.subtitleStyle,
     scenes: scenes.map((scene) => {
       const selectedAsset = sceneAssets.find((entry) => entry.order === scene.order)?.suggestions[0]?.videoUrl;
       return {
         order: scene.order,
-        subtitleLine: buildSceneSubtitleLine(scene),
-        emphasisWords: extractEmphasisWords(scene.overlay),
-        editInstruction: buildSceneEditInstruction(scene),
+        subtitleLine: buildSceneSubtitleLine(scene, styleMode),
+        emphasisWords: extractEmphasisWords(`${scene.overlay} ${scene.voiceover}`),
+        editInstruction: buildSceneEditInstruction(scene, styleMode),
         selectedAsset,
       };
     }),
@@ -5467,6 +5602,17 @@ function normalizeShortLine(text: string | undefined, fallback: string): string 
   return stripForbiddenShortPromises(text.trim());
 }
 
+function compressOverlayText(text: string | undefined, fallback: string): string {
+  const base = normalizeShortLine(text, fallback)
+    .replace(/[.!?]+/g, " ")
+    .replace(/[–—]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const words = base.split(/\s+/).filter(Boolean);
+  const compact = words.length > 6 ? words.slice(0, 6).join(" ") : base;
+  return truncateBriefText(compact.toUpperCase(), 48);
+}
+
 function deriveScriptFromScenes(scenes: ShortScenePlan[]): string {
   return scenes.map((scene) => scene.voiceover.trim()).filter(Boolean).join(" ");
 }
@@ -5487,6 +5633,171 @@ function normalizeAssetSearchQuery(value: string | undefined, fallback: string):
   }
 
   return normalized;
+}
+
+type ShortAssetSemanticProfile = "finance" | "saas" | "sales" | "execution" | "business";
+
+function inferAssetSemanticProfile(context: {
+  title: string;
+  pillar?: string | null;
+  hook?: string | null;
+  formatTemplateKey?: string | null;
+  seriesKey?: string | null;
+  notes?: string | null;
+  sceneVoiceover?: string;
+  sceneOverlay?: string;
+  styleMode: ShortStyleMode;
+}): ShortAssetSemanticProfile {
+  const normalized = normalizeEmailAnalysisText([
+    context.title,
+    context.pillar ?? "",
+    context.hook ?? "",
+    context.formatTemplateKey ?? "",
+    context.seriesKey ?? "",
+    context.notes ?? "",
+    context.sceneVoiceover ?? "",
+    context.sceneOverlay ?? "",
+    context.styleMode,
+  ].join("\n"));
+
+  if (includesAny(normalized, [
+    "investir",
+    "investimento",
+    "etf",
+    "aporte",
+    "dividendo",
+    "dividend",
+    "juros",
+    "patrimonio",
+    "patrimônio",
+    "poupanca",
+    "poupança",
+    "rebalance",
+    "financial",
+    "finance",
+    "bank",
+    "banking",
+  ])) {
+    return "finance";
+  }
+  if (includesAny(normalized, [
+    "saas",
+    "assinatura",
+    "subscription",
+    "pricing",
+    "churn",
+    "ltv",
+    "cac",
+    "cohort",
+    "mrr",
+    "arpa",
+    "activation",
+    "onboarding",
+    "usuario ativo",
+    "usuário ativo",
+  ])) {
+    return "saas";
+  }
+  if (includesAny(normalized, [
+    "conversao",
+    "conversão",
+    "pagina de vendas",
+    "página de vendas",
+    "sales",
+    "lead",
+    "cliente",
+    "oferta",
+    "checkout",
+    "funnel",
+  ])) {
+    return "sales";
+  }
+  if (includesAny(normalized, ["disciplina", "execucao", "execução", "constancia", "constância", "agir", "automatizar", "rotina"])) {
+    return "execution";
+  }
+  return "business";
+}
+
+function refineAssetSearchQuery(
+  value: string | undefined,
+  fallback: string,
+  context: {
+    title: string;
+    pillar?: string | null;
+    hook?: string | null;
+    formatTemplateKey?: string | null;
+    seriesKey?: string | null;
+    notes?: string | null;
+    sceneVoiceover?: string;
+    sceneOverlay?: string;
+    styleMode: ShortStyleMode;
+  },
+): string {
+  let next = normalizeAssetSearchQuery(value, fallback);
+  const profile = inferAssetSemanticProfile(context);
+
+  if (/(comment|comments)/.test(next)) {
+    return "mobile app comments interface vertical";
+  }
+  if (/(onboarding)/.test(next)) {
+    return profile === "saas" ? "saas onboarding ui vertical" : "product onboarding ui vertical";
+  }
+  if (/(pricing|subscription|table ui|pricing table|offer comparison)/.test(next)) {
+    if (profile === "saas") {
+      return "saas pricing page vertical";
+    }
+    if (profile === "sales") {
+      return "offer pricing comparison vertical";
+    }
+    return "software pricing page vertical";
+  }
+  if (/(whiteboard)/.test(next)) {
+    if (profile === "finance") {
+      return "financial planning whiteboard vertical";
+    }
+    if (profile === "sales") {
+      return "sales funnel whiteboard vertical";
+    }
+    return "business whiteboard planning vertical";
+  }
+  if (/(smartphone|mobile app|app ui|hands smartphone|banking app|investment app)/.test(next)) {
+    if (profile === "finance") {
+      return "investment app ui vertical";
+    }
+    if (profile === "saas") {
+      return "saas mobile app ui vertical";
+    }
+    if (profile === "sales") {
+      return "crm mobile app ui vertical";
+    }
+    return "mobile app interface vertical";
+  }
+  if (/(dashboard|metrics|analytics|laptop)/.test(next)) {
+    if (profile === "finance") {
+      return next.includes("blurred") ? "finance analytics dashboard blurred vertical" : "finance analytics dashboard vertical";
+    }
+    if (profile === "saas") {
+      return "saas analytics dashboard vertical";
+    }
+    if (profile === "sales") {
+      return "sales analytics dashboard vertical";
+    }
+    return "startup analytics dashboard vertical";
+  }
+
+  if (profile === "finance") {
+    return "investment workspace laptop vertical";
+  }
+  if (profile === "saas") {
+    return "saas workspace laptop vertical";
+  }
+  if (profile === "sales") {
+    return "sales dashboard laptop vertical";
+  }
+  if (profile === "execution") {
+    return "hands typing laptop vertical";
+  }
+  return next;
 }
 
 async function resolveSceneAssets(
@@ -5532,11 +5843,23 @@ async function resolveSceneAssets(
   return results;
 }
 
-function validateShortFormPackage(payload: ShortFormPackage, fallback: ShortFormPackage): ShortFormPackage {
+function validateShortFormPackage(
+  payload: ShortFormPackage,
+  fallback: ShortFormPackage,
+  context: {
+    title: string;
+    pillar?: string | null;
+    hook?: string | null;
+    formatTemplateKey?: string | null;
+    seriesKey?: string | null;
+    notes?: string | null;
+  },
+): ShortFormPackage {
   const normalizedScenes = normalizeScenePlan(payload.scenes, fallback.scenes);
   const desiredTarget = clampShortTargetDuration(payload.targetDurationSeconds, fallback.targetDurationSeconds);
   const rebalancedScenes = rebalanceSceneDurations(normalizedScenes, desiredTarget);
   const targetDurationSeconds = sumSceneDurations(rebalancedScenes);
+  const styleMode = normalizeShortStyleMode(payload.styleMode, fallback.styleMode);
   const requestedCta = normalizeShortLine(payload.cta, fallback.cta);
   const cta = requestedCta.toLowerCase().includes("inscreva")
     ? "Comente qual métrica você usaria."
@@ -5553,16 +5876,26 @@ function validateShortFormPackage(payload: ShortFormPackage, fallback: ShortForm
   });
   const resolvedScenes = scenes.map((scene, index, allScenes) => ({
     ...scene,
-    assetSearchQuery: normalizeAssetSearchQuery(
+    assetSearchQuery: refineAssetSearchQuery(
       scene.assetSearchQuery,
       fallback.scenes[Math.min(index, fallback.scenes.length - 1)]?.assetSearchQuery ?? "startup business office",
+      {
+        ...context,
+        sceneVoiceover: scene.voiceover,
+        sceneOverlay: scene.overlay,
+        styleMode,
+      },
     ),
-    overlay: index === allScenes.length - 1 ? cta.toUpperCase() : scene.overlay,
+    overlay: compressOverlayText(
+      index === allScenes.length - 1 ? cta : scene.overlay,
+      fallback.scenes[Math.min(index, fallback.scenes.length - 1)]?.overlay ?? "MECANISMO PRÁTICO",
+    ),
   }));
   const script = deriveScriptFromScenes(resolvedScenes);
 
   return {
     ...payload,
+    styleMode,
     mode: "viral_short",
     targetDurationSeconds,
     hook: canonicalHook,
@@ -5597,9 +5930,14 @@ function buildShortFormFallbackPackage(input: {
     title: string;
     pillar: string | null;
     hook: string | null;
+    formatTemplateKey?: string | null;
+    seriesKey?: string | null;
+    notes?: string | null;
   };
   platform: string;
 }): ShortFormPackage {
+  const styleMode = inferShortStyleMode(input.item);
+  const styleProfile = buildShortStyleProfile(styleMode);
   const hook = input.item.hook?.trim()
     || `Se você errar isso em ${input.item.title.toLowerCase()}, vai perder dinheiro sem perceber.`;
   const cta = "Comente qual métrica você usaria.";
@@ -5656,17 +5994,18 @@ function buildShortFormFallbackPackage(input: {
   const platformVariants: ShortPlatformVariants = {
     youtubeShort: {
       title: titleOptions[0],
-      coverText: "ERRO QUE CUSTA CARO",
+      coverText: styleProfile.youtubeCoverText,
       caption: `${titleBase}. Ideia prática para quem quer riqueza com execução.`,
     },
     tiktok: {
       hook,
-      coverText: "PARE DE PERDER DINHEIRO NISSO",
+      coverText: styleProfile.tiktokCoverText,
       caption: `${titleBase}. Sem enrolação, sem fórmula mágica, só mecanismo real.`,
     },
   };
 
   return {
+    styleMode,
     mode: "viral_short",
     targetDurationSeconds: 40,
     hook,
@@ -10047,7 +10386,8 @@ export class AgentCore {
               "Você é roteirista de short-form content para o canal Riqueza Despertada.",
               "Sua tarefa é gerar um short com retenção forte para YouTube Shorts e TikTok.",
               "Responda somente JSON válido.",
-              "Formato: mode, targetDurationSeconds, hook, script, cta, description, titleOptions, scenes, platformVariants.",
+              "Formato: styleMode, mode, targetDurationSeconds, hook, script, cta, description, titleOptions, scenes, platformVariants.",
+              "styleMode deve ser um destes: operator, motivational, emotional, contrarian.",
               "mode deve ser viral_short.",
               "targetDurationSeconds entre 35 e 50.",
               "titleOptions deve ser array com 3 títulos curtos.",
@@ -10080,6 +10420,7 @@ export class AgentCore {
       });
 
       const parsed = JSON.parse(stripCodeFences(response.message.content ?? "")) as {
+        styleMode?: ShortStyleMode;
         mode?: string;
         targetDurationSeconds?: number;
         hook?: string;
@@ -10092,6 +10433,7 @@ export class AgentCore {
       };
 
       payload = {
+        styleMode: normalizeShortStyleMode(parsed.styleMode, payload.styleMode),
         mode: parsed.mode === "viral_short" ? parsed.mode : payload.mode,
         targetDurationSeconds: clampShortTargetDuration(parsed.targetDurationSeconds, payload.targetDurationSeconds),
         hook: typeof parsed.hook === "string" && parsed.hook.trim() ? parsed.hook.trim() : payload.hook,
@@ -10143,14 +10485,21 @@ export class AgentCore {
       });
     }
 
-    payload = validateShortFormPackage(payload, fallbackPayload);
+    payload = validateShortFormPackage(payload, fallbackPayload, {
+      title: item.title,
+      pillar: item.pillar,
+      hook: item.hook,
+      formatTemplateKey: item.formatTemplateKey,
+      seriesKey: item.seriesKey,
+      notes: item.notes,
+    });
 
     const sceneAssets = await resolveSceneAssets(
       this.pexelsMedia,
       payload.scenes,
       this.config.media.pexelsMaxScenesPerRequest,
     );
-    const productionPack = buildShortProductionPack(payload.scenes, sceneAssets);
+    const productionPack = buildShortProductionPack(payload.styleMode, payload.scenes, sceneAssets);
     const distributionPlan = buildDistributionPlan({
       item,
       channelKey: item.channelKey ?? channelKey,
@@ -10159,6 +10508,7 @@ export class AgentCore {
 
     const scriptPackage = [
       "SHORT_PACKAGE_V3",
+      `style_mode: ${payload.styleMode}`,
       `mode: ${payload.mode}`,
       `target_duration_seconds: ${payload.targetDurationSeconds}`,
       `hook: ${payload.hook}`,
@@ -10224,6 +10574,7 @@ export class AgentCore {
       requestId,
       reply: buildContentScriptReply({
         item: updated,
+        styleMode: payload.styleMode,
         mode: payload.mode,
         targetDurationSeconds: payload.targetDurationSeconds,
         headlineOptions: payload.titleOptions,
@@ -10395,7 +10746,8 @@ export class AgentCore {
                 "Você é roteirista de short-form content para o canal Riqueza Despertada.",
                 "Sua tarefa é gerar um short com retenção forte para YouTube Shorts e TikTok.",
                 "Responda somente JSON válido.",
-                "Formato: mode, targetDurationSeconds, hook, script, cta, description, titleOptions, scenes, platformVariants.",
+                "Formato: styleMode, mode, targetDurationSeconds, hook, script, cta, description, titleOptions, scenes, platformVariants.",
+                "styleMode deve ser um destes: operator, motivational, emotional, contrarian.",
                 "mode deve ser viral_short.",
                 "targetDurationSeconds entre 35 e 50.",
                 "titleOptions deve ser array com 3 títulos curtos.",
@@ -10428,6 +10780,7 @@ export class AgentCore {
         });
 
         const parsed = JSON.parse(stripCodeFences(response.message.content ?? "")) as {
+          styleMode?: ShortStyleMode;
           mode?: string;
           targetDurationSeconds?: number;
           hook?: string;
@@ -10440,6 +10793,7 @@ export class AgentCore {
         };
 
         payload = {
+          styleMode: normalizeShortStyleMode(parsed.styleMode, payload.styleMode),
           mode: parsed.mode === "viral_short" ? parsed.mode : payload.mode,
           targetDurationSeconds: clampShortTargetDuration(parsed.targetDurationSeconds, payload.targetDurationSeconds),
           hook: typeof parsed.hook === "string" && parsed.hook.trim() ? parsed.hook.trim() : payload.hook,
@@ -10491,13 +10845,20 @@ export class AgentCore {
         });
       }
 
-      payload = validateShortFormPackage(payload, fallbackPayload);
+      payload = validateShortFormPackage(payload, fallbackPayload, {
+        title: item.title,
+        pillar: item.pillar,
+        hook: item.hook,
+        formatTemplateKey: item.formatTemplateKey,
+        seriesKey: item.seriesKey,
+        notes: item.notes,
+      });
       const sceneAssets = await resolveSceneAssets(
         this.pexelsMedia,
         payload.scenes,
         this.config.media.pexelsMaxScenesPerRequest,
       );
-      const productionPack = buildShortProductionPack(payload.scenes, sceneAssets);
+      const productionPack = buildShortProductionPack(payload.styleMode, payload.scenes, sceneAssets);
       const distributionPlan = buildDistributionPlan({
         item,
         channelKey: item.channelKey ?? channelKey,
@@ -10506,6 +10867,7 @@ export class AgentCore {
 
       const scriptPackage = [
         "SHORT_PACKAGE_V3",
+        `style_mode: ${payload.styleMode}`,
         `mode: ${payload.mode}`,
         `target_duration_seconds: ${payload.targetDurationSeconds}`,
         `hook: ${payload.hook}`,

@@ -42,6 +42,7 @@ export interface ParsedShortDistributionPlan {
 
 export interface ParsedShortPackage {
   version: 2 | 3;
+  styleMode?: "operator" | "motivational" | "emotional" | "contrarian";
   mode: string;
   targetDurationSeconds: number;
   hook: string;
@@ -214,6 +215,7 @@ export function extractLatestShortPackage(notes: string | null | undefined): Par
   const platformVariants = ensurePlatformVariants();
 
   let mode = "viral_short";
+  let styleMode: ParsedShortPackage["styleMode"];
   let targetDurationSeconds = 40;
   let hook = "";
   let cta = "";
@@ -397,7 +399,11 @@ export function extractLatestShortPackage(notes: string | null | undefined): Par
       continue;
     }
 
-    if (parsed.key === "mode") {
+    if (parsed.key === "style_mode") {
+      if (parsed.value === "operator" || parsed.value === "motivational" || parsed.value === "emotional" || parsed.value === "contrarian") {
+        styleMode = parsed.value;
+      }
+    } else if (parsed.key === "mode") {
       mode = parsed.value || mode;
     } else if (parsed.key === "target_duration_seconds") {
       const parsedValue = Number.parseInt(parsed.value, 10);
@@ -428,6 +434,7 @@ export function extractLatestShortPackage(notes: string | null | undefined): Par
 
   return {
     version: latest.version,
+    styleMode,
     mode,
     targetDurationSeconds,
     hook,

@@ -1,7 +1,6 @@
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { tmpdir } from "node:os";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { AppConfig } from "../../types/config.js";
@@ -58,6 +57,61 @@ function escapeDrawtext(value: string): string {
     .replace(/,/g, "\\,")
     .replace(/%/g, "\\%")
     .replace(/\n/g, " ");
+}
+
+function normalizeComparableText(value: string): string {
+  return value
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[^\w\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function normalizeStyleMode(value: ParsedShortPackage["styleMode"]): NonNullable<ParsedShortPackage["styleMode"]> {
+  if (value === "motivational" || value === "emotional" || value === "contrarian") {
+    return value;
+  }
+  return "operator";
+}
+
+function buildStylePalette(styleMode: NonNullable<ParsedShortPackage["styleMode"]>): {
+  overlayColor: string;
+  subtitleBoxColor: string;
+  subtitleBorderColor: string;
+  ttsDirection: string;
+} {
+  switch (styleMode) {
+    case "motivational":
+      return {
+        overlayColor: "0xFACC15",
+        subtitleBoxColor: "0x1F2937@0.62",
+        subtitleBorderColor: "0x000000",
+        ttsDirection: "Entregue como estrategista de execução: firme, energético e sem soar coach.",
+      };
+    case "emotional":
+      return {
+        overlayColor: "0xFDBA74",
+        subtitleBoxColor: "0x1C1917@0.66",
+        subtitleBorderColor: "0x000000",
+        ttsDirection: "Entregue com proximidade e peso emocional controlado, sem dramatização artificial.",
+      };
+    case "contrarian":
+      return {
+        overlayColor: "0xFB7185",
+        subtitleBoxColor: "0x1F172A@0.66",
+        subtitleBorderColor: "0x000000",
+        ttsDirection: "Entregue com convicção, corte e contraste, como social media operator que quebra crença ruim.",
+      };
+    case "operator":
+    default:
+      return {
+        overlayColor: "0x7DD3FC",
+        subtitleBoxColor: "0x0F172A@0.62",
+        subtitleBorderColor: "0x000000",
+        ttsDirection: "Entregue como social media operator experiente, claro, pragmático e sem hype.",
+      };
+  }
 }
 
 function buildAtempoFilter(playbackRate: number): string {
@@ -198,6 +252,8 @@ export class ShortVideoRenderService {
     const concatManifestPath = path.join(renderDir, "concat.txt");
     const outputPath = path.join(renderDir, `${slugify(input.item.title)}-draft.mp4`);
     const manifestPath = path.join(renderDir, "manifest.json");
+    const styleMode = normalizeStyleMode(input.shortPackage.styleMode);
+    const stylePalette = buildStylePalette(styleMode);
 
     const synthesized = await this.speech.synthesize({
       text: input.shortPackage.script,
@@ -206,7 +262,7 @@ export class ShortVideoRenderService {
       instructions: [
         "Fale em português do Brasil.",
         input.shortPackage.voiceStyle ?? "voz segura, direta e pragmática.",
-        "Entregue como social media operator experiente, sem hype e sem pausas longas.",
+        stylePalette.ttsDirection,
       ].join(" "),
     });
     await writeFile(narrationRawPath, synthesized.audio);
@@ -290,7 +346,7 @@ export class ShortVideoRenderService {
       "utf8",
     );
 
-    const filter = this.buildVideoFilter(input.shortPackage.scenes);
+    const filter = this.buildVideoFilter(input.shortPackage.scenes, styleMode);
     await runCommand("ffmpeg", [
       "-y",
       "-f",
@@ -340,7 +396,7 @@ export class ShortVideoRenderService {
         return {
           order: scene.order,
           durationSeconds: scene.durationSeconds,
-          subtitle: scene.production?.subtitleLine ?? scene.overlay,
+          subtitle: scene.production?.subtitleLine ?? scene.voiceover,
           overlay: scene.overlay,
           sourceUrl: artifact?.sourceUrl,
           clipPath: artifact?.clipPath,
@@ -380,28 +436,35 @@ export class ShortVideoRenderService {
     ], this.logger.child({ scope: "render-placeholder" }));
   }
 
-  private buildVideoFilter(scenes: ParsedShortScene[]): string | undefined {
+  private buildVideoFilter(
+    scenes: ParsedShortScene[],
+    styleMode: NonNullable<ParsedShortPackage["styleMode"]>,
+  ): string | undefined {
     if (!this.fontPath) {
       return undefined;
     }
 
+    const stylePalette = buildStylePalette(styleMode);
     const timeline = buildSceneTimeline(scenes);
     const filters: string[] = [];
     for (const entry of timeline) {
-      const overlayText = escapeDrawtext(entry.scene.overlay || entry.scene.production?.subtitleLine || "");
-      const subtitleText = escapeDrawtext(entry.scene.production?.subtitleLine || entry.scene.overlay || "");
+      const rawOverlayText = entry.scene.overlay || entry.scene.production?.subtitleLine || "";
+      const rawSubtitleText = entry.scene.production?.subtitleLine || entry.scene.voiceover || "";
+      const overlayText = escapeDrawtext(rawOverlayText);
+      const subtitleText = escapeDrawtext(rawSubtitleText);
+      const duplicateText = normalizeComparableText(rawOverlayText) === normalizeComparableText(rawSubtitleText);
       const start = entry.start.toFixed(2);
       const end = Math.max(entry.start + 0.1, entry.end - 0.05).toFixed(2);
 
       if (overlayText) {
         filters.push(
-          `drawtext=fontfile='${this.fontPath.replace(/'/g, "'\\''")}':text='${overlayText}':fontcolor=white:fontsize=58:borderw=4:bordercolor=black:x=(w-text_w)/2:y=h*0.12:enable='between(t,${start},${end})'`,
+          `drawtext=fontfile='${this.fontPath.replace(/'/g, "'\\''")}':text='${overlayText}':fontcolor=${stylePalette.overlayColor}:fontsize=58:borderw=4:bordercolor=black:x=(w-text_w)/2:y=h*0.12:enable='between(t,${start},${end})'`,
         );
       }
 
-      if (subtitleText) {
+      if (subtitleText && !duplicateText) {
         filters.push(
-          `drawtext=fontfile='${this.fontPath.replace(/'/g, "'\\''")}':text='${subtitleText}':fontcolor=white:fontsize=44:borderw=3:bordercolor=black:box=1:boxcolor=black@0.35:boxborderw=18:x=(w-text_w)/2:y=h*0.82:enable='between(t,${start},${end})'`,
+          `drawtext=fontfile='${this.fontPath.replace(/'/g, "'\\''")}':text='${subtitleText}':fontcolor=white:fontsize=44:borderw=3:bordercolor=${stylePalette.subtitleBorderColor}:box=1:boxcolor=${stylePalette.subtitleBoxColor}:boxborderw=18:x=(w-text_w)/2:y=h*0.82:enable='between(t,${start},${end})'`,
         );
       }
     }

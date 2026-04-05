@@ -43,20 +43,41 @@ function normalizeQuery(value: string): string {
 
 function rewriteQuery(value: string): string {
   let next = normalizeQuery(value).toLowerCase();
-  if (next.includes("dashboard") && !/(analytics|software|saas|startup|business)/.test(next)) {
+  if (next.includes("dashboard blurred")) {
+    next = next.replace(/dashboard blurred/g, "finance analytics dashboard blurred");
+  }
+  if (next.includes("dashboard metrics")) {
+    next = next.replace(/dashboard metrics/g, "analytics dashboard metrics");
+  }
+  if (next.includes("dashboard") && !/(analytics|software|saas|startup|business|finance|sales)/.test(next)) {
     next = next.replace(/dashboard/g, "analytics dashboard");
   }
   if (next.includes("whiteboard sketch")) {
-    next = next.replace(/whiteboard sketch/g, "startup whiteboard planning");
+    next = next.replace(/whiteboard sketch/g, "business whiteboard planning");
+  }
+  if (next.includes("whiteboard finance")) {
+    next = next.replace(/whiteboard finance/g, "financial planning whiteboard");
   }
   if (next.includes("pricing table") && !/(software|saas|app)/.test(next)) {
     next = `software ${next}`;
   }
+  if (next.includes("pricing table ui")) {
+    next = next.replace(/pricing table ui/g, "saas pricing page vertical");
+  }
   if (next.includes("product onboarding") && !/(app|ui|mobile|software)/.test(next)) {
     next = next.replace(/product onboarding/g, "mobile app onboarding ui");
   }
+  if (next.includes("product onboarding ui")) {
+    next = next.replace(/product onboarding ui/g, "product onboarding ui vertical");
+  }
   if (next.includes("comment") && !/(app|mobile|ui|interface)/.test(next)) {
     next = `mobile app ${next}`;
+  }
+  if (next.includes("hands smartphone app") && !/(investment|bank|finance|saas|crm|analytics)/.test(next)) {
+    next = next.replace(/hands smartphone app/g, "mobile banking app ui");
+  }
+  if (next.includes("laptop dashboard") && !/(finance|saas|sales|analytics)/.test(next)) {
+    next = next.replace(/laptop dashboard/g, "analytics laptop dashboard");
   }
   return next;
 }
@@ -107,7 +128,9 @@ export class PexelsMediaService {
 
     const url = new URL("https://api.pexels.com/videos/search");
     url.searchParams.set("query", normalizedQuery);
-    url.searchParams.set("per_page", String(Math.max(1, Math.min(maxResults, 5))));
+    const requestedResults = Math.max(1, Math.min(maxResults, 5));
+    const searchPoolSize = Math.max(6, Math.min(15, requestedResults * 6));
+    url.searchParams.set("per_page", String(searchPoolSize));
     url.searchParams.set("orientation", "portrait");
     url.searchParams.set("size", "medium");
 
@@ -150,7 +173,7 @@ export class PexelsMediaService {
         const rightScore = rightPortraitBoost + rightDurationBoost - rightDurationPenalty;
         return rightScore - leftScore;
       })
-      .slice(0, Math.max(1, Math.min(maxResults, 5)));
+      .slice(0, requestedResults);
 
     this.logger.info("Resolved Pexels video suggestions", {
       query: normalizedQuery,
