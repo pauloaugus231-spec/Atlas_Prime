@@ -17,8 +17,9 @@ import {
   isGoogleEventCreatePrompt,
   isGoogleTaskCreatePrompt,
 } from "../../core/google-draft-utils.js";
-import { extractLatestShortPackage } from "../../core/short-video-package.js";
+import { extractLatestShortPackage, type ParsedShortPackage } from "../../core/short-video-package.js";
 import type { AppConfig } from "../../types/config.js";
+import type { ContentItemRecord } from "../../types/content-ops.js";
 import type { Logger } from "../../types/logger.js";
 import type { GoogleWorkspaceAuthService } from "../google/google-auth.js";
 import { ShortVideoRenderService } from "../media/short-video-renderer.js";
@@ -373,6 +374,13 @@ function includesAny(text: string, tokens: string[]): boolean {
   return tokens.some((token) => text.includes(token));
 }
 
+function truncateText(value: string, maxLength: number): string {
+  if (value.length <= maxLength) {
+    return value;
+  }
+  return `${value.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
+}
+
 function extractContentItemIdFromText(text: string): number | undefined {
   const match = text.match(/item\s*#?\s*(\d+)/i) ?? text.match(/#(\d+)/);
   if (!match) {
@@ -413,6 +421,121 @@ function isVideoPipelineStatusRequest(text: string): boolean {
     "o que falta para publicar video",
     "o que falta para publicar vídeo",
   ]);
+}
+
+function extractManualShortScriptPayload(text: string): { title?: string; body: string } | null {
+  const raw = text.trim();
+  if (!raw) {
+    return null;
+  }
+
+  const lines = raw.split(/\r?\n/).map((line) => line.trimEnd());
+  let explicitTitle: string | undefined;
+  let markerIndex = -1;
+
+  for (const [index, line] of lines.entries()) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      continue;
+    }
+    if (!explicitTitle) {
+      const titleMatch = trimmed.match(/^(titulo|título|title)\s*:\s*(.+)$/i);
+      if (titleMatch?.[2]?.trim()) {
+        explicitTitle = titleMatch[2].trim();
+        continue;
+      }
+    }
+    if (/^(roteiro|script|texto base|texto)\s*:\s*$/i.test(trimmed)) {
+      markerIndex = index;
+      break;
+    }
+    if (/^(roteiro|script)\s*:/i.test(trimmed)) {
+      markerIndex = index;
+      break;
+    }
+  }
+
+  let body = "";
+  if (markerIndex >= 0) {
+    const markerLine = lines[markerIndex]!.trim();
+    const inlineMatch = markerLine.match(/^(roteiro|script)\s*:\s*(.+)$/i);
+    if (inlineMatch?.[2]?.trim()) {
+      body = [inlineMatch[2].trim(), ...lines.slice(markerIndex + 1)].join("\n").trim();
+    } else {
+      body = lines.slice(markerIndex + 1).join("\n").trim();
+    }
+  } else if (lines.length >= 4 || raw.length >= 220) {
+    body = raw;
+  }
+
+  body = body.trim();
+  if (body.length < 120) {
+    return null;
+  }
+
+  return {
+    title: explicitTitle,
+    body,
+  };
+}
+
+function inferManualShortTitle(explicitTitle: string | undefined, body: string): string {
+  if (explicitTitle?.trim()) {
+    return explicitTitle.trim();
+  }
+
+  const cleaned = body
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join(" ");
+  const firstSentence = cleaned.split(/(?<=[.!?])\s+/)[0]?.trim() || cleaned;
+  const withoutQuotes = firstSentence.replace(/^["“”'`]+|["“”'`]+$/g, "").trim();
+  const words = withoutQuotes.split(/\s+/).filter(Boolean);
+  const compact = words.slice(0, 10).join(" ");
+  return compact.length >= 16 ? compact : truncateText(cleaned, 72);
+}
+
+function isManualVideoScriptRequest(text: string): boolean {
+  const normalized = normalizeIntentText(text);
+  if (!normalized || extractContentItemIdFromText(normalized)) {
+    return false;
+  }
+
+  const hasIntent = includesAny(normalized, [
+    "roteiro",
+    "script",
+    "video",
+    "vídeo",
+    "rascunho",
+    "render",
+    "montar",
+    "monte",
+    "crie um video",
+    "crie um vídeo",
+    "use este roteiro",
+    "usar este roteiro",
+  ]);
+
+  if (!hasIntent) {
+    return false;
+  }
+
+  return extractManualShortScriptPayload(text) !== null;
+}
+
+function buildManualShortScriptNotes(input: {
+  body: string;
+  title: string;
+}): string {
+  return [
+    "MANUAL_SHORT_SCRIPT",
+    `captured_at: ${new Date().toISOString()}`,
+    `title: ${input.title}`,
+    "body:",
+    input.body.trim(),
+    "END_MANUAL_SHORT_SCRIPT",
+  ].join("\n");
 }
 
 function buildVideoPipelineReadinessReply(input: {
@@ -1564,6 +1687,11 @@ export class TelegramService {
       return;
     }
 
+    if (resolvedText && isManualVideoScriptRequest(resolvedText)) {
+      await this.handleManualVideoScriptRequest(message, resolvedText);
+      return;
+    }
+
     if (isVideoPipelineStatusRequest(normalizedText)) {
       await this.handleVideoPipelineStatusRequest(message);
       return;
@@ -2125,6 +2253,183 @@ export class TelegramService {
     );
   }
 
+  private async renderVideoDraftForItem(
+    message: TelegramMessage,
+    item: ContentItemRecord,
+    shortPackage: ParsedShortPackage,
+  ): Promise<void> {
+    const rendered = await this.videoRenderer.renderDraft({
+      item,
+      shortPackage,
+    });
+
+    const nextNotes = [
+      item.notes?.trim() ?? "",
+      "",
+      "VIDEO_RENDER_DRAFT",
+      `rendered_at: ${new Date().toISOString()}`,
+      `output_path: ${rendered.outputPath}`,
+      `manifest_path: ${rendered.manifestPath}`,
+      "END_VIDEO_RENDER_DRAFT",
+    ].filter(Boolean).join("\n");
+
+    const updated = this.contentOps.updateItem({
+      id: item.id,
+      assetPath: rendered.outputPath,
+      notes: nextNotes,
+      status: "draft",
+    });
+
+    await this.api.sendVideo(message.chat.id, rendered.outputPath, {
+      caption: `Rascunho pronto: item #${updated.id} | ${updated.title}`,
+      reply_to_message_id: message.message_id,
+      supports_streaming: true,
+      duration: rendered.durationSeconds,
+      width: 1080,
+      height: 1920,
+    });
+
+    const publishDraft = this.buildYouTubePublishDraft({
+      contentItemId: updated.id,
+      filePath: rendered.outputPath,
+      title: shortPackage.platformVariants.youtubeShort.title || updated.title,
+      description: [shortPackage.description, "", shortPackage.platformVariants.youtubeShort.caption]
+        .filter((entry) => entry?.trim())
+        .join("\n\n"),
+      tags: this.buildYouTubeTags(updated),
+    });
+    const approval = this.persistPendingApproval(message.chat.id, publishDraft);
+
+    await this.sendText(
+      message.chat.id,
+      [
+        "Vídeo rascunho entregue para revisão.",
+        `- Item: #${updated.id}`,
+        `- Arquivo: ${rendered.outputPath}`,
+        `- Duração: ${rendered.durationSeconds}s`,
+        "",
+        buildCompactPendingActionReply(publishDraft) ?? "Publicação pronta para aprovação.",
+      ].join("\n"),
+      {
+        reply_to_message_id: message.message_id,
+        disable_web_page_preview: true,
+        reply_markup: approval ? buildApprovalInlineKeyboard(approval.id) : undefined,
+      },
+    );
+  }
+
+  private async handleManualVideoScriptRequest(message: TelegramMessage, rawText: string): Promise<void> {
+    const payload = extractManualShortScriptPayload(rawText);
+    if (!payload) {
+      await this.sendText(
+        message.chat.id,
+        "Não consegui isolar um roteiro utilizável. Envie `Título:` opcional e depois `Roteiro:` com o texto completo.",
+        {
+          reply_to_message_id: message.message_id,
+          disable_web_page_preview: true,
+        },
+      );
+      return;
+    }
+
+    const title = inferManualShortTitle(payload.title, payload.body);
+    const created = this.contentOps.createItem({
+      title,
+      platform: "youtube",
+      format: "short_video",
+      status: "idea",
+      channelKey: "riqueza_despertada_youtube",
+      notes: buildManualShortScriptNotes({
+        body: payload.body,
+        title,
+      }),
+      hook: payload.body.split(/(?<=[.!?])\s+/)[0]?.trim() || undefined,
+      queuePriority: 95,
+      ideaScore: 95,
+      scoreReason: "roteiro manual fornecido pelo usuário",
+    });
+
+    await this.sendText(
+      message.chat.id,
+      [
+        `Roteiro recebido. Criei o item #${created.id}.`,
+        "Vou estruturar o SHORT_PACKAGE e tentar renderizar o rascunho automaticamente.",
+      ].join("\n"),
+      {
+        reply_to_message_id: message.message_id,
+        disable_web_page_preview: true,
+      },
+    );
+
+    try {
+      const result = await this.core.runUserPrompt(`gere roteiro para o item #${created.id}`);
+      const refreshed = this.contentOps.getItemById(created.id);
+      const shortPackage = refreshed ? extractLatestShortPackage(refreshed.notes) : null;
+
+      if (!refreshed || !shortPackage) {
+        await this.sendText(
+          message.chat.id,
+          [
+            `Consegui criar o item #${created.id}, mas o pacote ainda não ficou pronto.`,
+            result.reply,
+          ].join("\n\n"),
+          {
+            reply_to_message_id: message.message_id,
+            disable_web_page_preview: true,
+          },
+        );
+        return;
+      }
+
+      if (!this.videoRenderer.isReady()) {
+        const readiness = this.videoRenderer.getReadinessReport();
+        await this.sendText(
+          message.chat.id,
+          [
+            `Item #${refreshed.id} estruturado com SHORT_PACKAGE_V3.`,
+            buildVideoPipelineReadinessReply({
+              acceptedInput: readiness.acceptedInput,
+              ttsProvider: readiness.ttsProvider === "openai" ? "OpenAI TTS" : "nenhum",
+              ttsReady: readiness.ttsReady,
+              assetsProvider: readiness.assetsProvider === "pexels" ? "Pexels" : "manual",
+              assetsReady: readiness.assetsReady,
+              canRender: readiness.canRender,
+              youtubeUploadReady: this.youtubePublisher.canUpload(),
+            }),
+          ].join("\n\n"),
+          {
+            reply_to_message_id: message.message_id,
+            disable_web_page_preview: true,
+          },
+        );
+        return;
+      }
+
+      await this.sendText(
+        message.chat.id,
+        `Pacote pronto para o item #${refreshed.id}. Vou renderizar o rascunho agora.`,
+        {
+          reply_to_message_id: message.message_id,
+          disable_web_page_preview: true,
+        },
+      );
+
+      await this.renderVideoDraftForItem(message, refreshed, shortPackage);
+    } catch (error) {
+      await this.sendText(
+        message.chat.id,
+        [
+          `Criei o item #${created.id}, mas falhei ao seguir para o pacote ou render.`,
+          buildAgentFailureMessage(error),
+        ].join("\n\n"),
+        {
+          reply_to_message_id: message.message_id,
+          disable_web_page_preview: true,
+        },
+      );
+    }
+  }
+
   private async handleVideoDraftRenderRequest(message: TelegramMessage, normalizedText: string): Promise<void> {
     const itemId = extractContentItemIdFromText(normalizedText);
     if (!itemId) {
@@ -2203,64 +2508,7 @@ export class TelegramService {
     );
 
     try {
-      const rendered = await this.videoRenderer.renderDraft({
-        item,
-        shortPackage,
-      });
-
-      const nextNotes = [
-        item.notes?.trim() ?? "",
-        "",
-        "VIDEO_RENDER_DRAFT",
-        `rendered_at: ${new Date().toISOString()}`,
-        `output_path: ${rendered.outputPath}`,
-        `manifest_path: ${rendered.manifestPath}`,
-        "END_VIDEO_RENDER_DRAFT",
-      ].filter(Boolean).join("\n");
-
-      const updated = this.contentOps.updateItem({
-        id: item.id,
-        assetPath: rendered.outputPath,
-        notes: nextNotes,
-        status: "draft",
-      });
-
-      await this.api.sendVideo(message.chat.id, rendered.outputPath, {
-        caption: `Rascunho pronto: item #${updated.id} | ${updated.title}`,
-        reply_to_message_id: message.message_id,
-        supports_streaming: true,
-        duration: rendered.durationSeconds,
-        width: 1080,
-        height: 1920,
-      });
-
-      const publishDraft = this.buildYouTubePublishDraft({
-        contentItemId: updated.id,
-        filePath: rendered.outputPath,
-        title: shortPackage.platformVariants.youtubeShort.title || updated.title,
-        description: [shortPackage.description, "", shortPackage.platformVariants.youtubeShort.caption]
-          .filter((entry) => entry?.trim())
-          .join("\n\n"),
-        tags: this.buildYouTubeTags(updated),
-      });
-      const approval = this.persistPendingApproval(message.chat.id, publishDraft);
-
-      await this.sendText(
-        message.chat.id,
-        [
-          "Vídeo rascunho entregue para revisão.",
-          `- Item: #${updated.id}`,
-          `- Arquivo: ${rendered.outputPath}`,
-          `- Duração: ${rendered.durationSeconds}s`,
-          "",
-          buildCompactPendingActionReply(publishDraft) ?? "Publicação pronta para aprovação.",
-        ].join("\n"),
-        {
-          reply_to_message_id: message.message_id,
-          disable_web_page_preview: true,
-          reply_markup: approval ? buildApprovalInlineKeyboard(approval.id) : undefined,
-        },
-      );
+      await this.renderVideoDraftForItem(message, item, shortPackage);
     } catch (error) {
       this.logger.error("Short video render failed", {
         chatId: message.chat.id,
