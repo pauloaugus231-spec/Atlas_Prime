@@ -401,6 +401,33 @@ function extractContentItemIdFromText(text: string): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
+function extractContentItemIdsFromText(text: string): number[] {
+  const unique = new Set<number>();
+
+  for (const match of text.matchAll(/#\s*(\d+)/g)) {
+    const parsed = Number.parseInt(match[1] ?? "", 10);
+    if (Number.isFinite(parsed)) {
+      unique.add(parsed);
+    }
+  }
+
+  if (unique.size > 0) {
+    return [...unique];
+  }
+
+  const normalized = normalizeIntentText(text);
+  if (/(item|itens|video|videos|vídeo|vídeos)/.test(normalized)) {
+    for (const match of normalized.matchAll(/\b(\d{1,6})\b/g)) {
+      const parsed = Number.parseInt(match[1] ?? "", 10);
+      if (Number.isFinite(parsed)) {
+        unique.add(parsed);
+      }
+    }
+  }
+
+  return [...unique];
+}
+
 function extractEditorialSlotKeyFromNotes(notes: string | null | undefined): ScheduledEditorialSlotKey | null {
   const match = notes?.match(/\[slot:(morning_finance|lunch_income|night_trends)\]/i);
   if (!match?.[1]) {
@@ -454,6 +481,37 @@ function isVideoDraftRenderRequest(text: string): boolean {
     /(gere|gerar|renderize|renderizar|monte|montar|crie|criar).*(video|vídeo).*(rascunho|draft|item)/.test(normalized)
     || /(video|vídeo).*(item).*(#\d+)/.test(normalized)
   );
+}
+
+function isBatchScriptGenerationRequest(text: string): boolean {
+  const normalized = normalizeIntentText(text);
+  if (!normalized) {
+    return false;
+  }
+
+  const ids = extractContentItemIdsFromText(text);
+  if (ids.length < 2) {
+    return false;
+  }
+
+  return (
+    includesAny(normalized, ["gere roteiro", "gerar roteiro", "gere os roteiros", "roteiro dos itens", "roteiro dos videos", "roteiro dos vídeos", "gere script", "gerar script"]) &&
+    !includesAny(normalized, ["video rascunho", "vídeo rascunho", "draft", "render"])
+  );
+}
+
+function isBatchVideoDraftRenderRequest(text: string): boolean {
+  const normalized = normalizeIntentText(text);
+  if (!normalized) {
+    return false;
+  }
+
+  const ids = extractContentItemIdsFromText(text);
+  if (ids.length < 2) {
+    return false;
+  }
+
+  return isVideoDraftRenderRequest(text);
 }
 
 function isVideoPipelineStatusRequest(text: string): boolean {
@@ -2092,8 +2150,18 @@ export class TelegramService {
       return;
     }
 
+    if (resolvedText && isBatchScriptGenerationRequest(resolvedText)) {
+      await this.handleBatchScriptGenerationRequest(message, resolvedText);
+      return;
+    }
+
     if (isVideoPipelineStatusRequest(normalizedText)) {
       await this.handleVideoPipelineStatusRequest(message);
+      return;
+    }
+
+    if (isBatchVideoDraftRenderRequest(resolvedText ?? normalizedText)) {
+      await this.handleBatchVideoDraftRenderRequest(message, resolvedText ?? normalizedText);
       return;
     }
 
@@ -2855,16 +2923,12 @@ export class TelegramService {
     }
   }
 
-  private async handleVideoDraftRenderRequest(message: TelegramMessage, normalizedText: string): Promise<void> {
-    const itemId = extractContentItemIdFromText(normalizedText);
-    if (!itemId) {
+  private async handleBatchScriptGenerationRequest(message: TelegramMessage, rawText: string): Promise<void> {
+    const itemIds = extractContentItemIdsFromText(rawText);
+    if (itemIds.length < 2) {
       await this.sendText(
         message.chat.id,
-        [
-          "Informe o item no formato `item #15` para eu renderizar o rascunho.",
-          "Entrada aceita pelo pipeline nativo: item editorial com SHORT_PACKAGE_V3 salvo.",
-          "Se quiser, peça também: `mostre o status do pipeline de vídeo`.",
-        ].join("\n"),
+        "Informe pelo menos 2 itens para o lote. Exemplo: `gere roteiro para os itens #31, #34 e #35`.",
         {
           reply_to_message_id: message.message_id,
           disable_web_page_preview: true,
@@ -2873,27 +2937,68 @@ export class TelegramService {
       return;
     }
 
-    const item = this.contentOps.getItemById(itemId);
-    if (!item) {
-      await this.sendText(
-        message.chat.id,
-        `Não encontrei o item #${itemId}.`,
-        {
-          reply_to_message_id: message.message_id,
-          disable_web_page_preview: true,
-        },
-      );
-      return;
+    await this.sendText(
+      message.chat.id,
+      `Gerando o roteiro em lote para ${itemIds.length} itens: ${itemIds.map((id) => `#${id}`).join(", ")}.`,
+      {
+        reply_to_message_id: message.message_id,
+        disable_web_page_preview: true,
+      },
+    );
+
+    const successes: Array<{ id: number; title: string }> = [];
+    const failures: Array<{ id: number; error: string }> = [];
+
+    for (const itemId of itemIds) {
+      try {
+        const resolved = await this.ensureShortPackageForItem(itemId);
+        if (!resolved.shortPackage) {
+          failures.push({
+            id: itemId,
+            error: "SHORT_PACKAGE_V3 não foi salvo",
+          });
+          continue;
+        }
+        successes.push({
+          id: resolved.item.id,
+          title: resolved.item.title,
+        });
+      } catch (error) {
+        failures.push({
+          id: itemId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
 
-    const shortPackage = extractLatestShortPackage(item.notes);
-    if (!shortPackage) {
+    await this.sendText(
+      message.chat.id,
+      [
+        `Lote de roteiro concluído.`,
+        `- Pacotes prontos: ${successes.length}`,
+        `- Falhas: ${failures.length}`,
+        ...(successes.length > 0
+          ? ["", "Itens prontos:", ...successes.map((item) => `- #${item.id} | ${item.title}`)]
+          : []),
+        ...(failures.length > 0
+          ? ["", "Itens com erro:", ...failures.map((item) => `- #${item.id} | ${item.error}`)]
+          : []),
+        "",
+        "Se quiser, agora peça os vídeos rascunho do mesmo lote em uma única mensagem.",
+      ].join("\n"),
+      {
+        reply_to_message_id: message.message_id,
+        disable_web_page_preview: true,
+      },
+    );
+  }
+
+  private async handleBatchVideoDraftRenderRequest(message: TelegramMessage, rawText: string): Promise<void> {
+    const itemIds = extractContentItemIdsFromText(rawText);
+    if (itemIds.length < 2) {
       await this.sendText(
         message.chat.id,
-        [
-          `O item #${itemId} ainda não tem SHORT_PACKAGE_V3 salvo.`,
-          "Gere o roteiro do item primeiro e depois peça o vídeo rascunho.",
-        ].join("\n"),
+        "Informe pelo menos 2 itens para o lote. Exemplo: `gere os vídeos rascunho dos itens #31, #34 e #35`.",
         {
           reply_to_message_id: message.message_id,
           disable_web_page_preview: true,
@@ -2925,7 +3030,131 @@ export class TelegramService {
 
     await this.sendText(
       message.chat.id,
-      `Renderizando o rascunho do item #${itemId}. Isso pode levar alguns minutos.`,
+      [
+        `Processando lote de vídeos rascunho para ${itemIds.length} itens: ${itemIds.map((id) => `#${id}`).join(", ")}.`,
+        "Se algum item ainda não tiver roteiro pronto, eu vou gerar o SHORT_PACKAGE antes de renderizar.",
+        "Os vídeos serão enviados um por vez para aprovação individual.",
+      ].join("\n"),
+      {
+        reply_to_message_id: message.message_id,
+        disable_web_page_preview: true,
+      },
+    );
+
+    const successes: Array<{ id: number; title: string }> = [];
+    const failures: Array<{ id: number; error: string }> = [];
+
+    for (const itemId of itemIds) {
+      try {
+        const resolved = await this.ensureShortPackageForItem(itemId);
+        if (!resolved.shortPackage) {
+          failures.push({
+            id: itemId,
+            error: "SHORT_PACKAGE_V3 não foi salvo",
+          });
+          continue;
+        }
+
+        const updated = await this.renderVideoDraftForItem({
+          chatId: message.chat.id,
+          item: resolved.item,
+          shortPackage: resolved.shortPackage,
+          replyToMessageId: message.message_id,
+        });
+        successes.push({
+          id: updated.id,
+          title: updated.title,
+        });
+      } catch (error) {
+        failures.push({
+          id: itemId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        this.logger.error("Batch short video render failed", {
+          chatId: message.chat.id,
+          itemId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    await this.sendText(
+      message.chat.id,
+      [
+        "Lote de vídeo rascunho concluído.",
+        `- Vídeos entregues: ${successes.length}`,
+        `- Falhas: ${failures.length}`,
+        ...(successes.length > 0
+          ? ["", "Vídeos enviados:", ...successes.map((item) => `- #${item.id} | ${item.title}`)]
+          : []),
+        ...(failures.length > 0
+          ? ["", "Itens com erro:", ...failures.map((item) => `- #${item.id} | ${item.error}`)]
+          : []),
+        "",
+        "Cada vídeo ficou com aprovação separada no Telegram.",
+      ].join("\n"),
+      {
+        reply_to_message_id: message.message_id,
+        disable_web_page_preview: true,
+      },
+    );
+  }
+
+  private async handleVideoDraftRenderRequest(message: TelegramMessage, normalizedText: string): Promise<void> {
+    const itemId = extractContentItemIdFromText(normalizedText);
+    if (!itemId) {
+      await this.sendText(
+        message.chat.id,
+        [
+          "Informe o item no formato `item #15` para eu renderizar o rascunho.",
+          "Entrada aceita pelo pipeline nativo: item editorial com SHORT_PACKAGE_V3 salvo.",
+          "Se quiser, peça também: `mostre o status do pipeline de vídeo`.",
+        ].join("\n"),
+        {
+          reply_to_message_id: message.message_id,
+          disable_web_page_preview: true,
+        },
+      );
+      return;
+    }
+
+    const item = this.contentOps.getItemById(itemId);
+    if (!item) {
+      await this.sendText(
+        message.chat.id,
+        `Não encontrei o item #${itemId}.`,
+        {
+          reply_to_message_id: message.message_id,
+          disable_web_page_preview: true,
+        },
+      );
+      return;
+    }
+
+    if (!this.videoRenderer.isReady()) {
+      const readiness = this.videoRenderer.getReadinessReport();
+      await this.sendText(
+        message.chat.id,
+        buildVideoPipelineReadinessReply({
+          acceptedInput: readiness.acceptedInput,
+          ttsProvider: readiness.ttsProvider === "openai" ? "OpenAI TTS" : "nenhum",
+          ttsReady: readiness.ttsReady,
+          assetsProvider: readiness.assetsProvider === "pexels" ? "Pexels" : "manual",
+          assetsReady: readiness.assetsReady,
+          canRender: readiness.canRender,
+          youtubeUploadReady: this.youtubePublisher.canUpload(),
+        }),
+        {
+          reply_to_message_id: message.message_id,
+          disable_web_page_preview: true,
+        },
+      );
+      return;
+    }
+
+    await this.sendText(
+      message.chat.id,
+      `Renderizando o rascunho do item #${itemId}. Se faltar roteiro, vou gerar o pacote primeiro. Isso pode levar alguns minutos.`,
       {
         reply_to_message_id: message.message_id,
         disable_web_page_preview: true,
@@ -2933,10 +3162,25 @@ export class TelegramService {
     );
 
     try {
+      const resolved = await this.ensureShortPackageForItem(itemId);
+      if (!resolved.shortPackage) {
+        await this.sendText(
+          message.chat.id,
+          [
+            `Não consegui estruturar o SHORT_PACKAGE_V3 para o item #${itemId}.`,
+            "Revise o item e tente gerar o roteiro novamente.",
+          ].join("\n"),
+          {
+            reply_to_message_id: message.message_id,
+            disable_web_page_preview: true,
+          },
+        );
+        return;
+      }
       await this.renderVideoDraftForItem({
         chatId: message.chat.id,
-        item,
-        shortPackage,
+        item: resolved.item,
+        shortPackage: resolved.shortPackage,
         replyToMessageId: message.message_id,
       });
     } catch (error) {
