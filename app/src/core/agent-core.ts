@@ -6443,8 +6443,12 @@ function buildDailyEditorialResearchReply(input: {
     formatTemplateKey: string | null;
     seriesKey: string | null;
     slotKey?: string | null;
+    hasScriptPackage?: boolean;
+    status?: string | null;
   }>;
   fallbackMode: boolean;
+  packageReadyCount?: number;
+  packageFailedCount?: number;
 }): string {
   const slotLabels: Record<string, string> = {
     morning_finance: "07:00 | Notícias financeiras",
@@ -6460,6 +6464,9 @@ function buildDailyEditorialResearchReply(input: {
   }
   if (input.primaryTrend) {
     lines.push(`- Trend líder: ${input.primaryTrend}`);
+  }
+  if (typeof input.packageReadyCount === "number") {
+    lines.push(`- Pacotes prontos: ${input.packageReadyCount}${typeof input.packageFailedCount === "number" ? ` | falhas: ${input.packageFailedCount}` : ""}`);
   }
   if (input.selectedTrends.length > 0) {
     lines.push("", "Trends considerados:");
@@ -6482,7 +6489,7 @@ function buildDailyEditorialResearchReply(input: {
     lines.push(`- ${slotLabels[slotKey]}:`);
     for (const item of items.slice(0, 2)) {
       lines.push(
-        `  - #${item.id} | ${item.title}${item.ideaScore != null ? ` | score: ${item.ideaScore}` : ""}${item.formatTemplateKey ? ` | formato: ${item.formatTemplateKey}` : ""}${item.seriesKey ? ` | série: ${item.seriesKey}` : ""}`,
+        `  - #${item.id} | ${item.title}${item.ideaScore != null ? ` | score: ${item.ideaScore}` : ""}${item.formatTemplateKey ? ` | formato: ${item.formatTemplateKey}` : ""}${item.seriesKey ? ` | série: ${item.seriesKey}` : ""}${item.hasScriptPackage ? " | roteiro: pronto" : item.status ? ` | status: ${item.status}` : ""}`,
       );
     }
   }
@@ -7049,16 +7056,43 @@ export class AgentCore {
       }),
     );
 
+    const packagedItemIds: number[] = [];
+    const packageFailures: Array<{ id: number; error: string }> = [];
+    for (const createdItem of savedItems) {
+      try {
+        await this.runUserPrompt(`gere roteiro para o item #${createdItem.id}`);
+        const refreshed = this.contentOps.getItemById(createdItem.id);
+        if (refreshed && hasSavedShortPackage(refreshed.notes)) {
+          packagedItemIds.push(createdItem.id);
+          continue;
+        }
+        packageFailures.push({
+          id: createdItem.id,
+          error: "pacote não foi salvo após a geração",
+        });
+      } catch (error) {
+        packageFailures.push({
+          id: createdItem.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    const refreshedItems = savedItems.map((item) => this.contentOps.getItemById(item.id) ?? item);
+
     const reply = buildDailyEditorialResearchReply({
       channelName: channel.name,
       runDate,
       primaryTrend: usableTrends[0]?.title,
       selectedTrends: usableTrends,
-      items: savedItems.map((item) => ({
+      items: refreshedItems.map((item) => ({
         ...item,
         slotKey: extractEditorialSlotKeyFromNotes(item.notes),
+        hasScriptPackage: hasSavedShortPackage(item.notes),
       })),
       fallbackMode,
+      packageReadyCount: packagedItemIds.length,
+      packageFailedCount: packageFailures.length,
     });
 
     this.contentOps.createResearchRun({
@@ -7072,6 +7106,8 @@ export class AgentCore {
         selectedTrends: usableTrends,
         fallbackMode,
         createdItemIds: savedItems.map((item) => item.id),
+        packagedItemIds,
+        packageFailures,
         slots: savedItems.map((item) => ({
           id: item.id,
           slotKey: extractEditorialSlotKeyFromNotes(item.notes) ?? null,
