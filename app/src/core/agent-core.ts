@@ -1346,6 +1346,23 @@ function isContentBatchPlanningPrompt(prompt: string): boolean {
   );
 }
 
+function isContentBatchGenerationPrompt(prompt: string): boolean {
+  const normalized = normalizeEmailAnalysisText(prompt);
+  return (
+    includesAny(normalized, [
+      "gere o lote",
+      "gerar o lote",
+      "gere os 5 pacotes",
+      "gerar os 5 pacotes",
+      "gere o pacote do lote",
+      "gere os pacotes do lote",
+      "lote completo",
+      "batch completo",
+    ]) &&
+    includesAny(normalized, ["conteudo", "conteúdo", "videos", "vídeos", "canal", "riqueza despertada", "lote"])
+  );
+}
+
 function isContentDistributionStrategyPrompt(prompt: string): boolean {
   const normalized = normalizeEmailAnalysisText(prompt);
   return includesAny(normalized, [
@@ -5278,6 +5295,31 @@ function buildContentDistributionStrategyReply(input: {
   ].join("\n");
 }
 
+function buildContentBatchGenerationReply(input: {
+  channelKey: string;
+  generated: Array<{
+    id: number;
+    title: string;
+    status: string;
+    recommendedWindow: string;
+    hasAssets: boolean;
+  }>;
+}): string {
+  if (input.generated.length === 0) {
+    return `Nao encontrei itens elegíveis para gerar o lote completo no canal ${input.channelKey}.`;
+  }
+
+  return [
+    `Lote completo gerado: ${input.generated.length} vídeos.`,
+    `- Canal: ${input.channelKey}`,
+    ...input.generated.map((item, index) =>
+      `- Ordem ${index + 1} | #${item.id} | ${item.title} | status: ${item.status} | janela: ${item.recommendedWindow} | assets: ${item.hasAssets ? "ok" : "pendente"}`,
+    ),
+    "",
+    "Próximo passo: revise o item #1 do lote e publique um vídeo por vez.",
+  ].join("\n");
+}
+
 const FORBIDDEN_SHORT_PROMISES = [
   "link da descricao",
   "link na descrição",
@@ -6606,6 +6648,15 @@ export class AgentCore {
     );
     if (directContentBatchResult) {
       return directContentBatchResult;
+    }
+    const directContentBatchGenerationResult = await this.tryRunDirectContentBatchGeneration(
+      activeUserPrompt,
+      requestId,
+      requestLogger,
+      orchestration,
+    );
+    if (directContentBatchGenerationResult) {
+      return directContentBatchGenerationResult;
     }
     const directContentDistributionStrategyResult = await this.tryRunDirectContentDistributionStrategy(
       activeUserPrompt,
@@ -10264,6 +10315,281 @@ export class AgentCore {
             {
               channelKey,
               selected: batchItems.length,
+            },
+            null,
+            2,
+          ),
+        },
+      ],
+    };
+  }
+
+  private async tryRunDirectContentBatchGeneration(
+    userPrompt: string,
+    requestId: string,
+    requestLogger: Logger,
+    orchestration: OrchestrationContext,
+  ): Promise<AgentRunResult | null> {
+    if (!isContentBatchGenerationPrompt(userPrompt)) {
+      return null;
+    }
+
+    const channelKey = extractContentChannelKey(userPrompt) ?? inferDefaultContentChannelKey(userPrompt);
+    const limit = Math.min(10, extractPromptLimit(userPrompt, 5, 10));
+    const items = this.contentOps
+      .listItems({ channelKey, limit: 20 })
+      .filter((item) => isRiquezaContentItemEligible(item))
+      .filter((item) => item.status !== "archived" && item.status !== "published")
+      .sort((left, right) => {
+        const statusWeight = (value: string) => value === "draft" ? 0 : value === "idea" ? 1 : value === "scheduled" ? 2 : 3;
+        return statusWeight(left.status) - statusWeight(right.status)
+          || (right.queuePriority ?? right.ideaScore ?? 0) - (left.queuePriority ?? left.ideaScore ?? 0)
+          || left.id - right.id;
+      })
+      .slice(0, limit);
+
+    requestLogger.info("Using direct content batch generation route", {
+      channelKey,
+      limit,
+      selected: items.length,
+    });
+
+    if (items.length === 0) {
+      return {
+        requestId,
+        reply: buildContentBatchGenerationReply({ channelKey, generated: [] }),
+        messages: buildBaseMessages(userPrompt, orchestration),
+        toolExecutions: [],
+      };
+    }
+
+    const generated: Array<{
+      id: number;
+      title: string;
+      status: string;
+      recommendedWindow: string;
+      hasAssets: boolean;
+    }> = [];
+
+    for (const [index, sourceItem] of items.entries()) {
+      const item = this.contentOps.getItemById(sourceItem.id) ?? sourceItem;
+      const formatTemplates = this.contentOps.listFormatTemplates({ activeOnly: true, limit: 20 });
+      const formatTemplate = formatTemplates.find((entry) => entry.key === item.formatTemplateKey);
+      const series = item.seriesKey
+        ? this.contentOps.listSeries({ channelKey: item.channelKey ?? undefined, limit: 20 }).find((entry) => entry.key === item.seriesKey)
+        : undefined;
+
+      const fallbackPayload = buildShortFormFallbackPackage({
+        item,
+        platform: item.platform,
+      });
+
+      let payload = { ...fallbackPayload };
+
+      try {
+        const response = await this.client.chat({
+          messages: [
+            {
+              role: "system",
+              content: [
+                "Você é roteirista de short-form content para o canal Riqueza Despertada.",
+                "Sua tarefa é gerar um short com retenção forte para YouTube Shorts e TikTok.",
+                "Responda somente JSON válido.",
+                "Formato: mode, targetDurationSeconds, hook, script, cta, description, titleOptions, scenes, platformVariants.",
+                "mode deve ser viral_short.",
+                "targetDurationSeconds entre 35 e 50.",
+                "titleOptions deve ser array com 3 títulos curtos.",
+                "Crie cenas curtas com os campos order, durationSeconds, voiceover, overlay, visualDirection, assetSearchQuery.",
+                "assetSearchQuery deve ser uma busca curta em inglês, de 2 a 5 palavras, boa para achar b-roll em banco de vídeo.",
+                "O canal é dark/faceless: assetSearchQuery deve priorizar dashboard, laptop, hands, UI, whiteboard, app interface e escritório.",
+                "Nunca use termos como presenter, speaker, host, selfie, portrait, face, webcam ou person talking.",
+                "Cada vídeo deve ter UMA ideia central. Sem lista longa, sem densidade excessiva, sem jargão demais.",
+                "O hook precisa abrir tensão real em até 2 segundos.",
+                "O CTA deve ser curto. Não invente link, checklist ou oferta que ainda não existem.",
+                "Mantenha tom pragmático, sem promessa milagrosa.",
+              ].join(" "),
+            },
+            {
+              role: "user",
+              content: [
+                `Título atual: ${item.title}`,
+                `Plataforma: ${item.platform}`,
+                `Pilar: ${item.pillar ?? ""}`,
+                `Audience: ${item.audience ?? ""}`,
+                `Hook atual: ${item.hook ?? ""}`,
+                `Notas: ${item.notes ?? ""}`,
+                `Formato editorial: ${formatTemplate ? `${formatTemplate.label} | ${formatTemplate.structure}` : item.formatTemplateKey ?? ""}`,
+                `Série: ${series ? `${series.title} | ${series.premise ?? ""}` : item.seriesKey ?? ""}`,
+                `Plataforma principal: ${item.platform}`,
+                "Objetivo: retenção forte, clareza, 1 mecanismo central, alto potencial de replay e comentário.",
+              ].join("\n"),
+            },
+          ],
+        });
+
+        const parsed = JSON.parse(stripCodeFences(response.message.content ?? "")) as {
+          mode?: string;
+          targetDurationSeconds?: number;
+          hook?: string;
+          script?: string;
+          cta?: string;
+          description?: string;
+          titleOptions?: string[];
+          scenes?: ShortScenePlan[];
+          platformVariants?: Partial<ShortPlatformVariants>;
+        };
+
+        payload = {
+          mode: parsed.mode === "viral_short" ? parsed.mode : payload.mode,
+          targetDurationSeconds: clampShortTargetDuration(parsed.targetDurationSeconds, payload.targetDurationSeconds),
+          hook: typeof parsed.hook === "string" && parsed.hook.trim() ? parsed.hook.trim() : payload.hook,
+          script: typeof parsed.script === "string" && parsed.script.trim() ? parsed.script.trim() : payload.script,
+          cta: typeof parsed.cta === "string" && parsed.cta.trim() ? parsed.cta.trim() : payload.cta,
+          description:
+            typeof parsed.description === "string" && parsed.description.trim()
+              ? parsed.description.trim()
+              : payload.description,
+          titleOptions: Array.isArray(parsed.titleOptions) && parsed.titleOptions.length > 0
+            ? parsed.titleOptions.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0).slice(0, 3)
+            : payload.titleOptions,
+          scenes: normalizeScenePlan(parsed.scenes, payload.scenes),
+          platformVariants: {
+            youtubeShort: {
+              title:
+                typeof parsed.platformVariants?.youtubeShort?.title === "string" && parsed.platformVariants.youtubeShort.title.trim()
+                  ? parsed.platformVariants.youtubeShort.title.trim()
+                  : payload.platformVariants.youtubeShort.title,
+              caption:
+                typeof parsed.platformVariants?.youtubeShort?.caption === "string" && parsed.platformVariants.youtubeShort.caption.trim()
+                  ? parsed.platformVariants.youtubeShort.caption.trim()
+                  : payload.platformVariants.youtubeShort.caption,
+              coverText:
+                typeof parsed.platformVariants?.youtubeShort?.coverText === "string" && parsed.platformVariants.youtubeShort.coverText.trim()
+                  ? parsed.platformVariants.youtubeShort.coverText.trim()
+                  : payload.platformVariants.youtubeShort.coverText,
+            },
+            tiktok: {
+              hook:
+                typeof parsed.platformVariants?.tiktok?.hook === "string" && parsed.platformVariants.tiktok.hook.trim()
+                  ? parsed.platformVariants.tiktok.hook.trim()
+                  : payload.platformVariants.tiktok.hook,
+              caption:
+                typeof parsed.platformVariants?.tiktok?.caption === "string" && parsed.platformVariants.tiktok.caption.trim()
+                  ? parsed.platformVariants.tiktok.caption.trim()
+                  : payload.platformVariants.tiktok.caption,
+              coverText:
+                typeof parsed.platformVariants?.tiktok?.coverText === "string" && parsed.platformVariants.tiktok.coverText.trim()
+                  ? parsed.platformVariants.tiktok.coverText.trim()
+                  : payload.platformVariants.tiktok.coverText,
+            },
+          },
+        };
+      } catch (error) {
+        requestLogger.warn("Content batch generation fell back to deterministic package", {
+          itemId: item.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+
+      payload = validateShortFormPackage(payload, fallbackPayload);
+      const sceneAssets = await resolveSceneAssets(
+        this.pexelsMedia,
+        payload.scenes,
+        this.config.media.pexelsMaxScenesPerRequest,
+      );
+      const productionPack = buildShortProductionPack(payload.scenes, sceneAssets);
+      const distributionPlan = buildDistributionPlan({
+        item,
+        channelKey: item.channelKey ?? channelKey,
+        orderOffset: index,
+      });
+
+      const scriptPackage = [
+        "SHORT_PACKAGE_V3",
+        `mode: ${payload.mode}`,
+        `target_duration_seconds: ${payload.targetDurationSeconds}`,
+        `hook: ${payload.hook}`,
+        `cta: ${payload.cta}`,
+        "",
+        "title_options:",
+        ...payload.titleOptions.map((title, titleIndex) => `${titleIndex + 1}. ${title}`),
+        "",
+        "scene_plan:",
+        ...payload.scenes.map((scene) =>
+          `${scene.order}. ${scene.durationSeconds}s | VO=${scene.voiceover} | overlay=${scene.overlay} | visual=${scene.visualDirection} | search=${scene.assetSearchQuery}`,
+        ),
+        "",
+        "scene_assets:",
+        ...(sceneAssets.length > 0
+          ? sceneAssets.flatMap((scene) => [
+              `scene_${scene.order}.query: ${scene.searchQuery}`,
+              ...scene.suggestions.slice(0, 2).map((asset, assetIndex) => `scene_${scene.order}.asset_${assetIndex + 1}: ${asset.videoUrl ?? asset.pageUrl}`),
+            ])
+          : ["scene_assets: no_api_results"]),
+        "",
+        "production_pack:",
+        `voice_style: ${productionPack.voiceStyle}`,
+        `edit_rhythm: ${productionPack.editRhythm}`,
+        `subtitle_style: ${productionPack.subtitleStyle}`,
+        ...productionPack.scenes.map((scene) =>
+          `scene_${scene.order}.edit: subtitle=${scene.subtitleLine} | emphasis=${scene.emphasisWords.join(", ")} | instruction=${scene.editInstruction}${scene.selectedAsset ? ` | selected_asset=${scene.selectedAsset}` : ""}`,
+        ),
+        "",
+        "distribution_plan:",
+        `primary_platform: ${distributionPlan.primaryPlatform}`,
+        `secondary_platform: ${distributionPlan.secondaryPlatform}`,
+        `recommended_window: ${distributionPlan.recommendedWindow}`,
+        `secondary_window: ${distributionPlan.secondaryWindow}`,
+        `hypothesis: ${distributionPlan.hypothesis}`,
+        `rationale: ${distributionPlan.rationale}`,
+        "",
+        "platform_variants:",
+        `youtube_short.title: ${payload.platformVariants.youtubeShort.title}`,
+        `youtube_short.cover_text: ${payload.platformVariants.youtubeShort.coverText}`,
+        `youtube_short.caption: ${payload.platformVariants.youtubeShort.caption}`,
+        `tiktok.hook: ${payload.platformVariants.tiktok.hook}`,
+        `tiktok.cover_text: ${payload.platformVariants.tiktok.coverText}`,
+        `tiktok.caption: ${payload.platformVariants.tiktok.caption}`,
+        "",
+        "script:",
+        payload.script,
+        "",
+        "description:",
+        payload.description,
+        "END_SHORT_PACKAGE_V3",
+      ].join("\n");
+
+      const updated = this.contentOps.updateItem({
+        id: item.id,
+        hook: payload.hook,
+        callToAction: payload.cta,
+        notes: item.notes ? `${item.notes}\n\n${scriptPackage}` : scriptPackage,
+        status: "draft",
+      });
+
+      generated.push({
+        id: updated.id,
+        title: updated.title,
+        status: updated.status,
+        recommendedWindow: distributionPlan.recommendedWindow,
+        hasAssets: sceneAssets.some((scene) => scene.suggestions.length > 0),
+      });
+    }
+
+    return {
+      requestId,
+      reply: buildContentBatchGenerationReply({
+        channelKey,
+        generated,
+      }),
+      messages: buildBaseMessages(userPrompt, orchestration),
+      toolExecutions: [
+        {
+          toolName: "update_content_item",
+          resultPreview: JSON.stringify(
+            {
+              channelKey,
+              generated: generated.length,
             },
             null,
             2,
