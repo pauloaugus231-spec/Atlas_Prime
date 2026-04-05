@@ -26,6 +26,9 @@ export function buildSystemPrompt(): string {
     "Ao trabalhar com email, não grave arquivos nem memória a menos que o usuário peça explicitamente.",
     "Se preparar uma resposta de email para possível envio após confirmação, deixe claro qual UID será respondido e mostre o texto final completo.",
     "Quando preparar um rascunho de resposta de email para confirmação posterior, termine com um bloco exatamente neste formato: EMAIL_REPLY_DRAFT, depois uid=<identificador>, opcionalmente subject=<texto>, depois body:, depois o texto completo, e por fim END_EMAIL_REPLY_DRAFT.",
+    "No pipeline nativo de vídeo, só declare suporte ao que estiver explicitamente disponível no runtime. Não invente ElevenLabs, CapCut .capproj, ZIP de editor ou outro fornecedor sem ferramenta, código e configuração reais.",
+    "Quando o usuário pedir vídeo, trate como fluxo operacional: entrada aceita = item editorial com SHORT_PACKAGE salvo; render = FFmpeg; assets = Pexels opcional; TTS nativo = OpenAI quando configurado; publicação = depende de autenticação e escopo válidos.",
+    "Se alguma parte do pipeline de vídeo não estiver pronta, diga exatamente o que falta, o que já está disponível e qual é o próximo passo executável. Não ofereça um fluxo que o runtime não consegue cumprir.",
     "Se faltar contexto para uma decisão, explicite a lacuna de forma objetiva e proponha a próxima ação de maior impacto.",
   ].join(" ");
 }

@@ -26,6 +26,16 @@ export interface RenderedShortVideoDraft {
   manifestPath: string;
 }
 
+export interface ShortVideoRenderReadiness {
+  canRender: boolean;
+  acceptedInput: string;
+  renderEngine: string;
+  ttsProvider: "openai" | "none";
+  ttsReady: boolean;
+  assetsProvider: "pexels" | "manual";
+  assetsReady: boolean;
+}
+
 function slugify(value: string): string {
   return value
     .normalize("NFKD")
@@ -230,6 +240,19 @@ export class ShortVideoRenderService {
 
   isReady(): boolean {
     return Boolean(this.speech);
+  }
+
+  getReadinessReport(): ShortVideoRenderReadiness {
+    const ttsReady = Boolean(this.speech);
+    return {
+      canRender: ttsReady,
+      acceptedInput: "item editorial com SHORT_PACKAGE_V3 salvo",
+      renderEngine: "ffmpeg",
+      ttsProvider: ttsReady ? "openai" : "none",
+      ttsReady,
+      assetsProvider: this.config.media.pexelsEnabled && this.config.media.pexelsApiKey ? "pexels" : "manual",
+      assetsReady: Boolean(this.config.media.pexelsEnabled && this.config.media.pexelsApiKey),
+    };
   }
 
   async renderDraft(input: {

@@ -369,6 +369,10 @@ function normalizeIntentText(value: string): string {
     .trim();
 }
 
+function includesAny(text: string, tokens: string[]): boolean {
+  return tokens.some((token) => text.includes(token));
+}
+
 function extractContentItemIdFromText(text: string): number | undefined {
   const match = text.match(/item\s*#?\s*(\d+)/i) ?? text.match(/#(\d+)/);
   if (!match) {
@@ -388,6 +392,59 @@ function isVideoDraftRenderRequest(text: string): boolean {
     /(gere|gerar|renderize|renderizar|monte|montar|crie|criar).*(video|vídeo).*(rascunho|draft|item)/.test(normalized)
     || /(video|vídeo).*(item).*(#\d+)/.test(normalized)
   );
+}
+
+function isVideoPipelineStatusRequest(text: string): boolean {
+  const normalized = normalizeIntentText(text);
+  if (!normalized) {
+    return false;
+  }
+
+  return includesAny(normalized, [
+    "pipeline de video",
+    "pipeline de vídeo",
+    "status do video",
+    "status do vídeo",
+    "diagnostique o video",
+    "diagnostique o vídeo",
+    "doctor de video",
+    "doctor de vídeo",
+    "o que falta para renderizar",
+    "o que falta para publicar video",
+    "o que falta para publicar vídeo",
+  ]);
+}
+
+function buildVideoPipelineReadinessReply(input: {
+  acceptedInput: string;
+  ttsProvider: string;
+  ttsReady: boolean;
+  assetsProvider: string;
+  assetsReady: boolean;
+  canRender: boolean;
+  youtubeUploadReady: boolean;
+}): string {
+  const nextAction = !input.ttsReady
+    ? "Configurar TTS OpenAI para o render nativo."
+    : !input.youtubeUploadReady
+      ? "Reautorizar o Google com escopo youtube.upload para publicar."
+      : "Gerar um vídeo rascunho do item desejado e revisar.";
+
+  return [
+    "Pipeline de vídeo do Atlas:",
+    `- Entrada aceita: ${input.acceptedInput}`,
+    `- TTS nativo: ${input.ttsReady ? `${input.ttsProvider} ativo` : "indisponível"}`,
+    `- Assets: ${input.assetsReady ? `${input.assetsProvider} ativo` : "manual/fallback"}`,
+    `- Render draft: ${input.canRender ? "pronto" : "bloqueado"}`,
+    `- Upload YouTube: ${input.youtubeUploadReady ? "pronto" : "bloqueado por autenticação/escopo"}`,
+    "",
+    "Regras do runtime:",
+    "- o pipeline nativo hoje não usa ElevenLabs nem CapCut .capproj",
+    "- o render nativo parte de um item editorial com SHORT_PACKAGE_V3 salvo",
+    "- se faltar uma credencial, o Atlas deve dizer isso explicitamente e não inventar outro fornecedor",
+    "",
+    `Próxima ação: ${nextAction}`,
+  ].join("\n");
 }
 
 function isExplicitSendConfirmation(text: string): boolean {
@@ -1507,6 +1564,11 @@ export class TelegramService {
       return;
     }
 
+    if (isVideoPipelineStatusRequest(normalizedText)) {
+      await this.handleVideoPipelineStatusRequest(message);
+      return;
+    }
+
     if (isVideoDraftRenderRequest(normalizedText)) {
       await this.handleVideoDraftRenderRequest(message, normalizedText);
       return;
@@ -2043,12 +2105,36 @@ export class TelegramService {
     )];
   }
 
+  private async handleVideoPipelineStatusRequest(message: TelegramMessage): Promise<void> {
+    const readiness = this.videoRenderer.getReadinessReport();
+    await this.sendText(
+      message.chat.id,
+      buildVideoPipelineReadinessReply({
+        acceptedInput: readiness.acceptedInput,
+        ttsProvider: readiness.ttsProvider === "openai" ? "OpenAI TTS" : "nenhum",
+        ttsReady: readiness.ttsReady,
+        assetsProvider: readiness.assetsProvider === "pexels" ? "Pexels" : "manual",
+        assetsReady: readiness.assetsReady,
+        canRender: readiness.canRender,
+        youtubeUploadReady: this.youtubePublisher.canUpload(),
+      }),
+      {
+        reply_to_message_id: message.message_id,
+        disable_web_page_preview: true,
+      },
+    );
+  }
+
   private async handleVideoDraftRenderRequest(message: TelegramMessage, normalizedText: string): Promise<void> {
     const itemId = extractContentItemIdFromText(normalizedText);
     if (!itemId) {
       await this.sendText(
         message.chat.id,
-        "Informe o item no formato `item #15` para eu renderizar o rascunho.",
+        [
+          "Informe o item no formato `item #15` para eu renderizar o rascunho.",
+          "Entrada aceita pelo pipeline nativo: item editorial com SHORT_PACKAGE_V3 salvo.",
+          "Se quiser, peça também: `mostre o status do pipeline de vídeo`.",
+        ].join("\n"),
         {
           reply_to_message_id: message.message_id,
           disable_web_page_preview: true,
@@ -2087,9 +2173,18 @@ export class TelegramService {
     }
 
     if (!this.videoRenderer.isReady()) {
+      const readiness = this.videoRenderer.getReadinessReport();
       await this.sendText(
         message.chat.id,
-        "O render depende de TTS OpenAI ativo. Configure OPENAI_API_KEY e tente novamente.",
+        buildVideoPipelineReadinessReply({
+          acceptedInput: readiness.acceptedInput,
+          ttsProvider: readiness.ttsProvider === "openai" ? "OpenAI TTS" : "nenhum",
+          ttsReady: readiness.ttsReady,
+          assetsProvider: readiness.assetsProvider === "pexels" ? "Pexels" : "manual",
+          assetsReady: readiness.assetsReady,
+          canRender: readiness.canRender,
+          youtubeUploadReady: this.youtubePublisher.canUpload(),
+        }),
         {
           reply_to_message_id: message.message_id,
           disable_web_page_preview: true,
