@@ -5019,6 +5019,21 @@ const FORBIDDEN_FACELESS_VISUAL_TERMS = [
   "host speaking",
 ];
 
+const FORBIDDEN_FACELESS_ASSET_TERMS = [
+  "presenter",
+  "speaker",
+  "selfie",
+  "face",
+  "facial",
+  "portrait",
+  "host",
+  "influencer",
+  "webcam",
+  "talking head",
+  "person talking",
+  "close-up",
+];
+
 function clampShortTargetDuration(value: number | undefined, fallback = 42): number {
   if (typeof value !== "number" || Number.isNaN(value)) {
     return fallback;
@@ -5140,7 +5155,16 @@ function normalizeAssetSearchQuery(value: string | undefined, fallback: string):
     .replace(/[^a-z0-9\s-]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
-  return normalized || fallback;
+  if (!normalized) {
+    return fallback;
+  }
+
+  const containsForbidden = FORBIDDEN_FACELESS_ASSET_TERMS.some((token) => normalized.includes(token));
+  if (containsForbidden) {
+    return fallback;
+  }
+
+  return normalized;
 }
 
 async function resolveSceneAssets(
@@ -5266,7 +5290,7 @@ function buildShortFormFallbackPackage(input: {
       voiceover: hook,
       overlay: "ERRO QUE CUSTA CARO",
       visualDirection: "motion text forte + dashboard desfocado + tela de trabalho com corte rápido",
-      assetSearchQuery: "worried founder laptop",
+      assetSearchQuery: "startup dashboard laptop vertical",
     },
     {
       order: 2,
@@ -5274,7 +5298,7 @@ function buildShortFormFallbackPackage(input: {
       voiceover: `A maioria olha só para ${input.item.pillar ?? "o resultado"} e ignora o mecanismo que gera caixa.`,
       overlay: "OLHAR SÓ O RESULTADO É ARMADILHA",
       visualDirection: "b-roll de dashboard, vendas, computador ou rotina de trabalho",
-      assetSearchQuery: "startup dashboard office",
+      assetSearchQuery: "startup whiteboard planning vertical",
     },
     {
       order: 3,
@@ -5282,7 +5306,7 @@ function buildShortFormFallbackPackage(input: {
       voiceover: `A regra prática aqui é simples: ${titleBase.toLowerCase()} precisa aumentar valor percebido sem travar conversão.`,
       overlay: "REGRA PRÁTICA",
       visualDirection: "close em planilha, pricing page, números ou cards de oferta",
-      assetSearchQuery: "pricing page saas",
+      assetSearchQuery: "saas analytics dashboard vertical",
     },
     {
       order: 4,
@@ -5290,15 +5314,15 @@ function buildShortFormFallbackPackage(input: {
       voiceover: "Se não melhorar retenção, margem ou conversão, não é estratégia. É só ruído.",
       overlay: "SEM RETENÇÃO, MARGEM OU CONVERSÃO = RUÍDO",
       visualDirection: "comparação antes/depois, gráficos simples, setas e cortes secos",
-      assetSearchQuery: "growth analytics chart",
+      assetSearchQuery: "software pricing page vertical",
     },
     {
       order: 5,
       durationSeconds: 6,
       voiceover: cta,
       overlay: "COMENTE SUA MÉTRICA",
-      visualDirection: "encerramento com texto forte, interface de comentário e tela limpa para CTA",
-      assetSearchQuery: "social media comment phone",
+      visualDirection: "encerramento com texto forte, interface de comentário, app vertical e tela limpa",
+      assetSearchQuery: "mobile app comments vertical",
     },
   ];
   const script = scenes.map((scene) => scene.voiceover).join(" ");
@@ -9676,6 +9700,8 @@ export class AgentCore {
               "titleOptions deve ser array com 3 títulos curtos.",
               "Crie cenas curtas com os campos order, durationSeconds, voiceover, overlay, visualDirection, assetSearchQuery.",
               "assetSearchQuery deve ser uma busca curta em inglês, de 2 a 5 palavras, boa para achar b-roll em banco de vídeo.",
+              "O canal é dark/faceless: assetSearchQuery deve priorizar dashboard, laptop, hands, UI, whiteboard, app interface e escritório.",
+              "Nunca use termos como presenter, speaker, host, selfie, portrait, face, webcam ou person talking.",
               "Cada vídeo deve ter UMA ideia central. Sem lista longa, sem densidade excessiva, sem jargão demais.",
               "O hook precisa abrir tensão real em até 2 segundos.",
               "O CTA deve ser curto. Não invente link, checklist ou oferta que ainda não existem.",
