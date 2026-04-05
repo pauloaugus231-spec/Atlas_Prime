@@ -10209,7 +10209,7 @@ export class AgentCore {
       "",
       "description:",
       payload.description,
-      "END_SHORT_PACKAGE_V2",
+      "END_SHORT_PACKAGE_V3",
     ].join("\n");
 
     const updated = this.contentOps.updateItem({

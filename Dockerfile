@@ -12,7 +12,7 @@ ENV APP_HOME=/app \
     NODE_ENV=development
 
 RUN apt-get update -o Acquire::Retries=3 -o Acquire::http::Timeout=30 \
-  && apt-get install -y --fix-missing --no-install-recommends bash ca-certificates curl git tini \
+  && apt-get install -y --fix-missing --no-install-recommends bash ca-certificates curl ffmpeg fontconfig fonts-dejavu-core git tini \
   && rm -rf /var/lib/apt/lists/*
 
 RUN groupadd --system --gid 10001 agente \

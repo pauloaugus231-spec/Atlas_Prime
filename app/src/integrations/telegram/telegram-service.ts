@@ -1,5 +1,6 @@
 import { setTimeout as delay } from "node:timers/promises";
 import type { AgentCore } from "../../core/agent-core.js";
+import type { ContentOpsStore } from "../../core/content-ops.js";
 import type {
   PendingGoogleEventDeleteBatchDraft,
   PendingGoogleEventDeleteDraft,
@@ -16,10 +17,14 @@ import {
   isGoogleEventCreatePrompt,
   isGoogleTaskCreatePrompt,
 } from "../../core/google-draft-utils.js";
+import { extractLatestShortPackage } from "../../core/short-video-package.js";
 import type { AppConfig } from "../../types/config.js";
 import type { Logger } from "../../types/logger.js";
+import type { GoogleWorkspaceAuthService } from "../google/google-auth.js";
+import { ShortVideoRenderService } from "../media/short-video-renderer.js";
 import { OpenAiAudioTranscriptionService } from "../openai/audio-transcription.js";
 import { OpenAiScheduleImportService } from "../openai/schedule-import.js";
+import { YouTubePublisherService } from "../youtube/youtube-publisher.js";
 import type { ApprovalInboxStore } from "../../core/approval-inbox.js";
 import type { WhatsAppMessageStore } from "../../core/whatsapp-message-store.js";
 import { matchPersonalCalendarTerms } from "../../core/calendar-relevance.js";
@@ -60,9 +65,20 @@ interface PendingWhatsAppReplyDraft {
   persona?: string;
 }
 
+interface PendingYouTubePublishDraft {
+  kind: "youtube_publish";
+  contentItemId: number;
+  filePath: string;
+  title: string;
+  description: string;
+  privacyStatus: "private" | "public" | "unlisted";
+  tags: string[];
+}
+
 type PendingActionDraft =
   | PendingEmailDraft
   | PendingWhatsAppReplyDraft
+  | PendingYouTubePublishDraft
   | PendingGoogleTaskDraft
   | PendingGoogleEventDraft
   | PendingGoogleEventUpdateDraft
@@ -351,6 +367,27 @@ function normalizeIntentText(value: string): string {
     .replace(/\p{Diacritic}/gu, "")
     .toLowerCase()
     .trim();
+}
+
+function extractContentItemIdFromText(text: string): number | undefined {
+  const match = text.match(/item\s*#?\s*(\d+)/i) ?? text.match(/#(\d+)/);
+  if (!match) {
+    return undefined;
+  }
+  const parsed = Number.parseInt(match[1] ?? "", 10);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function isVideoDraftRenderRequest(text: string): boolean {
+  const normalized = normalizeIntentText(text);
+  if (!normalized) {
+    return false;
+  }
+
+  return (
+    /(gere|gerar|renderize|renderizar|monte|montar|crie|criar).*(video|vídeo).*(rascunho|draft|item)/.test(normalized)
+    || /(video|vídeo).*(item).*(#\d+)/.test(normalized)
+  );
 }
 
 function isExplicitSendConfirmation(text: string): boolean {
@@ -672,6 +709,29 @@ function parsePendingActionDraftPayload(payload: string): PendingActionDraft | u
       };
     }
 
+    if (
+      parsed.kind === "youtube_publish" &&
+      typeof parsed.contentItemId === "number" &&
+      typeof parsed.filePath === "string" &&
+      typeof parsed.title === "string" &&
+      typeof parsed.description === "string"
+    ) {
+      return {
+        kind: "youtube_publish",
+        contentItemId: parsed.contentItemId,
+        filePath: parsed.filePath,
+        title: parsed.title,
+        description: parsed.description,
+        privacyStatus:
+          parsed.privacyStatus === "private" || parsed.privacyStatus === "unlisted" || parsed.privacyStatus === "public"
+            ? parsed.privacyStatus
+            : "public",
+        tags: Array.isArray(parsed.tags)
+          ? parsed.tags.map((value) => String(value).trim()).filter(Boolean).slice(0, 10)
+          : [],
+      };
+    }
+
     if (parsed.kind === "google_task" && typeof parsed.title === "string") {
       return parsed as unknown as PendingGoogleTaskDraft;
     }
@@ -933,6 +993,15 @@ function buildCompactPendingActionReply(draft: PendingActionDraft): string | und
     ].filter(Boolean).join("\n");
   }
 
+  if (draft.kind === "youtube_publish") {
+    return [
+      `Upload do YouTube pronto para o item #${draft.contentItemId}.`,
+      `Título: ${draft.title}`,
+      `Privacidade: ${draft.privacyStatus}`,
+      "Use `Enviar` para publicar no YouTube.",
+    ].join("\n");
+  }
+
   return undefined;
 }
 
@@ -957,6 +1026,9 @@ function buildPendingActionSubject(draft: PendingActionDraft): string {
   }
   if (draft.kind === "google_event_import_batch") {
     return `Importação de agenda: ${draft.events.length} evento(s)`;
+  }
+  if (draft.kind === "youtube_publish") {
+    return `YouTube: item #${draft.contentItemId}`;
   }
   return `Cancelamento em lote (${draft.events.length} eventos)`;
 }
@@ -1164,12 +1236,16 @@ export class TelegramService {
   private readonly audioTranscription?: OpenAiAudioTranscriptionService;
   private readonly scheduleImport?: OpenAiScheduleImportService;
   private readonly whatsapp: EvolutionApiClient;
+  private readonly videoRenderer: ShortVideoRenderService;
+  private readonly youtubePublisher: YouTubePublisherService;
   private backgroundJobsStarted = false;
 
   constructor(
     private readonly config: AppConfig,
     private readonly logger: Logger,
     private readonly core: AgentCore,
+    private readonly contentOps: ContentOpsStore,
+    googleAuth: GoogleWorkspaceAuthService,
     private readonly api: TelegramApi,
     private readonly approvals: ApprovalInboxStore,
     private readonly whatsappMessages: WhatsAppMessageStore,
@@ -1178,6 +1254,14 @@ export class TelegramService {
     this.whatsapp = new EvolutionApiClient(
       this.config.whatsapp,
       this.logger.child({ scope: "whatsapp-evolution" }),
+    );
+    this.videoRenderer = new ShortVideoRenderService(
+      this.config,
+      this.logger.child({ scope: "short-video-renderer" }),
+    );
+    this.youtubePublisher = new YouTubePublisherService(
+      googleAuth,
+      this.logger.child({ scope: "youtube-publisher" }),
     );
     if (this.config.llm.provider === "openai" && this.config.llm.apiKey) {
       this.audioTranscription = new OpenAiAudioTranscriptionService(
@@ -1420,6 +1504,11 @@ export class TelegramService {
 
     if (importAttachment) {
       await this.handleScheduleImportAttachment(message, importAttachment, normalizedText || undefined);
+      return;
+    }
+
+    if (isVideoDraftRenderRequest(normalizedText)) {
+      await this.handleVideoDraftRenderRequest(message, normalizedText);
       return;
     }
 
@@ -1833,6 +1922,24 @@ export class TelegramService {
     }
 
     if (parsed.action === "edit") {
+      if (draft.kind === "youtube_publish") {
+        await this.api.answerCallbackQuery(callback.id, {
+          text: "Para ajustar o vídeo, gere um novo rascunho.",
+        }).catch(() => undefined);
+        await this.sendText(
+          chatId,
+          [
+            "A publicação do YouTube não tem edição inline neste MVP.",
+            "Se quiser ajustar roteiro, título ou vídeo, gere um novo rascunho do item.",
+          ].join("\n"),
+          {
+            reply_to_message_id: callback.message?.message_id,
+            disable_web_page_preview: true,
+          },
+        );
+        return;
+      }
+
       this.pendingActionDrafts.set(chatId, draft);
       await this.api.answerCallbackQuery(callback.id, {
         text: "Envie a alteração em texto. Vou atualizar o rascunho.",
@@ -1894,6 +2001,191 @@ export class TelegramService {
     }
   }
 
+  private buildYouTubePublishDraft(input: {
+    contentItemId: number;
+    filePath: string;
+    title: string;
+    description: string;
+    tags: string[];
+  }): PendingYouTubePublishDraft {
+    return {
+      kind: "youtube_publish",
+      contentItemId: input.contentItemId,
+      filePath: input.filePath,
+      title: input.title,
+      description: input.description,
+      privacyStatus: "public",
+      tags: input.tags.slice(0, 10),
+    };
+  }
+
+  private buildYouTubeTags(item: {
+    title: string;
+    pillar: string | null;
+    channelKey: string | null;
+  }): string[] {
+    const base = [
+      "riqueza despertada",
+      "dinheiro",
+      "negocios",
+      "saaS",
+      "marketing",
+      item.pillar ?? "",
+      item.channelKey ?? "",
+      ...item.title.split(/[^A-Za-zÀ-ÿ0-9]+/g),
+    ];
+
+    return [...new Set(
+      base
+        .map((entry) => normalizeIntentText(entry))
+        .filter((entry) => entry.length >= 3)
+        .slice(0, 10),
+    )];
+  }
+
+  private async handleVideoDraftRenderRequest(message: TelegramMessage, normalizedText: string): Promise<void> {
+    const itemId = extractContentItemIdFromText(normalizedText);
+    if (!itemId) {
+      await this.sendText(
+        message.chat.id,
+        "Informe o item no formato `item #15` para eu renderizar o rascunho.",
+        {
+          reply_to_message_id: message.message_id,
+          disable_web_page_preview: true,
+        },
+      );
+      return;
+    }
+
+    const item = this.contentOps.getItemById(itemId);
+    if (!item) {
+      await this.sendText(
+        message.chat.id,
+        `Não encontrei o item #${itemId}.`,
+        {
+          reply_to_message_id: message.message_id,
+          disable_web_page_preview: true,
+        },
+      );
+      return;
+    }
+
+    const shortPackage = extractLatestShortPackage(item.notes);
+    if (!shortPackage) {
+      await this.sendText(
+        message.chat.id,
+        [
+          `O item #${itemId} ainda não tem SHORT_PACKAGE_V3 salvo.`,
+          "Gere o roteiro do item primeiro e depois peça o vídeo rascunho.",
+        ].join("\n"),
+        {
+          reply_to_message_id: message.message_id,
+          disable_web_page_preview: true,
+        },
+      );
+      return;
+    }
+
+    if (!this.videoRenderer.isReady()) {
+      await this.sendText(
+        message.chat.id,
+        "O render depende de TTS OpenAI ativo. Configure OPENAI_API_KEY e tente novamente.",
+        {
+          reply_to_message_id: message.message_id,
+          disable_web_page_preview: true,
+        },
+      );
+      return;
+    }
+
+    await this.sendText(
+      message.chat.id,
+      `Renderizando o rascunho do item #${itemId}. Isso pode levar alguns minutos.`,
+      {
+        reply_to_message_id: message.message_id,
+        disable_web_page_preview: true,
+      },
+    );
+
+    try {
+      const rendered = await this.videoRenderer.renderDraft({
+        item,
+        shortPackage,
+      });
+
+      const nextNotes = [
+        item.notes?.trim() ?? "",
+        "",
+        "VIDEO_RENDER_DRAFT",
+        `rendered_at: ${new Date().toISOString()}`,
+        `output_path: ${rendered.outputPath}`,
+        `manifest_path: ${rendered.manifestPath}`,
+        "END_VIDEO_RENDER_DRAFT",
+      ].filter(Boolean).join("\n");
+
+      const updated = this.contentOps.updateItem({
+        id: item.id,
+        assetPath: rendered.outputPath,
+        notes: nextNotes,
+        status: "draft",
+      });
+
+      await this.api.sendVideo(message.chat.id, rendered.outputPath, {
+        caption: `Rascunho pronto: item #${updated.id} | ${updated.title}`,
+        reply_to_message_id: message.message_id,
+        supports_streaming: true,
+        duration: rendered.durationSeconds,
+        width: 1080,
+        height: 1920,
+      });
+
+      const publishDraft = this.buildYouTubePublishDraft({
+        contentItemId: updated.id,
+        filePath: rendered.outputPath,
+        title: shortPackage.platformVariants.youtubeShort.title || updated.title,
+        description: [shortPackage.description, "", shortPackage.platformVariants.youtubeShort.caption]
+          .filter((entry) => entry?.trim())
+          .join("\n\n"),
+        tags: this.buildYouTubeTags(updated),
+      });
+      const approval = this.persistPendingApproval(message.chat.id, publishDraft);
+
+      await this.sendText(
+        message.chat.id,
+        [
+          "Vídeo rascunho entregue para revisão.",
+          `- Item: #${updated.id}`,
+          `- Arquivo: ${rendered.outputPath}`,
+          `- Duração: ${rendered.durationSeconds}s`,
+          "",
+          buildCompactPendingActionReply(publishDraft) ?? "Publicação pronta para aprovação.",
+        ].join("\n"),
+        {
+          reply_to_message_id: message.message_id,
+          disable_web_page_preview: true,
+          reply_markup: approval ? buildApprovalInlineKeyboard(approval.id) : undefined,
+        },
+      );
+    } catch (error) {
+      this.logger.error("Short video render failed", {
+        chatId: message.chat.id,
+        itemId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      await this.sendText(
+        message.chat.id,
+        [
+          `Falha ao renderizar o item #${itemId}.`,
+          `Detalhe: ${error instanceof Error ? error.message : String(error)}`,
+        ].join("\n"),
+        {
+          reply_to_message_id: message.message_id,
+          disable_web_page_preview: true,
+        },
+      );
+    }
+  }
+
   private async executePendingActionDraft(
     pendingDraft: PendingActionDraft,
   ): Promise<{ ok: boolean; reply: string; rawResult: unknown }> {
@@ -1904,6 +2196,16 @@ export class TelegramService {
             body: pendingDraft.body,
             ...(pendingDraft.subjectOverride ? { subject_override: pendingDraft.subjectOverride } : {}),
           })
+        : pendingDraft.kind === "youtube_publish"
+          ? {
+              rawResult: await this.youtubePublisher.uploadShort({
+                filePath: pendingDraft.filePath,
+                title: pendingDraft.title,
+                description: pendingDraft.description,
+                privacyStatus: pendingDraft.privacyStatus,
+                tags: pendingDraft.tags,
+              }),
+            }
         : pendingDraft.kind === "whatsapp_reply"
           ? {
               rawResult: await this.whatsapp.sendText({
@@ -2034,6 +2336,8 @@ export class TelegramService {
       : undefined;
     const ok = pendingDraft.kind === "whatsapp_reply"
       ? true
+      : pendingDraft.kind === "youtube_publish"
+        ? true
       : pendingDraft.kind === "google_event_import_batch"
         ? Array.isArray(record?.created) && record.created.length > 0
         : record?.ok === true;
@@ -2041,6 +2345,14 @@ export class TelegramService {
       ? ok
         ? buildEmailSendSuccessMessage(execution.rawResult, pendingDraft.uid)
         : buildEmailSendFailureMessage(execution.rawResult)
+      : pendingDraft.kind === "youtube_publish"
+        ? [
+            "Vídeo publicado no YouTube com sucesso.",
+            `Item: #${pendingDraft.contentItemId}`,
+            `Título: ${pendingDraft.title}`,
+            `Privacidade: ${pendingDraft.privacyStatus}`,
+            record?.url ? `URL: ${String(record.url)}` : undefined,
+          ].filter(Boolean).join("\n")
       : pendingDraft.kind === "whatsapp_reply"
         ? buildWhatsAppSendSuccessMessage(execution.rawResult, pendingDraft)
         : pendingDraft.kind === "google_task"
@@ -2074,6 +2386,18 @@ export class TelegramService {
         direction: "outbound",
         text: pendingDraft.replyText,
       });
+    }
+
+    if (ok && pendingDraft.kind === "youtube_publish") {
+      const item = this.contentOps.getItemById(pendingDraft.contentItemId);
+      if (item) {
+        const rawReply = record?.url ? `\n\nYOUTUBE_PUBLISH_RESULT\nurl: ${String(record.url)}\nvideo_id: ${String(record.videoId ?? "")}\nEND_YOUTUBE_PUBLISH_RESULT` : "";
+        this.contentOps.updateItem({
+          id: item.id,
+          status: "published",
+          notes: `${item.notes?.trim() ?? ""}${rawReply}`,
+        });
+      }
     }
 
     return {
