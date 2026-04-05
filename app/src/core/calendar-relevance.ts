@@ -11,6 +11,8 @@ export const PERSONAL_CALENDAR_INCLUDE_TERMS: Record<string, string[]> = {
     "espaco de cuidados",
     "espaço de cuidados",
     "banho",
+    "micro adulto",
+    "equipe micro adulto",
     "adulto",
     "equipe adulto",
   ],

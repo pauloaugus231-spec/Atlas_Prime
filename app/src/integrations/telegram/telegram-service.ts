@@ -1419,6 +1419,7 @@ export class TelegramService {
   private readonly videoRenderer: ShortVideoRenderService;
   private readonly youtubePublisher: YouTubePublisherService;
   private backgroundJobsStarted = false;
+  private lastMorningBriefRunKey?: string;
 
   constructor(
     private readonly config: AppConfig,
@@ -1507,6 +1508,7 @@ export class TelegramService {
     }
     this.backgroundJobsStarted = true;
     void this.runDailyEditorialResearchLoop(signal);
+    void this.runWeekdayMorningBriefLoop(signal);
   }
 
   private async runDailyEditorialResearchLoop(signal: AbortSignal): Promise<void> {
@@ -1544,6 +1546,43 @@ export class TelegramService {
         }
       } catch (error) {
         this.logger.error("Daily editorial research loop failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+
+      await delay(60_000, undefined, { signal }).catch(() => undefined);
+    }
+  }
+
+  private async runWeekdayMorningBriefLoop(signal: AbortSignal): Promise<void> {
+    const timezone = this.config.google.defaultTimezone || "America/Sao_Paulo";
+    while (!signal.aborted) {
+      try {
+        const now = new Date();
+        const local = new Date(now.toLocaleString("en-US", { timeZone: timezone }));
+        const weekday = local.getDay();
+        const hour = local.getHours();
+        const minute = local.getMinutes();
+        const runKey = `${local.getFullYear()}-${String(local.getMonth() + 1).padStart(2, "0")}-${String(local.getDate()).padStart(2, "0")}`;
+
+        if (weekday >= 1 && weekday <= 5 && hour === 6 && minute >= 30 && minute < 35 && this.lastMorningBriefRunKey !== runKey) {
+          const result = await this.core.runUserPrompt("gere meu briefing da manhã");
+          for (const chatId of this.config.telegram.allowedUserIds) {
+            try {
+              await this.sendText(chatId, result.reply, {
+                disable_web_page_preview: true,
+              });
+            } catch (error) {
+              this.logger.warn("Failed to send weekday morning brief", {
+                chatId,
+                error: error instanceof Error ? error.message : String(error),
+              });
+            }
+          }
+          this.lastMorningBriefRunKey = runKey;
+        }
+      } catch (error) {
+        this.logger.error("Weekday morning brief loop failed", {
           error: error instanceof Error ? error.message : String(error),
         });
       }

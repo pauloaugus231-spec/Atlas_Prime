@@ -3033,6 +3033,21 @@ function buildOperationalBriefReply(input: {
   return lines.join("\n");
 }
 
+function classifyBriefPeriod(iso: string | null | undefined, timezone: string): "manha" | "tarde" | "noite" | "sem_horario" {
+  if (!iso) {
+    return "sem_horario";
+  }
+  const local = new Date(new Date(iso).toLocaleString("en-US", { timeZone: timezone }));
+  const hour = local.getHours();
+  if (hour < 12) {
+    return "manha";
+  }
+  if (hour < 18) {
+    return "tarde";
+  }
+  return "noite";
+}
+
 function buildMorningBriefReply(input: {
   timezone: string;
   events: Array<{ account: string; summary: string; start: string | null; location?: string; matchedTerms?: string[] }>;
@@ -3100,13 +3115,35 @@ function buildMorningBriefReply(input: {
 
   lines.push("", "Agenda de hoje:");
   if (input.events.length > 0) {
-    for (const event of input.events.slice(0, 3)) {
-      lines.push(
-        `- ${formatBriefDateTime(event.start, input.timezone)} — ${truncateBriefText(event.summary)}${event.location ? ` — ${summarizeCalendarLocation(event.location)}` : ""} — ${event.account}${event.matchedTerms?.length ? " — seu" : ""}`,
-      );
+    const groupedEvents = {
+      manha: input.events.filter((event) => classifyBriefPeriod(event.start, input.timezone) === "manha"),
+      tarde: input.events.filter((event) => classifyBriefPeriod(event.start, input.timezone) === "tarde"),
+      noite: input.events.filter((event) => classifyBriefPeriod(event.start, input.timezone) === "noite"),
+    };
+
+    if (groupedEvents.manha.length > 0) {
+      lines.push("- Manhã:");
+      for (const event of groupedEvents.manha.slice(0, 3)) {
+        lines.push(
+          `  - ${formatBriefDateTime(event.start, input.timezone)} — ${truncateBriefText(event.summary)}${event.location ? ` — ${summarizeCalendarLocation(event.location)}` : ""} — ${event.account}${event.matchedTerms?.length ? ` — termos: ${event.matchedTerms.join(", ")}` : ""}`,
+        );
+      }
     }
-    if (input.events.length > 3) {
-      lines.push(`- ... e mais ${input.events.length - 3} compromisso(s).`);
+    if (groupedEvents.tarde.length > 0) {
+      lines.push("- Tarde:");
+      for (const event of groupedEvents.tarde.slice(0, 3)) {
+        lines.push(
+          `  - ${formatBriefDateTime(event.start, input.timezone)} — ${truncateBriefText(event.summary)}${event.location ? ` — ${summarizeCalendarLocation(event.location)}` : ""} — ${event.account}${event.matchedTerms?.length ? ` — termos: ${event.matchedTerms.join(", ")}` : ""}`,
+        );
+      }
+    }
+    if (groupedEvents.noite.length > 0) {
+      lines.push("- Noite:");
+      for (const event of groupedEvents.noite.slice(0, 3)) {
+        lines.push(
+          `  - ${formatBriefDateTime(event.start, input.timezone)} — ${truncateBriefText(event.summary)}${event.location ? ` — ${summarizeCalendarLocation(event.location)}` : ""} — ${event.account}${event.matchedTerms?.length ? ` — termos: ${event.matchedTerms.join(", ")}` : ""}`,
+        );
+      }
     }
   } else {
     lines.push("- Nenhum compromisso pessoal hoje.");
@@ -5329,8 +5366,8 @@ function buildDistributionPlan(input: {
   orderOffset?: number;
 }): DistributionPlan {
   const isTikTokPrimary = input.channelKey?.includes("tiktok") || input.item.platform === "tiktok";
-  const primaryWindows = isTikTokPrimary ? ["11:45 BRT", "18:30 BRT", "21:00 BRT"] : ["07:30 BRT", "12:30 BRT", "20:00 BRT"];
-  const secondaryWindows = isTikTokPrimary ? ["20:00 BRT", "12:30 BRT", "07:30 BRT"] : ["12:30 BRT", "20:00 BRT", "11:45 BRT"];
+  const primaryWindows = isTikTokPrimary ? ["07:00 BRT", "12:00 BRT", "20:00 BRT"] : ["07:00 BRT", "12:00 BRT", "20:00 BRT"];
+  const secondaryWindows = isTikTokPrimary ? ["12:00 BRT", "20:00 BRT", "07:00 BRT"] : ["12:00 BRT", "20:00 BRT", "07:00 BRT"];
   const index = Math.max(0, input.orderOffset ?? 0) % primaryWindows.length;
   return {
     primaryPlatform: isTikTokPrimary ? "TikTok" : "YouTube Shorts",
@@ -6405,9 +6442,15 @@ function buildDailyEditorialResearchReply(input: {
     ideaScore: number | null;
     formatTemplateKey: string | null;
     seriesKey: string | null;
+    slotKey?: string | null;
   }>;
   fallbackMode: boolean;
 }): string {
+  const slotLabels: Record<string, string> = {
+    morning_finance: "07:00 | Notícias financeiras",
+    lunch_income: "12:00 | Renda extra",
+    night_trends: "20:00 | Trend adaptado",
+  };
   const lines = [
     `Research Kernel ${input.channelName} | ${input.runDate}`,
     `- Modo: ${input.fallbackMode ? "evergreen fallback" : "trend-first"}`,
@@ -6426,14 +6469,80 @@ function buildDailyEditorialResearchReply(input: {
       );
     }
   }
-  lines.push("", "Pautas sugeridas:");
-  for (const item of input.items.slice(0, 5)) {
-    lines.push(
-      `- #${item.id} | ${item.title}${item.ideaScore != null ? ` | score: ${item.ideaScore}` : ""}${item.formatTemplateKey ? ` | formato: ${item.formatTemplateKey}` : ""}${item.seriesKey ? ` | série: ${item.seriesKey}` : ""}`,
-    );
+  lines.push("", "Grade editorial do dia:");
+  const groupedItems = [
+    ["morning_finance", input.items.filter((item) => item.slotKey === "morning_finance")],
+    ["lunch_income", input.items.filter((item) => item.slotKey === "lunch_income")],
+    ["night_trends", input.items.filter((item) => item.slotKey === "night_trends")],
+  ] as const;
+  for (const [slotKey, items] of groupedItems) {
+    if (items.length === 0) {
+      continue;
+    }
+    lines.push(`- ${slotLabels[slotKey]}:`);
+    for (const item of items.slice(0, 2)) {
+      lines.push(
+        `  - #${item.id} | ${item.title}${item.ideaScore != null ? ` | score: ${item.ideaScore}` : ""}${item.formatTemplateKey ? ` | formato: ${item.formatTemplateKey}` : ""}${item.seriesKey ? ` | série: ${item.seriesKey}` : ""}`,
+      );
+    }
   }
-  lines.push("", "Próxima ação: revise a fila e aprove o primeiro item forte.");
+  lines.push("", "Próxima ação: aprove 1 opção por faixa horária. Se você não confirmar, o Atlas deve priorizar a melhor pontuada.");
   return lines.join("\n");
+}
+
+type EditorialSlotKey = "morning_finance" | "lunch_income" | "night_trends";
+
+function getEditorialSlotLabel(slotKey: EditorialSlotKey): string {
+  switch (slotKey) {
+    case "morning_finance":
+      return "07:00 | Notícias financeiras";
+    case "lunch_income":
+      return "12:00 | Renda extra";
+    case "night_trends":
+      return "20:00 | Trend adaptado";
+  }
+}
+
+function normalizeEditorialSlotKey(value: string | undefined, fallback: EditorialSlotKey): EditorialSlotKey {
+  if (value === "morning_finance" || value === "lunch_income" || value === "night_trends") {
+    return value;
+  }
+  return fallback;
+}
+
+function buildDailyEditorialSlotFallbackIdeas(input: {
+  fallbackMode: boolean;
+  usableTrendTitle?: string;
+}): Array<{
+  slotKey: EditorialSlotKey;
+  seed: string;
+}> {
+  return [
+    {
+      slotKey: "morning_finance",
+      seed: input.fallbackMode
+        ? "notícias financeiras com impacto prático no bolso, juros, dólar, inflação, Selic, emprego e negócios"
+        : `notícia financeira do dia com impacto prático: ${input.usableTrendTitle ?? "mercado e bolso"}`,
+    },
+    {
+      slotKey: "lunch_income",
+      seed: "meios reais de renda extra, serviços simples, micro-ofertas, vendas locais, renda com celular e execução prática",
+    },
+    {
+      slotKey: "night_trends",
+      seed: input.fallbackMode
+        ? "trend adaptado para dinheiro, negócio, execução e oportunidade prática"
+        : `trend mais pesquisado adaptado para renda, dinheiro ou execução: ${input.usableTrendTitle ?? "trend do dia"}`,
+    },
+  ];
+}
+
+function extractEditorialSlotKeyFromNotes(notes: string | null | undefined): EditorialSlotKey | undefined {
+  const match = notes?.match(/\[slot:(morning_finance|lunch_income|night_trends)\]/i);
+  if (!match?.[1]) {
+    return undefined;
+  }
+  return normalizeEditorialSlotKey(match[1], "morning_finance");
 }
 
 function buildCaseNotesReply(notes: Array<{
@@ -6676,7 +6785,7 @@ export class AgentCore {
     const formats = this.contentOps.listFormatTemplates({ activeOnly: true, limit: 20 });
     const hooks = this.contentOps.listHookTemplates({ limit: 20 });
     const series = this.contentOps.listSeries({ channelKey: channel.key, limit: 20 });
-    const ideasLimit = Math.min(Math.max(input?.ideasLimit ?? 5, 1), 8);
+    const ideasLimit = 6;
 
     const shortlistFallback: Array<{
       title: string;
@@ -6803,6 +6912,7 @@ export class AgentCore {
     }
 
     type GeneratedIdea = {
+      slotKey?: EditorialSlotKey;
       title: string;
       hook?: string;
       pillar?: string;
@@ -6812,17 +6922,26 @@ export class AgentCore {
       notes?: string;
     };
 
-    let generatedIdeas: GeneratedIdea[] = buildFallbackEditorialIdeas({
-      channelName: channel.name,
-      seed: fallbackMode ? "formas reais de ganhar dinheiro, SaaS e produtos digitais" : usableTrends[0]?.title,
-      formatKeys: formats.map((item) => item.key),
-      seriesKeys: series.map((item) => item.key),
-      limit: ideasLimit,
-    }).map((idea) => ({
-      ...idea,
-      audience: channel.persona ?? idea.audience,
-      notes: `${idea.notes}${fallbackMode ? " | fallback evergreen por baixa aderência do trend." : ""}`,
-    }));
+    const slotFallbacks = buildDailyEditorialSlotFallbackIdeas({
+      fallbackMode,
+      usableTrendTitle: usableTrends[0]?.title,
+    });
+    let generatedIdeas: GeneratedIdea[] = slotFallbacks.flatMap((slot) =>
+      buildFallbackEditorialIdeas({
+        channelName: channel.name,
+        seed: slot.seed,
+        formatKeys: formats.map((item) => item.key),
+        seriesKeys: series.map((item) => item.key),
+        limit: 2,
+      }).map((idea) => ({
+        ...idea,
+        slotKey: slot.slotKey,
+        audience: channel.persona ?? idea.audience,
+        notes: [`[slot:${slot.slotKey}]`, idea.notes, fallbackMode ? "fallback evergreen por baixa aderência do trend." : ""]
+          .filter(Boolean)
+          .join(" | "),
+      })),
+    ).slice(0, ideasLimit);
 
     try {
       const response = await this.client.chat({
@@ -6835,7 +6954,11 @@ export class AgentCore {
               "Não use futebol, celebridade, entretenimento ou curiosidade sem mecanismo claro de receita, caixa, venda, negócio ou patrimônio.",
               "Responda somente JSON válido.",
               "Formato: {\"ideas\":[...]}",
-              "Cada item: title, hook, pillar, audience, formatTemplateKey, seriesKey, notes.",
+              "Cada item: slotKey, title, hook, pillar, audience, formatTemplateKey, seriesKey, notes.",
+              "Gere exatamente 6 ideias: 2 para morning_finance, 2 para lunch_income, 2 para night_trends.",
+              "morning_finance = notícia financeira ou de negócios com impacto prático no bolso ou no mercado.",
+              "lunch_income = meios reais de renda extra, serviços, micro-ofertas, execução simples e aplicável.",
+              "night_trends = trend do dia adaptado para dinheiro, negócio, renda ou execução. Se não houver trend útil, use evergreen com cara de trend.",
               "Se os trends não servirem, crie pautas evergreen fortes para riqueza, renda, SaaS e execução.",
               "Não gere placeholders nem títulos genéricos.",
               "Use apenas formatTemplateKey e seriesKey que existirem no contexto.",
@@ -6850,7 +6973,12 @@ export class AgentCore {
               `Persona: ${channel.persona ?? ""}`,
               `Objetivo: ${channel.primaryGoal ?? ""}`,
               `Modo: ${fallbackMode ? "evergreen fallback" : "trend-first"}`,
-              `Quantidade: ${ideasLimit}`,
+              `Quantidade: 6`,
+              "",
+              "Slots obrigatórios:",
+              "- morning_finance => publicação das 07:00",
+              "- lunch_income => publicação das 12:00",
+              "- night_trends => publicação das 20:00",
               "",
               "Formatos disponíveis:",
               ...formats.map((item) => `- ${item.key}: ${item.label} | ${item.structure}`),
@@ -6884,15 +7012,18 @@ export class AgentCore {
       if (rawIdeas.length > 0) {
         generatedIdeas = rawIdeas
           .filter((item) => item && typeof item.title === "string" && item.title.trim().length > 0)
-          .slice(0, ideasLimit)
+          .slice(0, 6)
           .map((item) => ({
+            slotKey: normalizeEditorialSlotKey(item.slotKey, "morning_finance"),
             title: item.title.trim(),
             hook: typeof item.hook === "string" ? item.hook.trim() : undefined,
             pillar: typeof item.pillar === "string" ? item.pillar.trim() : undefined,
             audience: item.audience ?? channel.persona ?? "público buscando riqueza e renda",
             formatTemplateKey: item.formatTemplateKey,
             seriesKey: item.seriesKey,
-            notes: typeof item.notes === "string" ? item.notes.trim() : undefined,
+            notes: [`[slot:${normalizeEditorialSlotKey(item.slotKey, "morning_finance")}]`, typeof item.notes === "string" ? item.notes.trim() : ""]
+              .filter(Boolean)
+              .join(" | "),
           }));
       }
     } catch (error) {
@@ -6923,7 +7054,10 @@ export class AgentCore {
       runDate,
       primaryTrend: usableTrends[0]?.title,
       selectedTrends: usableTrends,
-      items: savedItems,
+      items: savedItems.map((item) => ({
+        ...item,
+        slotKey: extractEditorialSlotKeyFromNotes(item.notes),
+      })),
       fallbackMode,
     });
 
@@ -6938,6 +7072,10 @@ export class AgentCore {
         selectedTrends: usableTrends,
         fallbackMode,
         createdItemIds: savedItems.map((item) => item.id),
+        slots: savedItems.map((item) => ({
+          id: item.id,
+          slotKey: extractEditorialSlotKeyFromNotes(item.notes) ?? null,
+        })),
       }),
     });
 
