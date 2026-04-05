@@ -103,6 +103,7 @@ export interface MediaConfig {
   klingTextToVideoModel: string;
   klingDirectGenerationEnabled: boolean;
   klingRequestTimeoutSeconds: number;
+  klingMaxPollSeconds: number;
 }
 
 export interface SafeExecConfig {

@@ -43,14 +43,14 @@ function parseEnvFile(filePath: string): Record<string, string> {
 function mergeEnvWithFiles(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const candidates = [
     env.ENV_FILE?.trim(),
-    path.resolve(process.cwd(), ".env.local"),
     path.resolve(process.cwd(), ".env"),
-    path.resolve(process.cwd(), "..", ".env.local"),
+    path.resolve(process.cwd(), ".env.local"),
     path.resolve(process.cwd(), "..", ".env"),
-    path.resolve(process.cwd(), "..", "..", ".env.local"),
+    path.resolve(process.cwd(), "..", ".env.local"),
     path.resolve(process.cwd(), "..", "..", ".env"),
-    env.APP_HOME ? path.resolve(env.APP_HOME, ".env.local") : undefined,
+    path.resolve(process.cwd(), "..", "..", ".env.local"),
     env.APP_HOME ? path.resolve(env.APP_HOME, ".env") : undefined,
+    env.APP_HOME ? path.resolve(env.APP_HOME, ".env.local") : undefined,
   ].filter((value): value is string => Boolean(value));
 
   const fileEnv = candidates.reduce<Record<string, string>>((acc, candidate) => {
@@ -418,6 +418,7 @@ function buildMediaConfig(env: NodeJS.ProcessEnv): MediaConfig {
     klingTextToVideoModel: env.KLING_TEXT_TO_VIDEO_MODEL?.trim() || "kling-v1",
     klingDirectGenerationEnabled: parseBoolean(env.KLING_DIRECT_GENERATION_ENABLED, false),
     klingRequestTimeoutSeconds: parsePositiveInteger(env.KLING_REQUEST_TIMEOUT_SECONDS, 90),
+    klingMaxPollSeconds: parsePositiveInteger(env.KLING_MAX_POLL_SECONDS, 300),
   };
 }
 
