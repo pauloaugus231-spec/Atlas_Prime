@@ -69,6 +69,10 @@ function escapeDrawtext(value: string): string {
     .replace(/\n/g, " ");
 }
 
+function buildEnableBetween(start: string, end: string): string {
+  return `'between(t\\,${start}\\,${end})'`;
+}
+
 function normalizeComparableText(value: string): string {
   return value
     .toLowerCase()
@@ -478,16 +482,17 @@ export class ShortVideoRenderService {
       const duplicateText = normalizeComparableText(rawOverlayText) === normalizeComparableText(rawSubtitleText);
       const start = entry.start.toFixed(2);
       const end = Math.max(entry.start + 0.1, entry.end - 0.05).toFixed(2);
+      const enableExpr = buildEnableBetween(start, end);
 
       if (overlayText) {
         filters.push(
-          `drawtext=fontfile='${this.fontPath.replace(/'/g, "'\\''")}':text='${overlayText}':fontcolor=${stylePalette.overlayColor}:fontsize=58:borderw=4:bordercolor=black:x=(w-text_w)/2:y=h*0.12:enable='between(t,${start},${end})'`,
+          `drawtext=fontfile='${this.fontPath.replace(/'/g, "'\\''")}':text='${overlayText}':fontcolor=${stylePalette.overlayColor}:fontsize=58:borderw=4:bordercolor=black:x=(w-text_w)/2:y=h*0.12:enable=${enableExpr}`,
         );
       }
 
       if (subtitleText && !duplicateText) {
         filters.push(
-          `drawtext=fontfile='${this.fontPath.replace(/'/g, "'\\''")}':text='${subtitleText}':fontcolor=white:fontsize=44:borderw=3:bordercolor=${stylePalette.subtitleBorderColor}:box=1:boxcolor=${stylePalette.subtitleBoxColor}:boxborderw=18:x=(w-text_w)/2:y=h*0.82:enable='between(t,${start},${end})'`,
+          `drawtext=fontfile='${this.fontPath.replace(/'/g, "'\\''")}':text='${subtitleText}':fontcolor=white:fontsize=44:borderw=3:bordercolor=${stylePalette.subtitleBorderColor}:box=1:boxcolor=${stylePalette.subtitleBoxColor}:boxborderw=18:x=(w-text_w)/2:y=h*0.82:enable=${enableExpr}`,
         );
       }
     }
