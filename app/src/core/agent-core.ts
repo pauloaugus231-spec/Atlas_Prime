@@ -5009,6 +5009,16 @@ const FORBIDDEN_SHORT_PROMISES = [
   "confira o checklist",
 ];
 
+const FORBIDDEN_FACELESS_VISUAL_TERMS = [
+  "apresentador",
+  "rosto",
+  "close-up",
+  "selfie",
+  "camera talking head",
+  "talking head",
+  "host speaking",
+];
+
 function clampShortTargetDuration(value: number | undefined, fallback = 42): number {
   if (typeof value !== "number" || Number.isNaN(value)) {
     return fallback;
@@ -5104,6 +5114,15 @@ function stripForbiddenShortPromises(text: string): string {
     .trim();
 }
 
+function normalizeFacelessVisualDirection(text: string | undefined, fallback: string): string {
+  const base = normalizeShortLine(text, fallback);
+  const normalized = normalizeEmailAnalysisText(base);
+  if (includesAny(normalized, FORBIDDEN_FACELESS_VISUAL_TERMS)) {
+    return fallback;
+  }
+  return base;
+}
+
 function normalizeShortLine(text: string | undefined, fallback: string): string {
   if (typeof text !== "string" || text.trim().length === 0) {
     return fallback;
@@ -5168,7 +5187,11 @@ function validateShortFormPackage(payload: ShortFormPackage, fallback: ShortForm
   const desiredTarget = clampShortTargetDuration(payload.targetDurationSeconds, fallback.targetDurationSeconds);
   const rebalancedScenes = rebalanceSceneDurations(normalizedScenes, desiredTarget);
   const targetDurationSeconds = sumSceneDurations(rebalancedScenes);
-  const cta = normalizeShortLine(payload.cta, fallback.cta);
+  const requestedCta = normalizeShortLine(payload.cta, fallback.cta);
+  const cta = requestedCta.toLowerCase().includes("inscreva")
+    ? "Comente qual métrica você usaria."
+    : requestedCta;
+  const canonicalHook = normalizeShortLine(payload.platformVariants.tiktok.hook || payload.hook, fallback.hook);
   const scenes = rebalancedScenes.map((scene, index, allScenes) => {
     if (index === allScenes.length - 1) {
       return {
@@ -5192,12 +5215,18 @@ function validateShortFormPackage(payload: ShortFormPackage, fallback: ShortForm
     ...payload,
     mode: "viral_short",
     targetDurationSeconds,
-    hook: normalizeShortLine(payload.hook, fallback.hook),
+    hook: canonicalHook,
     cta,
     script,
     description: normalizeShortLine(payload.description, fallback.description),
     titleOptions: payload.titleOptions.length > 0 ? payload.titleOptions.map((item) => normalizeShortLine(item, fallback.titleOptions[0]!)).slice(0, 3) : fallback.titleOptions,
-    scenes: resolvedScenes,
+    scenes: resolvedScenes.map((scene, index) => ({
+      ...scene,
+      visualDirection: normalizeFacelessVisualDirection(
+        scene.visualDirection,
+        fallback.scenes[Math.min(index, fallback.scenes.length - 1)]?.visualDirection ?? "motion text, dashboard, mãos, tela e b-roll de trabalho",
+      ),
+    })),
     platformVariants: {
       youtubeShort: {
         title: normalizeShortLine(payload.platformVariants.youtubeShort.title, fallback.platformVariants.youtubeShort.title),
@@ -5205,7 +5234,7 @@ function validateShortFormPackage(payload: ShortFormPackage, fallback: ShortForm
         coverText: normalizeShortLine(payload.platformVariants.youtubeShort.coverText, fallback.platformVariants.youtubeShort.coverText),
       },
       tiktok: {
-        hook: normalizeShortLine(payload.platformVariants.tiktok.hook, fallback.platformVariants.tiktok.hook),
+        hook: canonicalHook,
         caption: normalizeShortLine(payload.platformVariants.tiktok.caption, fallback.platformVariants.tiktok.caption),
         coverText: normalizeShortLine(payload.platformVariants.tiktok.coverText, fallback.platformVariants.tiktok.coverText),
       },
@@ -5223,7 +5252,7 @@ function buildShortFormFallbackPackage(input: {
 }): ShortFormPackage {
   const hook = input.item.hook?.trim()
     || `Se você errar isso em ${input.item.title.toLowerCase()}, vai perder dinheiro sem perceber.`;
-  const cta = "Comente \"parte 2\" se quiser a continuação prática.";
+  const cta = "Comente qual métrica você usaria.";
   const titleBase = input.item.title.trim();
   const titleOptions = [
     titleBase,
@@ -5236,7 +5265,7 @@ function buildShortFormFallbackPackage(input: {
       durationSeconds: 7,
       voiceover: hook,
       overlay: "ERRO QUE CUSTA CARO",
-      visualDirection: "texto forte em tela + corte rápido + destaque visual no problema",
+      visualDirection: "motion text forte + dashboard desfocado + tela de trabalho com corte rápido",
       assetSearchQuery: "worried founder laptop",
     },
     {
@@ -5267,8 +5296,8 @@ function buildShortFormFallbackPackage(input: {
       order: 5,
       durationSeconds: 6,
       voiceover: cta,
-      overlay: "QUER A PARTE 2?",
-      visualDirection: "encerramento com texto forte e tela limpa para CTA",
+      overlay: "COMENTE SUA MÉTRICA",
+      visualDirection: "encerramento com texto forte, interface de comentário e tela limpa para CTA",
       assetSearchQuery: "social media comment phone",
     },
   ];
