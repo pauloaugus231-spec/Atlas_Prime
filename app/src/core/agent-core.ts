@@ -1327,6 +1327,41 @@ function isContentScriptGenerationPrompt(prompt: string): boolean {
   );
 }
 
+function isContentBatchPlanningPrompt(prompt: string): boolean {
+  const normalized = normalizeEmailAnalysisText(prompt);
+  return (
+    includesAny(normalized, [
+      "lote inicial",
+      "batch inicial",
+      "monte o lote",
+      "monte um lote",
+      "gere lote",
+      "planeje lote",
+      "lote de videos",
+      "lote de vídeos",
+      "batch de videos",
+      "batch de vídeos",
+    ]) &&
+    includesAny(normalized, ["conteudo", "conteúdo", "videos", "vídeos", "canal", "riqueza despertada"])
+  );
+}
+
+function isContentDistributionStrategyPrompt(prompt: string): boolean {
+  const normalized = normalizeEmailAnalysisText(prompt);
+  return includesAny(normalized, [
+    "estrategia de distribuicao",
+    "estratégia de distribuição",
+    "estrategia de postagem",
+    "estratégia de postagem",
+    "ordem de publicacao",
+    "ordem de publicação",
+    "horario de postagem",
+    "horário de postagem",
+    "slot de postagem",
+    "janela de postagem",
+  ]);
+}
+
 function isDailyEditorialResearchPrompt(prompt: string): boolean {
   const normalized = normalizeEmailAnalysisText(prompt);
   return (
@@ -4923,6 +4958,8 @@ function buildContentScriptReply(input: {
     searchQuery: string;
     suggestions: PexelsVideoSuggestion[];
   }>;
+  productionPack: ShortProductionPack;
+  distributionPlan: DistributionPlan;
 }): string {
   return [
     `Roteiro pronto para o item #${input.item.id}.`,
@@ -4953,6 +4990,22 @@ function buildContentScriptReply(input: {
         ])
       : ["- Sem assets resolvidos por API. Use a busca por cena para procurar b-roll manualmente."]),
     "",
+    "Production Pack V3:",
+    `- Voz: ${input.productionPack.voiceStyle}`,
+    `- Ritmo de edição: ${input.productionPack.editRhythm}`,
+    `- Legendas: ${input.productionPack.subtitleStyle}`,
+    ...input.productionPack.scenes.map((scene) =>
+      `- Cena ${scene.order} | legenda: ${scene.subtitleLine}${scene.emphasisWords.length > 0 ? ` | destaques: ${scene.emphasisWords.join(", ")}` : ""} | edição: ${scene.editInstruction}${scene.selectedAsset ? ` | asset principal: ${scene.selectedAsset}` : ""}`,
+    ),
+    "",
+    "Strategy Layer:",
+    `- Plataforma principal: ${input.distributionPlan.primaryPlatform}`,
+    `- Plataforma secundária: ${input.distributionPlan.secondaryPlatform}`,
+    `- Janela sugerida: ${input.distributionPlan.recommendedWindow}`,
+    `- Janela secundária: ${input.distributionPlan.secondaryWindow}`,
+    `- Hipótese: ${input.distributionPlan.hypothesis}`,
+    `- Racional: ${input.distributionPlan.rationale}`,
+    "",
     "Variações por plataforma:",
     `- YouTube Shorts | título: ${input.platformVariants.youtubeShort.title} | capa: ${input.platformVariants.youtubeShort.coverText} | caption: ${input.platformVariants.youtubeShort.caption}`,
     `- TikTok | hook: ${input.platformVariants.tiktok.hook} | capa: ${input.platformVariants.tiktok.coverText} | caption: ${input.platformVariants.tiktok.caption}`,
@@ -4971,6 +5024,28 @@ type ShortScenePlan = {
   overlay: string;
   visualDirection: string;
   assetSearchQuery: string;
+};
+
+type ShortProductionPack = {
+  voiceStyle: string;
+  editRhythm: string;
+  subtitleStyle: string;
+  scenes: Array<{
+    order: number;
+    subtitleLine: string;
+    emphasisWords: string[];
+    editInstruction: string;
+    selectedAsset?: string;
+  }>;
+};
+
+type DistributionPlan = {
+  primaryPlatform: string;
+  secondaryPlatform: string;
+  recommendedWindow: string;
+  secondaryWindow: string;
+  hypothesis: string;
+  rationale: string;
 };
 
 type ShortPlatformVariants = {
@@ -4997,6 +5072,156 @@ type ShortFormPackage = {
   scenes: ShortScenePlan[];
   platformVariants: ShortPlatformVariants;
 };
+
+function buildSceneSubtitleLine(scene: ShortScenePlan): string {
+  const candidate = scene.overlay.trim() || scene.voiceover.trim();
+  return truncateBriefText(candidate.replace(/\s+/g, " "), 72);
+}
+
+function extractEmphasisWords(text: string): string[] {
+  return [...new Set(
+    text
+      .split(/[^a-zA-ZÀ-ÿ0-9]+/)
+      .map((item) => item.trim())
+      .filter((item) => item.length >= 4)
+      .slice(0, 3),
+  )];
+}
+
+function buildSceneEditInstruction(scene: ShortScenePlan): string {
+  if (scene.durationSeconds <= 4) {
+    return "1 corte rápido + zoom leve no texto; segure 2 a 3 frames no punchline.";
+  }
+  if (scene.durationSeconds <= 8) {
+    return "2 cortes secos; trocar plano no meio da frase e manter texto na zona segura vertical.";
+  }
+  return "3 blocos visuais: abertura, reforço e fechamento; manter cortes a cada 2 a 3 segundos.";
+}
+
+function inferDistributionHypothesis(item: {
+  formatTemplateKey?: string | null;
+  pillar?: string | null;
+  hook?: string | null;
+}): string {
+  const normalized = normalizeEmailAnalysisText(`${item.formatTemplateKey ?? ""}\n${item.pillar ?? ""}\n${item.hook ?? ""}`);
+  if (normalized.includes("belief_breaker") || normalized.includes("mentira") || normalized.includes("erro")) {
+    return "Gancho contrarian deve elevar comentário e retenção nos 3 primeiros segundos.";
+  }
+  if (normalized.includes("short_narrative") || normalized.includes("historia") || normalized.includes("história")) {
+    return "Narrativa curta deve elevar retenção média e replay.";
+  }
+  return "Mecanismo prático + promessa objetiva deve puxar saves e comentários.";
+}
+
+function buildDistributionPlan(input: {
+  item: {
+    platform: string;
+    formatTemplateKey?: string | null;
+    pillar?: string | null;
+    hook?: string | null;
+  };
+  channelKey?: string | null;
+  orderOffset?: number;
+}): DistributionPlan {
+  const isTikTokPrimary = input.channelKey?.includes("tiktok") || input.item.platform === "tiktok";
+  const primaryWindows = isTikTokPrimary ? ["11:45 BRT", "18:30 BRT", "21:00 BRT"] : ["07:30 BRT", "12:30 BRT", "20:00 BRT"];
+  const secondaryWindows = isTikTokPrimary ? ["20:00 BRT", "12:30 BRT", "07:30 BRT"] : ["12:30 BRT", "20:00 BRT", "11:45 BRT"];
+  const index = Math.max(0, input.orderOffset ?? 0) % primaryWindows.length;
+  return {
+    primaryPlatform: isTikTokPrimary ? "TikTok" : "YouTube Shorts",
+    secondaryPlatform: isTikTokPrimary ? "YouTube Shorts" : "TikTok",
+    recommendedWindow: primaryWindows[index]!,
+    secondaryWindow: secondaryWindows[index]!,
+    hypothesis: inferDistributionHypothesis(input.item),
+    rationale: isTikTokPrimary
+      ? "TikTok tende a responder melhor a janela almoço/noite; usar YouTube como segunda distribuição com adaptação leve."
+      : "YouTube Shorts tende a performar melhor em rotina manhã/almoço/noite; TikTok entra como redistribuição do mesmo núcleo.",
+  };
+}
+
+function buildShortProductionPack(
+  scenes: ShortScenePlan[],
+  sceneAssets: Array<{
+    order: number;
+    searchQuery: string;
+    suggestions: PexelsVideoSuggestion[];
+  }>,
+): ShortProductionPack {
+  return {
+    voiceStyle: "voz segura, direta, sem hype e com ritmo de operador de growth",
+    editRhythm: "hook muito rápido; cortes secos a cada 2-3s; reforço visual sem rosto; fechamento limpo para comentário",
+    subtitleStyle: "legendas curtas, alto contraste, 3-6 palavras por bloco, destacando mecanismo e métrica",
+    scenes: scenes.map((scene) => {
+      const selectedAsset = sceneAssets.find((entry) => entry.order === scene.order)?.suggestions[0]?.videoUrl;
+      return {
+        order: scene.order,
+        subtitleLine: buildSceneSubtitleLine(scene),
+        emphasisWords: extractEmphasisWords(scene.overlay),
+        editInstruction: buildSceneEditInstruction(scene),
+        selectedAsset,
+      };
+    }),
+  };
+}
+
+function hasSavedShortPackage(notes: string | null | undefined): boolean {
+  if (!notes) {
+    return false;
+  }
+  return /SHORT_PACKAGE_V[23]/.test(notes);
+}
+
+function buildContentBatchReply(input: {
+  channelKey: string;
+  items: Array<{
+    id: number;
+    title: string;
+    status: string;
+    queuePriority: number | null;
+    ideaScore: number | null;
+    hasScriptPackage: boolean;
+    recommendedWindow: string;
+    hypothesis: string;
+  }>;
+}): string {
+  if (input.items.length === 0) {
+    return `Nao encontrei itens suficientes para montar um lote no canal ${input.channelKey}.`;
+  }
+
+  return [
+    `Lote inicial montado: ${input.items.length} vídeos.`,
+    `- Canal: ${input.channelKey}`,
+    "- Estratégia: publicar 1 vídeo por vez, priorizando clareza de hipótese e constância diária.",
+    ...input.items.map((item, index) =>
+      `- Ordem ${index + 1} | #${item.id} | ${item.title} | status: ${item.status} | score: ${item.ideaScore ?? item.queuePriority ?? "-"} | janela: ${item.recommendedWindow} | pacote: ${item.hasScriptPackage ? "pronto" : "pendente"} | hipótese: ${truncateBriefText(item.hypothesis, 96)}`,
+    ),
+    "",
+    "Próximo passo: gere ou revise o roteiro do primeiro item e publique um por vez.",
+  ].join("\n");
+}
+
+function buildContentDistributionStrategyReply(input: {
+  channelKey: string;
+  items: Array<{
+    id: number;
+    title: string;
+    recommendedWindow: string;
+    secondaryWindow: string;
+    hypothesis: string;
+    rationale: string;
+  }>;
+}): string {
+  if (input.items.length === 0) {
+    return `Nao encontrei itens para sugerir distribuição no canal ${input.channelKey}.`;
+  }
+
+  return [
+    `Estratégia de distribuição para ${input.channelKey}.`,
+    ...input.items.map((item, index) =>
+      `- Ordem ${index + 1} | #${item.id} | ${item.title} | janela principal: ${item.recommendedWindow} | janela secundária: ${item.secondaryWindow} | hipótese: ${truncateBriefText(item.hypothesis, 92)} | racional: ${truncateBriefText(item.rationale, 96)}`,
+    ),
+  ].join("\n");
+}
 
 const FORBIDDEN_SHORT_PROMISES = [
   "link da descricao",
@@ -6317,6 +6542,24 @@ export class AgentCore {
     );
     if (directContentScriptResult) {
       return directContentScriptResult;
+    }
+    const directContentBatchResult = await this.tryRunDirectContentBatchPlanning(
+      activeUserPrompt,
+      requestId,
+      requestLogger,
+      orchestration,
+    );
+    if (directContentBatchResult) {
+      return directContentBatchResult;
+    }
+    const directContentDistributionStrategyResult = await this.tryRunDirectContentDistributionStrategy(
+      activeUserPrompt,
+      requestId,
+      requestLogger,
+      orchestration,
+    );
+    if (directContentDistributionStrategyResult) {
+      return directContentDistributionStrategyResult;
     }
     const directContentChannelsResult = await this.tryRunDirectContentChannels(
       activeUserPrompt,
@@ -9801,9 +10044,15 @@ export class AgentCore {
       payload.scenes,
       this.config.media.pexelsMaxScenesPerRequest,
     );
+    const productionPack = buildShortProductionPack(payload.scenes, sceneAssets);
+    const distributionPlan = buildDistributionPlan({
+      item,
+      channelKey: item.channelKey ?? channelKey,
+      orderOffset: 0,
+    });
 
     const scriptPackage = [
-      "SHORT_PACKAGE_V2",
+      "SHORT_PACKAGE_V3",
       `mode: ${payload.mode}`,
       `target_duration_seconds: ${payload.targetDurationSeconds}`,
       `hook: ${payload.hook}`,
@@ -9824,6 +10073,22 @@ export class AgentCore {
             ...scene.suggestions.slice(0, 2).map((asset, index) => `scene_${scene.order}.asset_${index + 1}: ${asset.videoUrl ?? asset.pageUrl}`),
           ])
         : ["scene_assets: no_api_results"]),
+      "",
+      "production_pack:",
+      `voice_style: ${productionPack.voiceStyle}`,
+      `edit_rhythm: ${productionPack.editRhythm}`,
+      `subtitle_style: ${productionPack.subtitleStyle}`,
+      ...productionPack.scenes.map((scene) =>
+        `scene_${scene.order}.edit: subtitle=${scene.subtitleLine} | emphasis=${scene.emphasisWords.join(", ")} | instruction=${scene.editInstruction}${scene.selectedAsset ? ` | selected_asset=${scene.selectedAsset}` : ""}`,
+      ),
+      "",
+      "distribution_plan:",
+      `primary_platform: ${distributionPlan.primaryPlatform}`,
+      `secondary_platform: ${distributionPlan.secondaryPlatform}`,
+      `recommended_window: ${distributionPlan.recommendedWindow}`,
+      `secondary_window: ${distributionPlan.secondaryWindow}`,
+      `hypothesis: ${distributionPlan.hypothesis}`,
+      `rationale: ${distributionPlan.rationale}`,
       "",
       "platform_variants:",
       `youtube_short.title: ${payload.platformVariants.youtubeShort.title}`,
@@ -9861,6 +10126,8 @@ export class AgentCore {
         scenes: payload.scenes,
         platformVariants: payload.platformVariants,
         sceneAssets,
+        productionPack,
+        distributionPlan,
       }),
       messages: buildBaseMessages(userPrompt, orchestration),
       toolExecutions: [
@@ -9871,6 +10138,140 @@ export class AgentCore {
               id: updated.id,
               status: updated.status,
               hasScriptPackage: true,
+            },
+            null,
+            2,
+          ),
+        },
+      ],
+    };
+  }
+
+  private async tryRunDirectContentBatchPlanning(
+    userPrompt: string,
+    requestId: string,
+    requestLogger: Logger,
+    orchestration: OrchestrationContext,
+  ): Promise<AgentRunResult | null> {
+    if (!isContentBatchPlanningPrompt(userPrompt)) {
+      return null;
+    }
+
+    const channelKey = extractContentChannelKey(userPrompt) ?? inferDefaultContentChannelKey(userPrompt);
+    const limit = Math.min(10, extractPromptLimit(userPrompt, 5, 10));
+    const items = this.contentOps
+      .listItems({ channelKey, limit: 20 })
+      .filter((item) => item.status !== "archived" && item.status !== "published")
+      .sort((left, right) => {
+        const statusWeight = (value: string) => value === "draft" ? 0 : value === "idea" ? 1 : value === "scheduled" ? 2 : 3;
+        return statusWeight(left.status) - statusWeight(right.status)
+          || (right.queuePriority ?? right.ideaScore ?? 0) - (left.queuePriority ?? left.ideaScore ?? 0)
+          || left.id - right.id;
+      })
+      .slice(0, limit);
+
+    requestLogger.info("Using direct content batch planning route", {
+      channelKey,
+      limit,
+      selected: items.length,
+    });
+
+    const batchItems = items.map((item, index) => {
+      const distributionPlan = buildDistributionPlan({
+        item,
+        channelKey: item.channelKey ?? channelKey,
+        orderOffset: index,
+      });
+      return {
+        id: item.id,
+        title: item.title,
+        status: item.status,
+        queuePriority: item.queuePriority,
+        ideaScore: item.ideaScore,
+        hasScriptPackage: hasSavedShortPackage(item.notes),
+        recommendedWindow: distributionPlan.recommendedWindow,
+        hypothesis: distributionPlan.hypothesis,
+      };
+    });
+
+    return {
+      requestId,
+      reply: buildContentBatchReply({
+        channelKey,
+        items: batchItems,
+      }),
+      messages: buildBaseMessages(userPrompt, orchestration),
+      toolExecutions: [
+        {
+          toolName: "list_content_items",
+          resultPreview: JSON.stringify(
+            {
+              channelKey,
+              selected: batchItems.length,
+            },
+            null,
+            2,
+          ),
+        },
+      ],
+    };
+  }
+
+  private async tryRunDirectContentDistributionStrategy(
+    userPrompt: string,
+    requestId: string,
+    requestLogger: Logger,
+    orchestration: OrchestrationContext,
+  ): Promise<AgentRunResult | null> {
+    if (!isContentDistributionStrategyPrompt(userPrompt)) {
+      return null;
+    }
+
+    const channelKey = extractContentChannelKey(userPrompt) ?? inferDefaultContentChannelKey(userPrompt);
+    const limit = Math.min(10, extractPromptLimit(userPrompt, 5, 10));
+    const items = this.contentOps
+      .listItems({ channelKey, limit: 20 })
+      .filter((item) => item.status !== "archived" && item.status !== "published")
+      .sort((left, right) =>
+        (right.queuePriority ?? right.ideaScore ?? 0) - (left.queuePriority ?? left.ideaScore ?? 0)
+        || left.id - right.id,
+      )
+      .slice(0, limit);
+
+    requestLogger.info("Using direct content distribution strategy route", {
+      channelKey,
+      limit,
+      selected: items.length,
+    });
+
+    return {
+      requestId,
+      reply: buildContentDistributionStrategyReply({
+        channelKey,
+        items: items.map((item, index) => {
+          const plan = buildDistributionPlan({
+            item,
+            channelKey: item.channelKey ?? channelKey,
+            orderOffset: index,
+          });
+          return {
+            id: item.id,
+            title: item.title,
+            recommendedWindow: plan.recommendedWindow,
+            secondaryWindow: plan.secondaryWindow,
+            hypothesis: plan.hypothesis,
+            rationale: plan.rationale,
+          };
+        }),
+      }),
+      messages: buildBaseMessages(userPrompt, orchestration),
+      toolExecutions: [
+        {
+          toolName: "list_content_items",
+          resultPreview: JSON.stringify(
+            {
+              channelKey,
+              selected: items.length,
             },
             null,
             2,
