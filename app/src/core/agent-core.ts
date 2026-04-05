@@ -5354,12 +5354,20 @@ function buildShortProductionPack(
   }>,
 ): ShortProductionPack {
   const styleProfile = buildShortStyleProfile(styleMode);
+  const usedAssets = new Set<string>();
   return {
     voiceStyle: styleProfile.voiceStyle,
     editRhythm: styleProfile.editRhythm,
     subtitleStyle: styleProfile.subtitleStyle,
     scenes: scenes.map((scene) => {
-      const selectedAsset = sceneAssets.find((entry) => entry.order === scene.order)?.suggestions[0]?.videoUrl;
+      const selectedAssetEntry = sceneAssets.find((entry) => entry.order === scene.order);
+      const selectedAsset = selectedAssetEntry?.suggestions
+        .map((asset) => asset.videoUrl)
+        .find((asset): asset is string => typeof asset === "string" && asset.trim().length > 0 && !usedAssets.has(asset))
+        ?? selectedAssetEntry?.suggestions[0]?.videoUrl;
+      if (selectedAsset) {
+        usedAssets.add(selectedAsset);
+      }
       return {
         order: scene.order,
         subtitleLine: buildSceneSubtitleLine(scene, styleMode),
@@ -5502,7 +5510,7 @@ function clampSceneDuration(value: number | undefined, fallback = 8): number {
   if (typeof value !== "number" || Number.isNaN(value)) {
     return fallback;
   }
-  return Math.max(4, Math.min(14, Math.round(value)));
+  return Math.max(2, Math.min(14, Math.round(value)));
 }
 
 function normalizeScenePlan(scenes: ShortScenePlan[] | undefined, fallbackScenes: ShortScenePlan[]): ShortScenePlan[] {
@@ -5522,7 +5530,7 @@ function normalizeScenePlan(scenes: ShortScenePlan[] | undefined, fallbackScenes
       && typeof scene.assetSearchQuery === "string"
       && scene.assetSearchQuery.trim().length > 0,
     )
-    .slice(0, 5)
+    .slice(0, 8)
     .map((scene, index) => ({
       order: index + 1,
       durationSeconds: clampSceneDuration(scene.durationSeconds, 8),
@@ -5819,11 +5827,12 @@ async function resolveSceneAssets(
     suggestions: PexelsVideoSuggestion[];
   }> = [];
 
-  for (const scene of scenes.slice(0, Math.max(1, maxScenes))) {
+  const sceneLimit = Math.min(8, Math.max(1, scenes.length > 0 ? scenes.length : maxScenes));
+  for (const scene of scenes.slice(0, sceneLimit)) {
     try {
       const suggestions = await pexelsMedia.searchVideos(
         scene.assetSearchQuery,
-        undefined,
+        3,
         scene.durationSeconds,
       );
       results.push({
@@ -5841,6 +5850,364 @@ async function resolveSceneAssets(
   }
 
   return results;
+}
+
+function extractManualShortScriptSource(notes: string | null | undefined): { title?: string; body: string } | null {
+  if (!notes?.trim()) {
+    return null;
+  }
+
+  const match = notes.match(/MANUAL_SHORT_SCRIPT[\s\S]*?\ntitle:\s*(.+?)\nbody:\n([\s\S]*?)\nEND_MANUAL_SHORT_SCRIPT/);
+  if (!match?.[2]?.trim()) {
+    return null;
+  }
+
+  return {
+    title: match[1]?.trim() || undefined,
+    body: match[2].trim(),
+  };
+}
+
+function extractManualSectionBullets(body: string, headerPattern: RegExp): string[] {
+  const lines = body.split(/\r?\n/);
+  const bullets: string[] = [];
+  let active = false;
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line) {
+      continue;
+    }
+    if (/^#{1,6}\s/.test(line) && !headerPattern.test(line)) {
+      if (active) {
+        break;
+      }
+      continue;
+    }
+    if (!active && headerPattern.test(line)) {
+      active = true;
+      continue;
+    }
+    if (!active) {
+      continue;
+    }
+    if (/^[*-]\s+/.test(line)) {
+      bullets.push(line.replace(/^[*-]\s+/, "").trim());
+    }
+  }
+
+  return bullets;
+}
+
+function extractManualTheme(body: string): string | undefined {
+  const match = body.match(/^\s*Tema:\s*(.+)$/im);
+  return match?.[1]?.trim() || undefined;
+}
+
+function inferManualShortStyleMode(body: string, fallback: ShortStyleMode): ShortStyleMode {
+  const tone = body.match(/^\s*Tom:\s*(.+)$/im)?.[1] ?? "";
+  const normalized = normalizeEmailAnalysisText(`${body}\n${tone}`);
+
+  if (includesAny(normalized, ["motivador", "motivacional", "encorajador", "acao", "ação"])) {
+    return "motivational";
+  }
+  if (includesAny(normalized, ["emocional", "emocao", "emoção", "dor", "virada"])) {
+    return "emotional";
+  }
+  if (includesAny(normalized, ["provocativo", "provocadora", "contrarian", "quebra de crenca", "quebra de crença"])) {
+    return "contrarian";
+  }
+  return fallback;
+}
+
+function buildManualSceneOverlay(label: string | undefined, voiceover: string): string {
+  const normalizedLabel = normalizeEmailAnalysisText(label ?? "");
+  const normalizedVoice = normalizeEmailAnalysisText(voiceover);
+
+  if (/passo\s*\d/.test(normalizedVoice)) {
+    const match = voiceover.match(/passo\s*\d+/i);
+    return compressOverlayText(match?.[0] ?? voiceover, "PASSO");
+  }
+  if (normalizedLabel.includes("gancho")) {
+    return "COMECE HOJE";
+  }
+  if (normalizedLabel.includes("ideia")) {
+    return "IDEIA SIMPLES";
+  }
+  if (normalizedLabel.includes("quebra")) {
+    return "NAO PRECISA SER EXPERT";
+  }
+  if (normalizedLabel.includes("fechamento")) {
+    return "COMECE AGORA";
+  }
+  if (includesAny(normalizedVoice, ["sem investimento", "so com celular", "só com celular"])) {
+    return "SEM INVESTIMENTO";
+  }
+
+  return compressOverlayText(voiceover, "COMECE AGORA");
+}
+
+function buildManualSceneVisualDirection(
+  fallbackDirections: string[],
+  index: number,
+  voiceover: string,
+): string {
+  const explicit = fallbackDirections[index]?.trim();
+  const normalized = normalizeEmailAnalysisText(voiceover);
+  let contextual = "cortes rápidos com celular, interface social e pequenos negócios";
+  if (includesAny(normalized, ["sem investimento", "celular"])) {
+    contextual = "mãos com celular, interface social, texto grande e fundo escuro";
+  } else if (includesAny(normalized, ["instagram", "perfil", "posta"])) {
+    contextual = "tela de Instagram business, pequenos comércios e interface de perfil";
+  } else if (includesAny(normalized, ["oferece", "mensagem", "digitar"])) {
+    contextual = "mãos digitando mensagem comercial no celular, cortes rápidos e foco no chat";
+  } else if (includesAny(normalized, ["responde clientes", "notificacoes", "notificações", "organiza o perfil"])) {
+    contextual = "notificações, interação social e organização de perfil com motion text";
+  } else if (includesAny(normalized, ["continua parado", "comeca antes", "começa antes"])) {
+    contextual = "fundo escurecendo, texto forte e fechamento limpo";
+  }
+
+  if (explicit) {
+    return `${explicit}; ${contextual}`;
+  }
+
+  return contextual;
+}
+
+function buildManualSceneAssetQuery(voiceover: string, visualDirection: string): string {
+  const normalized = normalizeEmailAnalysisText(`${voiceover}\n${visualDirection}`);
+
+  if (includesAny(normalized, ["instagram", "perfil", "social", "posta"])) {
+    return "instagram business phone vertical";
+  }
+  if (includesAny(normalized, ["celular", "smartphone"])) {
+    return "hands smartphone business vertical";
+  }
+  if (includesAny(normalized, ["negocio", "negócio", "empresa", "comercio", "comércio"])) {
+    return "small business storefront vertical";
+  }
+  if (includesAny(normalized, ["mensagem", "oferece", "digitar", "chat"])) {
+    return "typing message smartphone vertical";
+  }
+  if (includesAny(normalized, ["notificacoes", "notificações", "clientes", "interacao", "interação"])) {
+    return "social media notifications vertical";
+  }
+  if (includesAny(normalized, ["fundo escuro", "escurecendo", "final"])) {
+    return "dark abstract background vertical";
+  }
+
+  return "small business instagram workspace vertical";
+}
+
+function parseManualTimedScenes(body: string): Array<{
+  durationSeconds: number;
+  label?: string;
+  voiceover: string;
+}> {
+  const lines = body.split(/\r?\n/);
+  const scenes: Array<{ durationSeconds: number; label?: string; voiceLines: string[] }> = [];
+  let current: { durationSeconds: number; label?: string; voiceLines: string[] } | null = null;
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    const headerMatch = line.match(/^#{1,6}\s*.*?(\d+)\s*[–-]\s*(\d+)s(?:\s*\(([^)]+)\))?/i);
+    if (headerMatch) {
+      if (current && current.voiceLines.length > 0) {
+        scenes.push(current);
+      }
+      const start = Number.parseInt(headerMatch[1] ?? "0", 10);
+      const end = Number.parseInt(headerMatch[2] ?? "0", 10);
+      current = {
+        durationSeconds: Math.max(2, end - start),
+        label: headerMatch[3]?.trim(),
+        voiceLines: [],
+      };
+      continue;
+    }
+
+    if (!current) {
+      continue;
+    }
+
+    if (line.startsWith(">")) {
+      current.voiceLines.push(line.replace(/^>\s*/, "").replace(/^["“”'`]+|["“”'`]+$/g, "").trim());
+      continue;
+    }
+
+    if (/^["“].+["”]$/.test(line)) {
+      current.voiceLines.push(line.replace(/^["“”'`]+|["“”'`]+$/g, "").trim());
+    }
+  }
+
+  if (current && current.voiceLines.length > 0) {
+    scenes.push(current);
+  }
+
+  return scenes.flatMap((scene) => {
+    const voiceLines = scene.voiceLines
+      .map((line) => line.replace(/\s+/g, " ").trim())
+      .filter(Boolean);
+    if (voiceLines.length === 0) {
+      return [];
+    }
+
+    if (voiceLines.length === 1) {
+      return [{
+        durationSeconds: scene.durationSeconds,
+        label: scene.label,
+        voiceover: voiceLines[0]!,
+      }];
+    }
+
+    const baseDuration = Math.max(2, Math.floor(scene.durationSeconds / voiceLines.length));
+    let remaining = scene.durationSeconds - (baseDuration * voiceLines.length);
+
+    return voiceLines.map((voiceover, index) => {
+      const extra = remaining > 0 ? 1 : 0;
+      remaining = Math.max(0, remaining - extra);
+      return {
+        durationSeconds: baseDuration + extra,
+        label: scene.label ? `${scene.label} ${index + 1}` : undefined,
+        voiceover,
+      };
+    });
+  });
+}
+
+function parseManualNarrationScenes(body: string): Array<{
+  durationSeconds: number;
+  label?: string;
+  voiceover: string;
+}> {
+  const lines = body.split(/\r?\n/);
+  const blocks: string[] = [];
+  let active = false;
+  let currentBlock: string[] = [];
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!active && /^#{1,6}\s*.*Narra[cç][aã]o/i.test(line)) {
+      active = true;
+      continue;
+    }
+    if (active && /^#{1,6}\s+/.test(line)) {
+      break;
+    }
+    if (!active) {
+      continue;
+    }
+    if (!line) {
+      if (currentBlock.length > 0) {
+        blocks.push(currentBlock.join(" ").trim());
+        currentBlock = [];
+      }
+      continue;
+    }
+    if (line.startsWith("\"") || line.startsWith("“")) {
+      currentBlock.push(line.replace(/^["“”'`]+|["“”'`]+$/g, "").trim());
+    }
+  }
+
+  if (currentBlock.length > 0) {
+    blocks.push(currentBlock.join(" ").trim());
+  }
+
+  if (blocks.length === 0) {
+    return [];
+  }
+
+  const durations = rebalanceSceneDurations(
+    blocks.map((voiceover, index) => ({
+      order: index + 1,
+      durationSeconds: Math.max(4, Math.round(30 / blocks.length)),
+      voiceover,
+      overlay: "MECANISMO PRÁTICO",
+      visualDirection: "motion text forte, celular e interface social",
+      assetSearchQuery: "small business instagram workspace vertical",
+    })),
+    30,
+  );
+
+  return durations.map((scene) => ({
+    durationSeconds: scene.durationSeconds,
+    voiceover: scene.voiceover,
+  }));
+}
+
+function buildManualShortFormPackage(input: {
+  item: {
+    title: string;
+    pillar: string | null;
+    hook: string | null;
+    formatTemplateKey?: string | null;
+    seriesKey?: string | null;
+    notes?: string | null;
+  };
+  platform: string;
+}): ShortFormPackage | null {
+  const source = extractManualShortScriptSource(input.item.notes);
+  if (!source) {
+    return null;
+  }
+
+  const styleMode = inferManualShortStyleMode(
+    source.body,
+    inferShortStyleMode(input.item),
+  );
+  const styleProfile = buildShortStyleProfile(styleMode);
+  const directions = extractManualSectionBullets(source.body, /^#{1,6}\s*.*Dire[cç][aã]o de cenas/i);
+  const timedScenes = parseManualTimedScenes(source.body);
+  const rawScenes = timedScenes.length > 0 ? timedScenes : parseManualNarrationScenes(source.body);
+  if (rawScenes.length === 0) {
+    return null;
+  }
+
+  const scenes: ShortScenePlan[] = rawScenes.map((scene, index) => {
+    const visualDirection = buildManualSceneVisualDirection(directions, index, scene.voiceover);
+    return {
+      order: index + 1,
+      durationSeconds: clampSceneDuration(scene.durationSeconds, 5),
+      voiceover: scene.voiceover,
+      overlay: buildManualSceneOverlay(scene.label, scene.voiceover),
+      visualDirection,
+      assetSearchQuery: buildManualSceneAssetQuery(scene.voiceover, visualDirection),
+    };
+  });
+
+  const targetDurationSeconds = sumSceneDurations(scenes);
+  const titleBase = source.title?.trim() || input.item.title.trim();
+  const theme = extractManualTheme(source.body) ?? titleBase;
+  const hook = scenes[0]?.voiceover ?? input.item.hook?.trim() ?? titleBase;
+  const cta = scenes[scenes.length - 1]?.voiceover ?? "Comente o que você faria hoje.";
+  const titleOptions = [
+    titleBase,
+    truncateBriefText(`${theme}: como começar hoje`, 72),
+    truncateBriefText(`${theme} sem enrolação`, 72),
+  ];
+
+  return {
+    styleMode,
+    mode: "viral_short",
+    targetDurationSeconds,
+    hook,
+    script: deriveScriptFromScenes(scenes),
+    cta,
+    description: `${theme}. Short construído a partir de roteiro manual, com execução direta e cenas orientadas pelo prompt do usuário.`,
+    titleOptions,
+    scenes,
+    platformVariants: {
+      youtubeShort: {
+        title: titleBase,
+        caption: `${theme}. Execução direta, passos simples e contexto visual alinhado ao roteiro.`,
+        coverText: styleProfile.youtubeCoverText,
+      },
+      tiktok: {
+        hook,
+        caption: `${theme}. Vídeo curto, direto e com foco em ação imediata.`,
+        coverText: styleProfile.tiktokCoverText,
+      },
+    },
+  };
 }
 
 function validateShortFormPackage(
@@ -10370,118 +10737,129 @@ export class AgentCore {
       ? this.contentOps.listSeries({ channelKey: item.channelKey ?? undefined, limit: 20 }).find((entry) => entry.key === item.seriesKey)
       : undefined;
 
-    const fallbackPayload = buildShortFormFallbackPackage({
+    const manualPayload = buildManualShortFormPackage({
+      item,
+      platform: item.platform,
+    });
+    const fallbackPayload = manualPayload ?? buildShortFormFallbackPackage({
       item,
       platform: item.platform,
     });
 
     let payload = { ...fallbackPayload };
 
-    try {
-      const response = await this.client.chat({
-        messages: [
-          {
-            role: "system",
-            content: [
-              "Você é roteirista de short-form content para o canal Riqueza Despertada.",
-              "Sua tarefa é gerar um short com retenção forte para YouTube Shorts e TikTok.",
-              "Responda somente JSON válido.",
-              "Formato: styleMode, mode, targetDurationSeconds, hook, script, cta, description, titleOptions, scenes, platformVariants.",
-              "styleMode deve ser um destes: operator, motivational, emotional, contrarian.",
-              "mode deve ser viral_short.",
-              "targetDurationSeconds entre 35 e 50.",
-              "titleOptions deve ser array com 3 títulos curtos.",
-              "Crie cenas curtas com os campos order, durationSeconds, voiceover, overlay, visualDirection, assetSearchQuery.",
-              "assetSearchQuery deve ser uma busca curta em inglês, de 2 a 5 palavras, boa para achar b-roll em banco de vídeo.",
-              "O canal é dark/faceless: assetSearchQuery deve priorizar dashboard, laptop, hands, UI, whiteboard, app interface e escritório.",
-              "Nunca use termos como presenter, speaker, host, selfie, portrait, face, webcam ou person talking.",
-              "Cada vídeo deve ter UMA ideia central. Sem lista longa, sem densidade excessiva, sem jargão demais.",
-              "O hook precisa abrir tensão real em até 2 segundos.",
-              "O CTA deve ser curto. Não invente link, checklist ou oferta que ainda não existem.",
-              "Mantenha tom pragmático, sem promessa milagrosa.",
-            ].join(" "),
-          },
-          {
-            role: "user",
-            content: [
-              `Título atual: ${item.title}`,
-              `Plataforma: ${item.platform}`,
-              `Pilar: ${item.pillar ?? ""}`,
-              `Audience: ${item.audience ?? ""}`,
-              `Hook atual: ${item.hook ?? ""}`,
-              `Notas: ${item.notes ?? ""}`,
-              `Formato editorial: ${formatTemplate ? `${formatTemplate.label} | ${formatTemplate.structure}` : item.formatTemplateKey ?? ""}`,
-              `Série: ${series ? `${series.title} | ${series.premise ?? ""}` : item.seriesKey ?? ""}`,
-              `Plataforma principal: ${item.platform}`,
-              "Objetivo: retenção forte, clareza, 1 mecanismo central, alto potencial de replay e comentário.",
-            ].join("\n"),
-          },
-        ],
-      });
+    if (!manualPayload) {
+      try {
+        const response = await this.client.chat({
+          messages: [
+            {
+              role: "system",
+              content: [
+                "Você é roteirista de short-form content para o canal Riqueza Despertada.",
+                "Sua tarefa é gerar um short com retenção forte para YouTube Shorts e TikTok.",
+                "Responda somente JSON válido.",
+                "Formato: styleMode, mode, targetDurationSeconds, hook, script, cta, description, titleOptions, scenes, platformVariants.",
+                "styleMode deve ser um destes: operator, motivational, emotional, contrarian.",
+                "mode deve ser viral_short.",
+                "targetDurationSeconds entre 35 e 50.",
+                "titleOptions deve ser array com 3 títulos curtos.",
+                "Crie cenas curtas com os campos order, durationSeconds, voiceover, overlay, visualDirection, assetSearchQuery.",
+                "assetSearchQuery deve ser uma busca curta em inglês, de 2 a 5 palavras, boa para achar b-roll em banco de vídeo.",
+                "O canal é dark/faceless: assetSearchQuery deve priorizar dashboard, laptop, hands, UI, whiteboard, app interface e escritório.",
+                "Nunca use termos como presenter, speaker, host, selfie, portrait, face, webcam ou person talking.",
+                "Cada vídeo deve ter UMA ideia central. Sem lista longa, sem densidade excessiva, sem jargão demais.",
+                "O hook precisa abrir tensão real em até 2 segundos.",
+                "O CTA deve ser curto. Não invente link, checklist ou oferta que ainda não existem.",
+                "Mantenha tom pragmático, sem promessa milagrosa.",
+              ].join(" "),
+            },
+            {
+              role: "user",
+              content: [
+                `Título atual: ${item.title}`,
+                `Plataforma: ${item.platform}`,
+                `Pilar: ${item.pillar ?? ""}`,
+                `Audience: ${item.audience ?? ""}`,
+                `Hook atual: ${item.hook ?? ""}`,
+                `Notas: ${item.notes ?? ""}`,
+                `Formato editorial: ${formatTemplate ? `${formatTemplate.label} | ${formatTemplate.structure}` : item.formatTemplateKey ?? ""}`,
+                `Série: ${series ? `${series.title} | ${series.premise ?? ""}` : item.seriesKey ?? ""}`,
+                `Plataforma principal: ${item.platform}`,
+                "Objetivo: retenção forte, clareza, 1 mecanismo central, alto potencial de replay e comentário.",
+              ].join("\n"),
+            },
+          ],
+        });
 
-      const parsed = JSON.parse(stripCodeFences(response.message.content ?? "")) as {
-        styleMode?: ShortStyleMode;
-        mode?: string;
-        targetDurationSeconds?: number;
-        hook?: string;
-        script?: string;
-        cta?: string;
-        description?: string;
-        titleOptions?: string[];
-        scenes?: ShortScenePlan[];
-        platformVariants?: Partial<ShortPlatformVariants>;
-      };
+        const parsed = JSON.parse(stripCodeFences(response.message.content ?? "")) as {
+          styleMode?: ShortStyleMode;
+          mode?: string;
+          targetDurationSeconds?: number;
+          hook?: string;
+          script?: string;
+          cta?: string;
+          description?: string;
+          titleOptions?: string[];
+          scenes?: ShortScenePlan[];
+          platformVariants?: Partial<ShortPlatformVariants>;
+        };
 
-      payload = {
-        styleMode: normalizeShortStyleMode(parsed.styleMode, payload.styleMode),
-        mode: parsed.mode === "viral_short" ? parsed.mode : payload.mode,
-        targetDurationSeconds: clampShortTargetDuration(parsed.targetDurationSeconds, payload.targetDurationSeconds),
-        hook: typeof parsed.hook === "string" && parsed.hook.trim() ? parsed.hook.trim() : payload.hook,
-        script: typeof parsed.script === "string" && parsed.script.trim() ? parsed.script.trim() : payload.script,
-        cta: typeof parsed.cta === "string" && parsed.cta.trim() ? parsed.cta.trim() : payload.cta,
-        description:
-          typeof parsed.description === "string" && parsed.description.trim()
-            ? parsed.description.trim()
-            : payload.description,
-        titleOptions: Array.isArray(parsed.titleOptions) && parsed.titleOptions.length > 0
-          ? parsed.titleOptions.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0).slice(0, 3)
-          : payload.titleOptions,
-        scenes: normalizeScenePlan(parsed.scenes, payload.scenes),
-        platformVariants: {
-          youtubeShort: {
-            title:
-              typeof parsed.platformVariants?.youtubeShort?.title === "string" && parsed.platformVariants.youtubeShort.title.trim()
-                ? parsed.platformVariants.youtubeShort.title.trim()
-                : payload.platformVariants.youtubeShort.title,
-            caption:
-              typeof parsed.platformVariants?.youtubeShort?.caption === "string" && parsed.platformVariants.youtubeShort.caption.trim()
-                ? parsed.platformVariants.youtubeShort.caption.trim()
-                : payload.platformVariants.youtubeShort.caption,
-            coverText:
-              typeof parsed.platformVariants?.youtubeShort?.coverText === "string" && parsed.platformVariants.youtubeShort.coverText.trim()
-                ? parsed.platformVariants.youtubeShort.coverText.trim()
-                : payload.platformVariants.youtubeShort.coverText,
+        payload = {
+          styleMode: normalizeShortStyleMode(parsed.styleMode, payload.styleMode),
+          mode: parsed.mode === "viral_short" ? parsed.mode : payload.mode,
+          targetDurationSeconds: clampShortTargetDuration(parsed.targetDurationSeconds, payload.targetDurationSeconds),
+          hook: typeof parsed.hook === "string" && parsed.hook.trim() ? parsed.hook.trim() : payload.hook,
+          script: typeof parsed.script === "string" && parsed.script.trim() ? parsed.script.trim() : payload.script,
+          cta: typeof parsed.cta === "string" && parsed.cta.trim() ? parsed.cta.trim() : payload.cta,
+          description:
+            typeof parsed.description === "string" && parsed.description.trim()
+              ? parsed.description.trim()
+              : payload.description,
+          titleOptions: Array.isArray(parsed.titleOptions) && parsed.titleOptions.length > 0
+            ? parsed.titleOptions.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0).slice(0, 3)
+            : payload.titleOptions,
+          scenes: normalizeScenePlan(parsed.scenes, payload.scenes),
+          platformVariants: {
+            youtubeShort: {
+              title:
+                typeof parsed.platformVariants?.youtubeShort?.title === "string" && parsed.platformVariants.youtubeShort.title.trim()
+                  ? parsed.platformVariants.youtubeShort.title.trim()
+                  : payload.platformVariants.youtubeShort.title,
+              caption:
+                typeof parsed.platformVariants?.youtubeShort?.caption === "string" && parsed.platformVariants.youtubeShort.caption.trim()
+                  ? parsed.platformVariants.youtubeShort.caption.trim()
+                  : payload.platformVariants.youtubeShort.caption,
+              coverText:
+                typeof parsed.platformVariants?.youtubeShort?.coverText === "string" && parsed.platformVariants.youtubeShort.coverText.trim()
+                  ? parsed.platformVariants.youtubeShort.coverText.trim()
+                  : payload.platformVariants.youtubeShort.coverText,
+            },
+            tiktok: {
+              hook:
+                typeof parsed.platformVariants?.tiktok?.hook === "string" && parsed.platformVariants.tiktok.hook.trim()
+                  ? parsed.platformVariants.tiktok.hook.trim()
+                  : payload.platformVariants.tiktok.hook,
+              caption:
+                typeof parsed.platformVariants?.tiktok?.caption === "string" && parsed.platformVariants.tiktok.caption.trim()
+                  ? parsed.platformVariants.tiktok.caption.trim()
+                  : payload.platformVariants.tiktok.caption,
+              coverText:
+                typeof parsed.platformVariants?.tiktok?.coverText === "string" && parsed.platformVariants.tiktok.coverText.trim()
+                  ? parsed.platformVariants.tiktok.coverText.trim()
+                  : payload.platformVariants.tiktok.coverText,
+            },
           },
-          tiktok: {
-            hook:
-              typeof parsed.platformVariants?.tiktok?.hook === "string" && parsed.platformVariants.tiktok.hook.trim()
-                ? parsed.platformVariants.tiktok.hook.trim()
-                : payload.platformVariants.tiktok.hook,
-            caption:
-              typeof parsed.platformVariants?.tiktok?.caption === "string" && parsed.platformVariants.tiktok.caption.trim()
-                ? parsed.platformVariants.tiktok.caption.trim()
-                : payload.platformVariants.tiktok.caption,
-            coverText:
-              typeof parsed.platformVariants?.tiktok?.coverText === "string" && parsed.platformVariants.tiktok.coverText.trim()
-                ? parsed.platformVariants.tiktok.coverText.trim()
-                : payload.platformVariants.tiktok.coverText,
-          },
-        },
-      };
-    } catch (error) {
-      requestLogger.warn("Content script generation fell back to deterministic package", {
+        };
+      } catch (error) {
+        requestLogger.warn("Content script generation fell back to deterministic package", {
+          itemId: item.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    } else {
+      requestLogger.info("Using manual short script package", {
         itemId: item.id,
-        error: error instanceof Error ? error.message : String(error),
+        scenes: manualPayload.scenes.length,
       });
     }
 
@@ -10730,14 +11108,19 @@ export class AgentCore {
         ? this.contentOps.listSeries({ channelKey: item.channelKey ?? undefined, limit: 20 }).find((entry) => entry.key === item.seriesKey)
         : undefined;
 
-      const fallbackPayload = buildShortFormFallbackPackage({
+      const manualPayload = buildManualShortFormPackage({
+        item,
+        platform: item.platform,
+      });
+      const fallbackPayload = manualPayload ?? buildShortFormFallbackPackage({
         item,
         platform: item.platform,
       });
 
       let payload = { ...fallbackPayload };
 
-      try {
+      if (!manualPayload) {
+        try {
         const response = await this.client.chat({
           messages: [
             {
@@ -10838,10 +11221,16 @@ export class AgentCore {
             },
           },
         };
-      } catch (error) {
-        requestLogger.warn("Content batch generation fell back to deterministic package", {
+        } catch (error) {
+          requestLogger.warn("Content batch generation fell back to deterministic package", {
+            itemId: item.id,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      } else {
+        requestLogger.info("Using manual short script package for batch generation", {
           itemId: item.id,
-          error: error instanceof Error ? error.message : String(error),
+          scenes: manualPayload.scenes.length,
         });
       }
 

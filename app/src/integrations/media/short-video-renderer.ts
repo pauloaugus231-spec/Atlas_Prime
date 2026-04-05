@@ -18,6 +18,15 @@ interface RenderSceneArtifact {
   sourceUrl?: string;
 }
 
+interface RenderSceneAudioArtifact {
+  order: number;
+  rawPath: string;
+  alignedPath: string;
+  rawDurationSeconds: number;
+  targetDurationSeconds: number;
+  voiceover: string;
+}
+
 export interface RenderedShortVideoDraft {
   outputPath: string;
   renderDir: string;
@@ -66,7 +75,7 @@ function escapeDrawtext(value: string): string {
     .replace(/\]/g, "\\]")
     .replace(/,/g, "\\,")
     .replace(/%/g, "\\%")
-    .replace(/\n/g, " ");
+    .replace(/\n/g, "\\n");
 }
 
 function buildEnableBetween(start: string, end: string): string {
@@ -80,6 +89,53 @@ function normalizeComparableText(value: string): string {
     .replace(/[^\w\s]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function wrapTextForDrawtext(value: string, maxCharsPerLine: number, maxLines: number): string {
+  const words = value
+    .replace(/\s+/g, " ")
+    .trim()
+    .split(" ")
+    .filter(Boolean);
+
+  if (words.length === 0) {
+    return "";
+  }
+
+  const lines: string[] = [];
+  let current = "";
+
+  for (const word of words) {
+    const candidate = current ? `${current} ${word}` : word;
+    if (candidate.length <= maxCharsPerLine || !current) {
+      current = candidate;
+      continue;
+    }
+    lines.push(current);
+    current = word;
+    if (lines.length === maxLines - 1) {
+      break;
+    }
+  }
+
+  if (current) {
+    lines.push(current);
+  }
+
+  const visibleLines = lines.slice(0, maxLines);
+  const usedWordCount = visibleLines
+    .join(" ")
+    .split(" ")
+    .filter(Boolean)
+    .length;
+  const truncated = usedWordCount < words.length;
+
+  if (truncated && visibleLines.length > 0) {
+    const lastLine = visibleLines[visibleLines.length - 1]!;
+    visibleLines[visibleLines.length - 1] = `${lastLine.replace(/[.…]+$/g, "")}…`;
+  }
+
+  return visibleLines.join("\n");
 }
 
 function normalizeStyleMode(value: ParsedShortPackage["styleMode"]): NonNullable<ParsedShortPackage["styleMode"]> {
@@ -126,6 +182,25 @@ function buildStylePalette(styleMode: NonNullable<ParsedShortPackage["styleMode"
         ttsDirection: "Entregue como social media operator experiente, claro, pragmático e sem hype.",
       };
   }
+}
+
+function buildAudioAlignmentFilter(rawDurationSeconds: number, targetDurationSeconds: number): string {
+  const target = clampDuration(targetDurationSeconds, targetDurationSeconds);
+  if (!Number.isFinite(rawDurationSeconds) || rawDurationSeconds <= 0) {
+    return `atrim=0:${target.toFixed(2)}`;
+  }
+
+  const ratio = rawDurationSeconds / Math.max(target, 0.01);
+  if (ratio > 1.03) {
+    return `${buildAtempoFilter(ratio)},atrim=0:${target.toFixed(2)}`;
+  }
+
+  const padDuration = Math.max(0, target - rawDurationSeconds);
+  if (padDuration > 0.08) {
+    return `apad=pad_dur=${padDuration.toFixed(2)},atrim=0:${target.toFixed(2)}`;
+  }
+
+  return `atrim=0:${target.toFixed(2)}`;
 }
 
 function buildAtempoFilter(playbackRate: number): string {
@@ -272,47 +347,83 @@ export class ShortVideoRenderService {
 
     const renderDir = await mkdtemp(path.join(renderRoot, `${slugify(input.item.title)}-${input.item.id}-`));
     const sceneWorkDir = path.join(renderDir, "scenes");
+    const audioWorkDir = path.join(renderDir, "audio");
     await mkdir(sceneWorkDir, { recursive: true });
+    await mkdir(audioWorkDir, { recursive: true });
 
-    const narrationRawPath = path.join(renderDir, "narration.raw.mp3");
     const narrationAlignedPath = path.join(renderDir, "narration.aligned.mp3");
     const concatManifestPath = path.join(renderDir, "concat.txt");
+    const audioConcatManifestPath = path.join(renderDir, "audio-concat.txt");
     const outputPath = path.join(renderDir, `${slugify(input.item.title)}-draft.mp4`);
     const manifestPath = path.join(renderDir, "manifest.json");
     const styleMode = normalizeStyleMode(input.shortPackage.styleMode);
     const stylePalette = buildStylePalette(styleMode);
-
-    const synthesized = await this.speech.synthesize({
-      text: input.shortPackage.script,
-      voice: "ash",
-      format: "mp3",
-      instructions: [
-        "Fale em português do Brasil.",
-        input.shortPackage.voiceStyle ?? "voz segura, direta e pragmática.",
-        stylePalette.ttsDirection,
-      ].join(" "),
-    });
-    await writeFile(narrationRawPath, synthesized.audio);
-
-    const narrationRawDuration = await probeDuration(narrationRawPath);
     const targetDurationSeconds = clampDuration(
       input.shortPackage.targetDurationSeconds,
       input.shortPackage.scenes.reduce((total, scene) => total + scene.durationSeconds, 0),
     );
-    const atempo = buildAtempoFilter(narrationRawDuration / targetDurationSeconds);
+    const audioArtifacts: RenderSceneAudioArtifact[] = [];
+
+    for (const scene of input.shortPackage.scenes) {
+      const sceneSlug = `scene-${scene.order}`;
+      const rawPath = path.join(audioWorkDir, `${sceneSlug}.raw.mp3`);
+      const alignedPath = path.join(audioWorkDir, `${sceneSlug}.aligned.mp3`);
+      const synthesized = await this.speech.synthesize({
+        text: scene.voiceover,
+        voice: "ash",
+        format: "mp3",
+        instructions: [
+          "Fale em português do Brasil.",
+          "Entregue como narração de short vertical. Ritmo natural, firme e com energia. Não arraste as palavras. Evite pausas longas.",
+          input.shortPackage.voiceStyle ?? "voz segura, direta e pragmática.",
+          stylePalette.ttsDirection,
+        ].join(" "),
+      });
+      await writeFile(rawPath, synthesized.audio);
+      const rawDurationSeconds = await probeDuration(rawPath);
+
+      await runCommand("ffmpeg", [
+        "-y",
+        "-i",
+        rawPath,
+        "-vn",
+        "-filter:a",
+        buildAudioAlignmentFilter(rawDurationSeconds, scene.durationSeconds),
+        "-t",
+        scene.durationSeconds.toFixed(2),
+        "-c:a",
+        "mp3",
+        alignedPath,
+      ], this.logger.child({ scope: `render-audio-${sceneSlug}` }));
+
+      audioArtifacts.push({
+        order: scene.order,
+        rawPath,
+        alignedPath,
+        rawDurationSeconds,
+        targetDurationSeconds: scene.durationSeconds,
+        voiceover: scene.voiceover,
+      });
+    }
+
+    await writeFile(
+      audioConcatManifestPath,
+      `${audioArtifacts.map((artifact) => `file '${artifact.alignedPath.replace(/'/g, "'\\''")}'`).join("\n")}\n`,
+      "utf8",
+    );
+
     await runCommand("ffmpeg", [
       "-y",
+      "-f",
+      "concat",
+      "-safe",
+      "0",
       "-i",
-      narrationRawPath,
-      "-vn",
-      "-filter:a",
-      atempo,
-      "-t",
-      targetDurationSeconds.toFixed(2),
+      audioConcatManifestPath,
       "-c:a",
       "mp3",
       narrationAlignedPath,
-    ], this.logger.child({ scope: "render-audio" }));
+    ], this.logger.child({ scope: "render-audio-concat" }));
 
     const sceneArtifacts: RenderSceneArtifact[] = [];
     for (const scene of input.shortPackage.scenes) {
@@ -413,10 +524,16 @@ export class ShortVideoRenderService {
       renderedAt: new Date().toISOString(),
       targetDurationSeconds,
       tts: {
-        model: synthesized.model,
-        voice: synthesized.voice,
-        rawDurationSeconds: narrationRawDuration,
+        model: "gpt-4o-mini-tts",
+        voice: "ash",
+        rawDurationSeconds: audioArtifacts.reduce((total, artifact) => total + artifact.rawDurationSeconds, 0),
         alignedPath: narrationAlignedPath,
+        segments: audioArtifacts.map((artifact) => ({
+          order: artifact.order,
+          rawDurationSeconds: artifact.rawDurationSeconds,
+          targetDurationSeconds: artifact.targetDurationSeconds,
+          voiceover: artifact.voiceover,
+        })),
       },
       scenes: input.shortPackage.scenes.map((scene) => {
         const artifact = sceneArtifacts.find((entry) => entry.order === scene.order);
@@ -477,8 +594,8 @@ export class ShortVideoRenderService {
     for (const entry of timeline) {
       const rawOverlayText = entry.scene.overlay || entry.scene.production?.subtitleLine || "";
       const rawSubtitleText = entry.scene.production?.subtitleLine || entry.scene.voiceover || "";
-      const overlayText = escapeDrawtext(rawOverlayText);
-      const subtitleText = escapeDrawtext(rawSubtitleText);
+      const overlayText = escapeDrawtext(wrapTextForDrawtext(rawOverlayText, 18, 2));
+      const subtitleText = escapeDrawtext(wrapTextForDrawtext(rawSubtitleText, 24, 3));
       const duplicateText = normalizeComparableText(rawOverlayText) === normalizeComparableText(rawSubtitleText);
       const start = entry.start.toFixed(2);
       const end = Math.max(entry.start + 0.1, entry.end - 0.05).toFixed(2);
@@ -486,13 +603,13 @@ export class ShortVideoRenderService {
 
       if (overlayText) {
         filters.push(
-          `drawtext=fontfile='${this.fontPath.replace(/'/g, "'\\''")}':text='${overlayText}':fontcolor=${stylePalette.overlayColor}:fontsize=58:borderw=4:bordercolor=black:x=(w-text_w)/2:y=h*0.12:enable=${enableExpr}`,
+          `drawtext=fontfile='${this.fontPath.replace(/'/g, "'\\''")}':text='${overlayText}':fontcolor=${stylePalette.overlayColor}:fontsize=54:line_spacing=8:borderw=4:bordercolor=black:x=(w-text_w)/2:y=140:fix_bounds=true:enable=${enableExpr}`,
         );
       }
 
       if (subtitleText && !duplicateText) {
         filters.push(
-          `drawtext=fontfile='${this.fontPath.replace(/'/g, "'\\''")}':text='${subtitleText}':fontcolor=white:fontsize=44:borderw=3:bordercolor=${stylePalette.subtitleBorderColor}:box=1:boxcolor=${stylePalette.subtitleBoxColor}:boxborderw=18:x=(w-text_w)/2:y=h*0.82:enable=${enableExpr}`,
+          `drawtext=fontfile='${this.fontPath.replace(/'/g, "'\\''")}':text='${subtitleText}':fontcolor=white:fontsize=36:line_spacing=10:borderw=3:bordercolor=${stylePalette.subtitleBorderColor}:box=1:boxcolor=${stylePalette.subtitleBoxColor}:boxborderw=14:x=(w-text_w)/2:y=h-text_h-180:fix_bounds=true:enable=${enableExpr}`,
         );
       }
     }
