@@ -864,11 +864,10 @@ export function buildGoogleEventImportBatchDraftReply(draft: PendingGoogleEventI
     `Rascunho de importação pronto. Eventos extraídos: ${draft.events.length}.`,
     ...(typeof draft.relevantCount === "number" ? [`- Relevantes para você: ${draft.relevantCount}`] : []),
     ...(draft.sourceLabel ? [`- Origem: ${draft.sourceLabel}`] : []),
-    ...draft.events.slice(0, 10).map((event) =>
+    ...draft.events.map((event) =>
       `- ${event.personallyRelevant ? "*" : ""}${event.summary} | ${formatDraftDateTime(event.start, draft.timezone)}${event.location ? ` | ${event.location}` : ""}`
     ),
-    ...(draft.events.length > 10 ? [`- ... e mais ${draft.events.length - 10} evento(s).`] : []),
-    ...(draft.assumptions?.length ? ["- Observações: " + draft.assumptions.slice(0, 3).join(" | ")] : []),
+    ...(draft.assumptions?.length ? ["- Observações: " + draft.assumptions.join(" | ")] : []),
     "Confirme com `sim, quero` ou `agendar`. Para descartar, use `cancelar rascunho`.",
     "",
     "GOOGLE_EVENT_IMPORT_BATCH_DRAFT",

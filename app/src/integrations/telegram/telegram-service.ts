@@ -1309,8 +1309,7 @@ function buildCompactPendingActionReply(draft: PendingActionDraft): string | und
     return [
       `Importação pronta: ${draft.events.length} evento(s) para ${draft.account ?? "default"}.`,
       typeof draft.relevantCount === "number" ? `Relevantes para você: ${draft.relevantCount}.` : undefined,
-      ...draft.events.slice(0, 6).map((event) => `- ${event.summary} | ${formatLocalDateTime(event.start, draft.timezone) ?? event.start}`),
-      draft.events.length > 6 ? `- ... e mais ${draft.events.length - 6} evento(s).` : undefined,
+      ...draft.events.map((event) => `- ${event.summary} | ${formatLocalDateTime(event.start, draft.timezone) ?? event.start}`),
       "Confirme com `agendar`.",
     ].filter(Boolean).join("\n");
   }
@@ -1482,19 +1481,15 @@ function buildGoogleEventImportBatchSuccessMessage(
     ...(typeof pendingDraft.relevantCount === "number" ? [`Relevantes para você: ${pendingDraft.relevantCount}`] : []),
   ];
 
-  for (const event of created.slice(0, 6)) {
+  for (const event of created) {
     const summary = typeof event.summary === "string" ? event.summary : "Evento";
     const start = typeof event.start === "string" ? formatLocalDateTime(event.start, pendingDraft.timezone) ?? event.start : undefined;
     lines.push(`- ${summary}${start ? ` | ${start}` : ""}`);
   }
 
-  if (created.length > 6) {
-    lines.push(`- ... e mais ${created.length - 6} evento(s).`);
-  }
-
   if (failed.length > 0) {
     lines.push(`Falhas: ${failed.length}`);
-    for (const event of failed.slice(0, 4)) {
+    for (const event of failed) {
       const summary = typeof event.summary === "string" ? event.summary : "Evento";
       lines.push(`- falhou: ${summary}`);
     }
