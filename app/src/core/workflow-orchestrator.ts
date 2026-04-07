@@ -14,6 +14,7 @@ import type {
   WorkflowStepStatus,
 } from "../types/workflow.js";
 import type { AgentDomain } from "../types/orchestration.js";
+import type { WorkflowRuntimeEventRecord, WorkflowRuntimeEventType } from "../types/workflow-events.js";
 
 type SqlValue = string | number | null;
 
@@ -56,11 +57,25 @@ function normalizeNullableText(value: string | null | undefined): string | null 
 }
 
 function normalizeWorkflowStatus(value: string | null | undefined): WorkflowStatus {
-  return value === "active" || value === "paused" || value === "completed" ? value : "draft";
+  return value === "active"
+    || value === "paused"
+    || value === "waiting_approval"
+    || value === "blocked"
+    || value === "completed"
+    || value === "failed"
+    ? value
+    : "draft";
 }
 
 function normalizeStepStatus(value: string | null | undefined): WorkflowStepStatus {
-  return value === "in_progress" || value === "blocked" || value === "completed" ? value : "pending";
+  return value === "in_progress"
+    || value === "waiting_approval"
+    || value === "blocked"
+    || value === "completed"
+    || value === "failed"
+    || value === "skipped"
+    ? value
+    : "pending";
 }
 
 function mapStep(row: Record<string, unknown>): WorkflowStepRecord {
@@ -110,6 +125,17 @@ function mapArtifact(row: Record<string, unknown>): WorkflowArtifactRecord {
     summary: String(row.summary),
     content: String(row.content),
     filePath: row.file_path == null ? null : String(row.file_path),
+    createdAt: String(row.created_at),
+  };
+}
+
+function mapEvent(row: Record<string, unknown>): WorkflowRuntimeEventRecord {
+  return {
+    id: Number(row.id),
+    planId: Number(row.plan_id),
+    stepNumber: row.step_number == null ? null : Number(row.step_number),
+    eventType: String(row.event_type) as WorkflowRuntimeEventType,
+    message: String(row.message),
     createdAt: String(row.created_at),
   };
 }
@@ -172,6 +198,16 @@ export class WorkflowOrchestratorStore {
             summary TEXT NOT NULL,
             content TEXT NOT NULL,
             file_path TEXT,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (plan_id) REFERENCES workflow_plans(id) ON DELETE CASCADE
+          );
+
+          CREATE TABLE IF NOT EXISTS workflow_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            plan_id INTEGER NOT NULL,
+            step_number INTEGER,
+            event_type TEXT NOT NULL,
+            message TEXT NOT NULL,
             created_at TEXT NOT NULL,
             FOREIGN KEY (plan_id) REFERENCES workflow_plans(id) ON DELETE CASCADE
           );
@@ -497,6 +533,55 @@ export class WorkflowOrchestratorStore {
     return (rows as Array<Record<string, unknown>>).map((row) => mapArtifact(row));
   }
 
+  appendEvent(input: {
+    planId: number;
+    stepNumber?: number | null;
+    eventType: WorkflowRuntimeEventType;
+    message: string;
+  }): WorkflowRuntimeEventRecord {
+    const row = this.db.prepare(`
+      INSERT INTO workflow_events (
+        plan_id, step_number, event_type, message, created_at
+      ) VALUES (?, ?, ?, ?, ?)
+      RETURNING *
+    `).get(
+      input.planId,
+      input.stepNumber ?? null,
+      input.eventType,
+      normalizeText(input.message),
+      new Date().toISOString(),
+    ) as Record<string, unknown> | undefined;
+
+    if (!row) {
+      throw new Error(`Failed to append event for workflow #${input.planId}`);
+    }
+
+    this.db
+      .prepare("UPDATE workflow_plans SET updated_at = ? WHERE id = ?")
+      .run(new Date().toISOString(), input.planId);
+
+    return mapEvent(row);
+  }
+
+  listEvents(planId: number, stepNumber?: number, limit = 20): WorkflowRuntimeEventRecord[] {
+    const safeLimit = Math.max(1, Math.min(100, Math.floor(limit)));
+    const rows = stepNumber
+      ? this.db.prepare(`
+          SELECT * FROM workflow_events
+          WHERE plan_id = ? AND step_number = ?
+          ORDER BY created_at DESC, id DESC
+          LIMIT ?
+        `).all(planId, stepNumber, safeLimit)
+      : this.db.prepare(`
+          SELECT * FROM workflow_events
+          WHERE plan_id = ?
+          ORDER BY created_at DESC, id DESC
+          LIMIT ?
+        `).all(planId, safeLimit);
+
+    return (rows as Array<Record<string, unknown>>).map((row) => mapEvent(row));
+  }
+
   latestPlan(): WorkflowPlanRecord | null {
     const row = this.db
       .prepare("SELECT id FROM workflow_plans ORDER BY updated_at DESC, id DESC LIMIT 1")
@@ -511,9 +596,15 @@ export class WorkflowOrchestratorStore {
     }
 
     let nextStatus: WorkflowStatus = plan.status;
-    if (plan.steps.length > 0 && plan.steps.every((step) => step.status === "completed")) {
+    if (plan.steps.length > 0 && plan.steps.every((step) => step.status === "completed" || step.status === "skipped")) {
       nextStatus = "completed";
-    } else if (plan.steps.some((step) => step.status === "in_progress" || step.status === "completed" || step.status === "blocked")) {
+    } else if (plan.steps.some((step) => step.status === "failed")) {
+      nextStatus = "failed";
+    } else if (plan.steps.some((step) => step.status === "waiting_approval")) {
+      nextStatus = "waiting_approval";
+    } else if (plan.steps.some((step) => step.status === "blocked")) {
+      nextStatus = "blocked";
+    } else if (plan.steps.some((step) => step.status === "in_progress" || step.status === "completed")) {
       nextStatus = "active";
     } else {
       nextStatus = "draft";

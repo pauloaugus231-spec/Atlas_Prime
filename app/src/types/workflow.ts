@@ -1,7 +1,21 @@
 import type { AgentDomain } from "./orchestration.js";
 
-export type WorkflowStatus = "draft" | "active" | "paused" | "completed";
-export type WorkflowStepStatus = "pending" | "in_progress" | "blocked" | "completed";
+export type WorkflowStatus =
+  | "draft"
+  | "active"
+  | "paused"
+  | "waiting_approval"
+  | "blocked"
+  | "completed"
+  | "failed";
+export type WorkflowStepStatus =
+  | "pending"
+  | "in_progress"
+  | "waiting_approval"
+  | "blocked"
+  | "completed"
+  | "failed"
+  | "skipped";
 export type WorkflowArtifactType = "execution_brief" | "status_update" | "deliverable" | "note";
 
 export interface WorkflowStepRecord {

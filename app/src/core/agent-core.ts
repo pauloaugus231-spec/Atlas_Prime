@@ -37,6 +37,7 @@ import { OperationalMemoryStore } from "./operational-memory.js";
 import { PersonalOSService, type ExecutiveMorningBrief } from "./personal-os.js";
 import { ProjectOpsService } from "./project-ops.js";
 import { SafeExecService } from "./safe-exec.js";
+import { WorkflowExecutionRuntime } from "./execution-runtime.js";
 import { ToolPluginRegistry } from "./plugin-registry.js";
 import { SocialAssistantStore } from "./social-assistant.js";
 import { UserPreferencesStore } from "./user-preferences.js";
@@ -4099,7 +4100,7 @@ function extractWorkflowStepNumber(prompt: string): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
-function extractWorkflowStepStatus(prompt: string): "pending" | "in_progress" | "blocked" | "completed" | undefined {
+function extractWorkflowStepStatus(prompt: string): "pending" | "in_progress" | "waiting_approval" | "blocked" | "completed" | "failed" | undefined {
   const normalized = normalizeEmailAnalysisText(prompt);
   if (includesAny(normalized, [
     "conclua",
@@ -4125,8 +4126,20 @@ function extractWorkflowStepStatus(prompt: string): "pending" | "in_progress" | 
   ])) {
     return "in_progress";
   }
+  if (includesAny(normalized, [
+    "aguardando aprovacao",
+    "aguardando aprovação",
+    "esperando aprovacao",
+    "esperando aprovação",
+    "waiting approval",
+  ])) {
+    return "waiting_approval";
+  }
   if (includesAny(normalized, ["bloqueada", "bloqueado", "bloqueie", "bloquear"])) {
     return "blocked";
+  }
+  if (includesAny(normalized, ["falhou", "falhada", "falhado", "failed", "marque como falha"])) {
+    return "failed";
   }
   if (includesAny(normalized, ["pendente", "volte para pendente"])) {
     return "pending";
@@ -7420,6 +7433,7 @@ export class AgentCore {
     private readonly approvals: ApprovalInboxStore,
     private readonly whatsappMessages: WhatsAppMessageStore,
     private readonly workflows: WorkflowOrchestratorStore,
+    private readonly workflowRuntime: WorkflowExecutionRuntime,
     private readonly macCommandQueue: SupabaseMacCommandQueue,
     private readonly email: EmailReader,
     private readonly emailWriter: EmailWriter,
@@ -12660,7 +12674,7 @@ export class AgentCore {
 
     const stepNumber = extractWorkflowStepNumber(userPrompt);
     try {
-      const { plan, step } = this.workflows.activateStep(planId, stepNumber);
+      const { plan, step } = this.workflowRuntime.startStep(planId, stepNumber);
       const brief = await this.buildWorkflowExecutionBrief(plan, step, requestLogger);
       const artifact = this.saveWorkflowExecutionArtifact(plan, step, brief);
       const autoExecute = shouldAutoExecuteWorkflowDeliverable(userPrompt);
@@ -12727,15 +12741,18 @@ export class AgentCore {
     }
 
     try {
-      this.workflows.updateStep({
-        planId,
-        stepNumber,
-        status,
-      });
-      const plan = this.workflows.getPlan(planId);
-      if (!plan) {
-        throw new Error(`Workflow not found after update: ${planId}`);
-      }
+      const transition = status === "completed"
+        ? this.workflowRuntime.completeStep(planId, stepNumber)
+        : status === "blocked"
+          ? this.workflowRuntime.blockStep(planId, stepNumber, `Etapa ${stepNumber} marcada como bloqueada pelo operador.`)
+          : status === "failed"
+            ? this.workflowRuntime.failStep(planId, stepNumber, `Etapa ${stepNumber} marcada como falha pelo operador.`)
+            : status === "waiting_approval"
+              ? this.workflowRuntime.markWaitingApproval(planId, stepNumber, `Etapa ${stepNumber} aguardando aprovação.`)
+              : status === "pending"
+                ? this.workflowRuntime.resetStepToPending(planId, stepNumber, `Etapa ${stepNumber} voltou para pendente.`)
+                : this.workflowRuntime.resumeStep(planId, stepNumber, `Etapa ${stepNumber} retomada pelo operador.`);
+      const plan = transition.plan;
       const step = plan.steps.find((item) => item.stepNumber === stepNumber);
       if (step) {
         this.workflows.saveArtifact({

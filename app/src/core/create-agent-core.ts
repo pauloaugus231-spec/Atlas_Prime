@@ -29,6 +29,9 @@ import { WorkflowOrchestratorStore } from "./workflow-orchestrator.js";
 import type { LlmClient } from "../types/llm.js";
 import { ApprovalPolicyService } from "./approval-policy.js";
 import { ApprovalEngine } from "./approval-engine.js";
+import { WorkflowExecutionRuntime } from "./execution-runtime.js";
+import { CapabilityRegistry } from "./capability-registry.js";
+import { createBuiltInCapabilities } from "./capabilities/index.js";
 
 export async function createAgentCore() {
   const config = loadConfig();
@@ -76,6 +79,10 @@ export async function createAgentCore() {
   const workflows = new WorkflowOrchestratorStore(
     config.paths.workflowDbPath,
     logger.child({ scope: "workflow-orchestrator" }),
+  );
+  const workflowRuntime = new WorkflowExecutionRuntime(
+    workflows,
+    logger.child({ scope: "workflow-runtime" }),
   );
   const macCommandQueue = new SupabaseMacCommandQueue(
     config.supabaseMacQueue,
@@ -153,6 +160,11 @@ export async function createAgentCore() {
   );
 
   const registry = new ToolPluginRegistry(loadedPlugins, logger.child({ scope: "tool-registry" }));
+  const capabilityRegistry = new CapabilityRegistry(
+    registry,
+    createBuiltInCapabilities(),
+    logger.child({ scope: "capability-registry" }),
+  );
   const client: LlmClient = config.llm.provider === "openai"
     ? new OpenAIClient(config, logger.child({ scope: "openai" }))
     : new OllamaClient(config, logger.child({ scope: "ollama" }));
@@ -172,6 +184,7 @@ export async function createAgentCore() {
     approvals,
     whatsappMessages,
     workflows,
+    workflowRuntime,
     macCommandQueue,
     email,
     emailWriter,
@@ -196,6 +209,7 @@ export async function createAgentCore() {
     approvals,
     approvalPolicy,
     approvalEngine,
+    workflowRuntime,
     whatsappMessages,
     communicationRouter,
     workflows,
@@ -205,6 +219,7 @@ export async function createAgentCore() {
     emailAccounts,
     loadedPlugins,
     registry,
+    capabilityRegistry,
     client,
     core,
     googleAuth,
