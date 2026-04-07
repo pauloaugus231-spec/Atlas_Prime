@@ -2998,7 +2998,6 @@ function isOperationalNoise(value: string | null | undefined): boolean {
     "oferta do dia",
     "cupom",
     "liquidacao",
-    "liquidacao",
     "sale",
   ]);
 }
