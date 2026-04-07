@@ -38,6 +38,9 @@ import { PersonalOSService, type ExecutiveMorningBrief } from "./personal-os.js"
 import { ProjectOpsService } from "./project-ops.js";
 import { SafeExecService } from "./safe-exec.js";
 import { WorkflowExecutionRuntime } from "./execution-runtime.js";
+import { EntityLinker } from "./entity-linker.js";
+import { IntentRouter } from "./intent-router.js";
+import { WorkflowPlanBuilderService } from "./plan-builder.js";
 import { ToolPluginRegistry } from "./plugin-registry.js";
 import { SocialAssistantStore } from "./social-assistant.js";
 import { UserPreferencesStore } from "./user-preferences.js";
@@ -7434,6 +7437,7 @@ export class AgentCore {
     private readonly whatsappMessages: WhatsAppMessageStore,
     private readonly workflows: WorkflowOrchestratorStore,
     private readonly workflowRuntime: WorkflowExecutionRuntime,
+    private readonly entityLinker: EntityLinker,
     private readonly macCommandQueue: SupabaseMacCommandQueue,
     private readonly email: EmailReader,
     private readonly emailWriter: EmailWriter,
@@ -7442,6 +7446,8 @@ export class AgentCore {
     private readonly googleWorkspaces: GoogleWorkspaceAccountsService,
     private readonly googleMaps: GoogleMapsService,
     private readonly personalOs: PersonalOSService,
+    private readonly intentRouter: IntentRouter,
+    private readonly planBuilder: WorkflowPlanBuilderService,
     private readonly pexelsMedia: PexelsMediaService,
     private readonly projectOps: ProjectOpsService,
     private readonly safeExec: SafeExecService,
@@ -7832,13 +7838,17 @@ export class AgentCore {
   async runUserPrompt(userPrompt: string): Promise<AgentRunResult> {
     const requestId = randomUUID();
     const requestLogger = this.logger.child({ requestId });
-    const activeUserPrompt = extractActiveUserPrompt(userPrompt);
-    const orchestration = buildOrchestrationContext(activeUserPrompt);
+    const intent = this.intentRouter.resolve(userPrompt);
+    const activeUserPrompt = intent.activeUserPrompt;
+    const orchestration = intent.orchestration;
     const preferences = this.preferences.get();
 
     requestLogger.info("Resolved orchestration context", {
       primaryDomain: orchestration.route.primaryDomain,
       secondaryDomains: orchestration.route.secondaryDomains,
+      mentionedDomains: intent.mentionedDomains,
+      compoundIntent: intent.compoundIntent,
+      historyTurns: intent.historyUserTurns.length,
       actionMode: orchestration.route.actionMode,
       confidence: orchestration.route.confidence,
       riskLevel: orchestration.policy.riskLevel,
@@ -12488,7 +12498,8 @@ export class AgentCore {
       actionMode: orchestration.route.actionMode,
     });
 
-    const plan = await this.createWorkflowPlanFromPrompt(userPrompt, orchestration, requestLogger);
+    const plan = await this.planBuilder.createPlanFromPrompt(userPrompt, orchestration, requestLogger);
+    this.entityLinker.upsertWorkflowRun(plan, "Workflow planejado.");
     return {
       requestId,
       reply: buildWorkflowPlanReply(plan),
@@ -12551,6 +12562,7 @@ export class AgentCore {
     }
 
     const contact = this.contacts.upsertContact(input);
+    this.entityLinker.upsertContact(contact);
     return {
       requestId,
       reply: buildContactSaveReply(contact),

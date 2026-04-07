@@ -1,12 +1,14 @@
 import type { Logger } from "../types/logger.js";
 import type { WorkflowArtifactRecord, WorkflowPlanRecord, WorkflowStepRecord } from "../types/workflow.js";
 import type { WorkflowRuntimeEventRecord } from "../types/workflow-events.js";
+import type { EntityLinker } from "./entity-linker.js";
 import { WorkflowOrchestratorStore } from "./workflow-orchestrator.js";
 
 export class WorkflowExecutionRuntime {
   constructor(
     private readonly store: WorkflowOrchestratorStore,
     private readonly logger: Logger,
+    private readonly entityLinker?: EntityLinker,
   ) {}
 
   startStep(planId: number, stepNumber?: number): {
@@ -42,6 +44,7 @@ export class WorkflowExecutionRuntime {
       stepNumber: step.stepNumber,
       status: step.status,
     });
+    this.entityLinker?.upsertWorkflowRun(plan, events[events.length - 1]?.message ?? null);
 
     return { plan, step, events };
   }
@@ -69,6 +72,7 @@ export class WorkflowExecutionRuntime {
     if (!plan || !step) {
       throw new Error(`Workflow state unavailable after waiting approval transition: plan=${planId}, step=${stepNumber}`);
     }
+    this.entityLinker?.upsertWorkflowRun(plan, event.message);
     return { plan, step, event };
   }
 
@@ -98,6 +102,7 @@ export class WorkflowExecutionRuntime {
         : `Etapa ${step.stepNumber} concluída: ${step.title}.`,
     });
 
+    this.entityLinker?.upsertWorkflowRun(plan, event.message);
     return { plan, step, event };
   }
 
@@ -124,6 +129,7 @@ export class WorkflowExecutionRuntime {
     if (!plan || !step) {
       throw new Error(`Workflow state unavailable after failure: plan=${planId}, step=${stepNumber}`);
     }
+    this.entityLinker?.upsertWorkflowRun(plan, event.message);
     return { plan, step, event };
   }
 
@@ -150,6 +156,7 @@ export class WorkflowExecutionRuntime {
     if (!plan || !step) {
       throw new Error(`Workflow state unavailable after blocking: plan=${planId}, step=${stepNumber}`);
     }
+    this.entityLinker?.upsertWorkflowRun(plan, event.message);
     return { plan, step, event };
   }
 
@@ -184,6 +191,7 @@ export class WorkflowExecutionRuntime {
     if (!plan || !step) {
       throw new Error(`Workflow state unavailable after resume: plan=${planId}, step=${stepNumber}`);
     }
+    this.entityLinker?.upsertWorkflowRun(plan, event.message);
     return { plan, step, event };
   }
 
@@ -217,6 +225,7 @@ export class WorkflowExecutionRuntime {
     if (!plan || !step) {
       throw new Error(`Workflow state unavailable after pending reset: plan=${planId}, step=${stepNumber}`);
     }
+    this.entityLinker?.upsertWorkflowRun(plan, event.message);
     return { plan, step, event };
   }
 

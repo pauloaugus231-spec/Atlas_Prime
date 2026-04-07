@@ -13,6 +13,7 @@ export interface AppPathsConfig {
   contentDbPath: string;
   socialAssistantDbPath: string;
   workflowDbPath: string;
+  memoryEntityDbPath: string;
   contactIntelligenceDbPath: string;
   approvalInboxDbPath: string;
   whatsappMessagesDbPath: string;

@@ -32,6 +32,10 @@ import { ApprovalEngine } from "./approval-engine.js";
 import { WorkflowExecutionRuntime } from "./execution-runtime.js";
 import { CapabilityRegistry } from "./capability-registry.js";
 import { createBuiltInCapabilities } from "./capabilities/index.js";
+import { MemoryEntityStore } from "./memory-entity-store.js";
+import { EntityLinker } from "./entity-linker.js";
+import { IntentRouter } from "./intent-router.js";
+import { WorkflowPlanBuilderService } from "./plan-builder.js";
 
 export async function createAgentCore() {
   const config = loadConfig();
@@ -65,11 +69,17 @@ export async function createAgentCore() {
     config.paths.approvalInboxDbPath,
     logger.child({ scope: "approval-inbox" }),
   );
+  const memoryEntities = new MemoryEntityStore(
+    config.paths.memoryEntityDbPath,
+    logger.child({ scope: "memory-entities" }),
+  );
+  const entityLinker = new EntityLinker(memoryEntities);
   const approvalPolicy = new ApprovalPolicyService();
   const approvalEngine = new ApprovalEngine(
     approvals,
     approvalPolicy,
     logger.child({ scope: "approval-engine" }),
+    entityLinker,
   );
   const whatsappMessages = new WhatsAppMessageStore(
     config.paths.whatsappMessagesDbPath,
@@ -83,6 +93,7 @@ export async function createAgentCore() {
   const workflowRuntime = new WorkflowExecutionRuntime(
     workflows,
     logger.child({ scope: "workflow-runtime" }),
+    entityLinker,
   );
   const macCommandQueue = new SupabaseMacCommandQueue(
     config.supabaseMacQueue,
@@ -168,6 +179,12 @@ export async function createAgentCore() {
   const client: LlmClient = config.llm.provider === "openai"
     ? new OpenAIClient(config, logger.child({ scope: "openai" }))
     : new OllamaClient(config, logger.child({ scope: "ollama" }));
+  const intentRouter = new IntentRouter();
+  const planBuilder = new WorkflowPlanBuilderService(
+    client,
+    workflows,
+    logger.child({ scope: "plan-builder" }),
+  );
   const core = new AgentCore(
     config,
     logger.child({ scope: "agent-core" }),
@@ -185,6 +202,7 @@ export async function createAgentCore() {
     whatsappMessages,
     workflows,
     workflowRuntime,
+    entityLinker,
     macCommandQueue,
     email,
     emailWriter,
@@ -193,6 +211,8 @@ export async function createAgentCore() {
     googleWorkspaces,
     googleMaps,
     personalOs,
+    intentRouter,
+    planBuilder,
     pexelsMedia,
     projectOps,
     safeExec,
@@ -207,9 +227,11 @@ export async function createAgentCore() {
     socialAssistant,
     contacts,
     approvals,
+    memoryEntities,
     approvalPolicy,
     approvalEngine,
     workflowRuntime,
+    entityLinker,
     whatsappMessages,
     communicationRouter,
     workflows,
@@ -228,6 +250,8 @@ export async function createAgentCore() {
     googleMaps,
     founderOps,
     personalOs,
+    intentRouter,
+    planBuilder,
     pexelsMedia,
     growthOps,
     projectOps,

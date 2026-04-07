@@ -3,6 +3,7 @@ import type { ApprovalInboxItemRecord, ApprovalItemStatus, CreateApprovalInboxIt
 import type { CapabilityDefinition } from "../types/capability.js";
 import { ApprovalInboxStore } from "./approval-inbox.js";
 import { ApprovalPolicyService } from "./approval-policy.js";
+import type { EntityLinker } from "./entity-linker.js";
 
 export interface ApprovalRequestInput extends CreateApprovalInboxItemInput {
   capability?: CapabilityDefinition | null;
@@ -20,6 +21,7 @@ export class ApprovalEngine {
     private readonly store: ApprovalInboxStore,
     private readonly policy: ApprovalPolicyService,
     private readonly logger: Logger,
+    private readonly entityLinker?: EntityLinker,
   ) {}
 
   request(input: ApprovalRequestInput): ApprovalRequestResult {
@@ -42,6 +44,7 @@ export class ApprovalEngine {
     }
 
     const approvalItem = this.store.createPending(input);
+    this.entityLinker?.upsertApproval(approvalItem);
     this.logger.info("Approval requested", {
       approvalId: approvalItem.id,
       actionKind: approvalItem.actionKind,
@@ -73,11 +76,19 @@ export class ApprovalEngine {
   }
 
   updateStatus(id: number, status: ApprovalItemStatus): ApprovalInboxItemRecord | null {
-    return this.store.updateStatus(id, status);
+    const item = this.store.updateStatus(id, status);
+    if (item) {
+      this.entityLinker?.upsertApproval(item);
+    }
+    return item;
   }
 
   updateDraftPayload(id: number, draftPayload: string): ApprovalInboxItemRecord | null {
-    return this.store.updateDraftPayload(id, draftPayload);
+    const item = this.store.updateDraftPayload(id, draftPayload);
+    if (item) {
+      this.entityLinker?.upsertApproval(item);
+    }
+    return item;
   }
 
   markLatestPending(chatId: number, status: "discarded" | "executed" | "failed" | "superseded"): void {
@@ -85,6 +96,9 @@ export class ApprovalEngine {
     if (!pending) {
       return;
     }
-    this.store.updateStatus(pending.id, status);
+    const updated = this.store.updateStatus(pending.id, status);
+    if (updated) {
+      this.entityLinker?.upsertApproval(updated);
+    }
   }
 }
