@@ -727,15 +727,26 @@ function isDraftDiscardRequest(text: string): boolean {
 
 function isApprovalListRequest(text: string): boolean {
   const normalized = normalizeIntentText(text);
+  if (
+    normalized.includes("analise a intencao")
+    || normalized.includes("analise a intenção")
+    || normalized.includes("inspecione a intencao")
+    || normalized.includes("inspecione a intenção")
+    || normalized.includes("mostre a intencao")
+    || normalized.includes("mostre a intenção")
+  ) {
+    return false;
+  }
+
   return [
-    "aprovacoes",
-    "aprovações",
     "liste aprovacoes",
     "liste aprovações",
     "aprovacoes pendentes",
     "aprovações pendentes",
     "liste aprovacoes pendentes",
     "liste aprovações pendentes",
+    "mostrar aprovacoes",
+    "mostrar aprovações",
   ].some((token) => normalized.includes(token));
 }
 
