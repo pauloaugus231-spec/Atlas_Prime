@@ -127,8 +127,35 @@ function scoreDomain(prompt: string, domain: AgentDomain): number {
 
 function detectActionMode(prompt: string): AgentActionMode {
   const normalized = normalize(prompt);
+  const planningTokens = ["planeje", "roadmap", "plano", "organize", "priorize"];
+  const scheduleTokens = ["agende", "remarque", "calendario", "compromisso", "agenda"];
+  const reviewTokens = [
+    "revise",
+    "revisar",
+    "analise",
+    "analisar",
+    "organizar",
+    "aprovações",
+    "aprovacoes",
+    "aprovação",
+    "aprovacao",
+  ];
 
-  if (includesAny(normalized, ["agende", "remarque", "calendario", "compromisso", "agenda"])) {
+  const hasPlanningIntent = includesAny(normalized, planningTokens);
+  const hasScheduleIntent = includesAny(normalized, scheduleTokens);
+  const hasReviewIntent = includesAny(normalized, reviewTokens);
+
+  // Mixed operational requests like "revisar aprovações e organizar minha agenda"
+  // are better handled as planning than as direct scheduling.
+  if ((hasScheduleIntent && hasPlanningIntent) || (hasScheduleIntent && hasReviewIntent)) {
+    return "plan";
+  }
+
+  if (hasPlanningIntent) {
+    return "plan";
+  }
+
+  if (hasScheduleIntent) {
     return "schedule";
   }
 
@@ -149,10 +176,6 @@ function detectActionMode(prompt: string): AgentActionMode {
 
   if (includesAny(normalized, ["implemente", "execute", "rode", "corrija", "crie o arquivo", "codifique"])) {
     return "execute";
-  }
-
-  if (includesAny(normalized, ["planeje", "roadmap", "plano", "organize", "priorize"])) {
-    return "plan";
   }
 
   if (includesAny(normalized, ["monitor", "acompanhe", "verifique continuamente", "triagem", "acompanhamento"])) {
