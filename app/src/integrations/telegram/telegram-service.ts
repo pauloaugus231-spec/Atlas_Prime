@@ -11,9 +11,12 @@ import type {
 } from "../../core/google-draft-utils.js";
 import {
   adjustEventDraftFromInstruction,
+  buildEventDraftFromPrompt,
+  buildGoogleTaskDraftReply,
   buildGoogleEventImportBatchDraftReply,
   buildGoogleEventDraftReply,
   buildGoogleEventUpdateDraftReply,
+  buildTaskDraftFromPrompt,
   isGoogleEventCreatePrompt,
   isGoogleTaskCreatePrompt,
 } from "../../core/google-draft-utils.js";
@@ -2467,18 +2470,31 @@ export class TelegramService {
     if (pending.status === "pending_answer") {
       const updated = await this.clarificationEngine.answer(pending, normalizedText);
       if (isGoogleEventCreatePrompt(pending.originalPrompt) || isGoogleTaskCreatePrompt(pending.originalPrompt)) {
-        const history = this.getChatHistory(message.chat.id);
-        const draftResult = await this.core.runUserPrompt(
-          buildAgentPrompt(
-            message,
-            updated.executionPrompt?.trim() || [pending.originalPrompt, normalizedText].filter(Boolean).join(" "),
-            history,
-          ),
-        );
-        const nextPendingDraft = extractPendingActionDraft(draftResult.reply);
+        let nextPendingDraft: PendingActionDraft | undefined;
+        if (isGoogleEventCreatePrompt(pending.originalPrompt)) {
+          const baseDraft = buildEventDraftFromPrompt(pending.originalPrompt, this.config.google.defaultTimezone);
+          if (baseDraft.draft) {
+            const adjusted = adjustEventDraftFromInstruction(baseDraft.draft, normalizedText);
+            nextPendingDraft = (adjusted ?? baseDraft.draft) as PendingGoogleEventDraft;
+          }
+        } else {
+          const taskDraft = buildTaskDraftFromPrompt(
+            [pending.originalPrompt, normalizedText].filter(Boolean).join(" "),
+            this.config.google.defaultTimezone,
+          );
+          nextPendingDraft = taskDraft.draft;
+        }
+
         if (nextPendingDraft) {
           this.clarificationEngine.confirm(updated.id);
-          const visibleReply = sanitizeToolPayloadLeak(stripPendingDraftMarkers(draftResult.reply) || draftResult.reply);
+          const visibleReply = nextPendingDraft.kind === "google_event"
+            ? buildGoogleEventDraftReply(nextPendingDraft)
+            : nextPendingDraft.kind === "google_task"
+              ? buildGoogleTaskDraftReply(nextPendingDraft, this.config.google.defaultTimezone)
+              : undefined;
+          if (!visibleReply) {
+            return false;
+          }
           const approval = this.persistPendingApproval(message.chat.id, nextPendingDraft);
           this.pendingActionDrafts.set(message.chat.id, nextPendingDraft);
           this.appendChatTurn(message.chat.id, {

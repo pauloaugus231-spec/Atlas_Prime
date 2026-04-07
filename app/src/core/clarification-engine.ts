@@ -70,6 +70,20 @@ export class ClarificationEngine {
     prompt: string;
     intent: IntentResolution;
   }): Promise<ClarificationInboxItemRecord | null> {
+    if (isGoogleEventCreatePrompt(input.prompt)) {
+      const draftResult = buildEventDraftFromPrompt(input.prompt, this.defaultTimezone);
+      if (draftResult.draft) {
+        return null;
+      }
+    }
+
+    if (isGoogleTaskCreatePrompt(input.prompt)) {
+      const draftResult = buildTaskDraftFromPrompt(input.prompt, this.defaultTimezone);
+      if (draftResult.draft) {
+        return null;
+      }
+    }
+
     const heuristic = this.buildHeuristicProposal(input.prompt, input.intent);
     const llmProposal = heuristic
       ? null

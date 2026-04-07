@@ -327,6 +327,7 @@ function cleanupDraftTitle(value: string): string {
 
 function cleanupEventTitle(value: string): string {
   const cleaned = normalize(value)
+    .replace(/\b(?:agende|agendar|marque|marcar|crie|criar|coloque|coloca|adicione|adiciona)\b/g, " ")
     .replace(/\bcom(?:\s+google)?\s+meet\b/g, " ")
     .replace(/\bsem(?:\s+google)?\s+meet\b/g, " ")
     .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, " ")
@@ -350,6 +351,13 @@ function cleanupEventTitle(value: string): string {
     .replace(/\bdas?\s+\d{1,2}(?::\d{2})?\s*(?:h)?\s+(?:as|a|ate)\s+\d{1,2}(?::\d{2})?\s*(?:h)?\b/g, " ")
     .replace(/\bas?\s+\d{1,2}(?::\d{2})?\s*(?:h)?\b/g, " ")
     .replace(/\b\d{1,2}h(?:\d{2})?\b/g, " ")
+    .replace(/\bduracao\b/g, " ")
+    .replace(/\bparticipantes?\b/g, " ")
+    .replace(/\bconvidados?\b/g, " ")
+    .replace(/\breservar\b/g, " ")
+    .replace(/\bsala\b/g, " ")
+    .replace(/\bprecisa\b/g, " ")
+    .replace(/\bnao\b/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 
@@ -358,6 +366,7 @@ function cleanupEventTitle(value: string): string {
     .replace(/\s+,/g, " ")
     .replace(/\b(?:na|no|em)\b$/g, "")
     .replace(/\be\b$/g, "")
+    .replace(/^de\s+/g, "")
     .replace(/[.,;:!?-]+$/g, "")
     .trim();
   if (!withoutTrailingPunctuation) {
@@ -370,6 +379,44 @@ function cleanupEventTitle(value: string): string {
     .replace(/\bevento\b/gi, "Evento");
 
   return restored.charAt(0).toUpperCase() + restored.slice(1);
+}
+
+function prettifyLocationLabel(value: string): string {
+  const acronymMap = new Map([
+    ["caps", "CAPS"],
+    ["creas", "CREAS"],
+    ["cras", "CRAS"],
+    ["ubs", "UBS"],
+    ["upa", "UPA"],
+    ["sus", "SUS"],
+  ]);
+
+  return value
+    .trim()
+    .split(/\s+/)
+    .map((token) => {
+      const lower = token.toLowerCase();
+      if (acronymMap.has(lower)) {
+        return acronymMap.get(lower)!;
+      }
+      return token.charAt(0).toUpperCase() + token.slice(1).toLowerCase();
+    })
+    .join(" ");
+}
+
+function isWeakEventSummary(summary: string): boolean {
+  const normalized = normalize(summary);
+  return [
+    "",
+    "teste",
+    "de teste",
+    "reuniao",
+    "compromisso",
+    "evento",
+    "reuniao teste",
+    "compromisso teste",
+    "evento teste",
+  ].includes(normalized);
 }
 
 function defaultEventSummary(normalizedPrompt: string): string {
@@ -465,7 +512,18 @@ export function buildEventDraftFromPrompt(prompt: string, timeZone: string): { d
   ];
   const match = patterns.map((pattern) => prompt.match(pattern)).find(Boolean);
   const rawSummary = match?.[1]?.trim() || prompt.trim();
-  const summary = cleanupEventTitle(rawSummary) || defaultEventSummary(normalizedPrompt);
+  const location = extractLocation(prompt);
+  let summary = cleanupEventTitle(rawSummary) || defaultEventSummary(normalizedPrompt);
+  if (isWeakEventSummary(summary)) {
+    if (location) {
+      const locationLabel = prettifyLocationLabel(location);
+      summary = `${defaultEventSummary(normalizedPrompt)} no ${locationLabel}`;
+    } else if (normalize(summary) === "teste" && normalizedPrompt.includes("reuniao")) {
+      summary = "Reunião de teste";
+    } else {
+      summary = defaultEventSummary(normalizedPrompt);
+    }
+  }
   if (!summary) {
     return {
       reason: "Consigo preparar o evento, mas preciso do título. Exemplo: `Crie um evento reunião com cliente amanhã das 14h às 15h.`",
@@ -499,7 +557,7 @@ export function buildEventDraftFromPrompt(prompt: string, timeZone: string): { d
       start: buildLocalIso(timeZone, date.year, date.month, date.day, startHour, startMinute),
       end: buildLocalIso(timeZone, date.year, date.month, date.day, endHour, endMinute),
       timezone: timeZone,
-      location: extractLocation(prompt),
+      location,
       attendees: extractEmailAddresses(prompt),
       reminderMinutes: parseReminderMinutes(normalizedPrompt) ?? 30,
       createMeet: /\bcom(?:\s+google)?\s+meet\b/.test(normalizedPrompt),
