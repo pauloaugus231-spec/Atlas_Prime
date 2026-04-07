@@ -30,6 +30,19 @@ export function summarizeEmailForOperations(input: {
   text: string;
 }): EmailOperationalSummary {
   const normalized = normalizeEmailAnalysisText(`${input.subject}\n${input.from.join(" ")}\n${input.text}`);
+  const looksBulkSender = includesAny(normalized, [
+    "no-reply",
+    "noreply",
+    "newsletter",
+    "mailchimp",
+    "substack",
+    "unsubscribe",
+    "unsubscribed",
+    "marketing",
+    "mailer",
+    "mkt",
+    "comunicados",
+  ]);
 
   if (normalized.includes("google") && normalized.includes("senha") && normalized.includes("app")) {
     const expected = normalized.includes("agente ai local");
@@ -81,6 +94,66 @@ export function summarizeEmailForOperations(input: {
       status: "informativo",
       summary: "Email de rede social ou networking com potencial de relacionamento ou oportunidade.",
       action: "Verificar se existe contato, convite, lead ou oportunidade que valha resposta ou acompanhamento.",
+      expected: false,
+    };
+  }
+
+  if (
+    includesAny(normalized, [
+      "payment failed",
+      "pagamento falhou",
+      "pagamento recusado",
+      "invoice overdue",
+      "invoice unpaid",
+      "fatura venceu",
+      "fatura vencida",
+      "boleto venceu",
+      "boleto vencido",
+      "assinatura expira",
+      "subscription expires",
+      "subscription suspended",
+      "cobranca pendente",
+      "cobranca recusada",
+      "cobrança pendente",
+      "cobrança recusada",
+    ])
+  ) {
+    return {
+      group: "financeiro",
+      category: "alerta financeiro",
+      priority: "alta",
+      status: "exige atencao",
+      summary: "Email com risco de cobrança, vencimento ou interrupção financeira.",
+      action: "Validar cobrança, vencimento ou falha de pagamento antes que isso gere bloqueio, multa ou interrupção.",
+      expected: false,
+    };
+  }
+
+  if (
+    includesAny(normalized, [
+      "invoice",
+      "receipt",
+      "recibo",
+      "nota fiscal",
+      "nfe",
+      "nf-e",
+      "fatura",
+      "boleto",
+      "pagamento confirmado",
+      "payment received",
+      "payment confirmed",
+      "renovacao",
+      "renovação",
+      "subscription renewed",
+    ])
+  ) {
+    return {
+      group: "financeiro",
+      category: "financeiro operacional",
+      priority: "media",
+      status: "pendente de analise",
+      summary: "Email financeiro com recibo, fatura, renovação ou documento fiscal.",
+      action: "Conferir se o valor, a recorrência e o impacto operacional exigem registro, pagamento ou acompanhamento.",
       expected: false,
     };
   }
@@ -140,6 +213,17 @@ export function summarizeEmailForOperations(input: {
       "black friday",
       "liquidacao",
       "sale",
+      "newsletter",
+      "digest",
+      "read online",
+      "the conquer times",
+      "shopee",
+      "mercado livre",
+      "amazon",
+      "lojas oficiais",
+      "renegocia aqui",
+      "receba ofertas",
+      "oferta do dia",
     ])
   ) {
     return {
@@ -163,6 +247,10 @@ export function summarizeEmailForOperations(input: {
       "financiamento",
       "cartao",
       "cartao de credito",
+      "renegociacao",
+      "renegociação",
+      "emprestimo pre-aprovado",
+      "emprestimo aprovado",
     ])
   ) {
     return {
@@ -172,6 +260,18 @@ export function summarizeEmailForOperations(input: {
       status: "informativo",
       summary: "Oferta comercial de credito ou produto financeiro, sem urgencia operacional aparente.",
       action: "Ignorar ou avaliar separadamente se houver interesse real.",
+      expected: false,
+    };
+  }
+
+  if (looksBulkSender) {
+    return {
+      group: "promocional",
+      category: "newsletter/promocional",
+      priority: "baixa",
+      status: "informativo",
+      summary: "Email com sinais de disparo em massa sem contexto operacional forte.",
+      action: "Ignorar, arquivar ou revisar fora do briefing principal se houver interesse específico.",
       expected: false,
     };
   }

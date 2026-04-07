@@ -2982,12 +2982,227 @@ function summarizeEmailSender(from: string[]): string {
 }
 
 function isOperationalNoise(value: string | null | undefined): boolean {
-  const normalized = value?.normalize("NFD").replace(/\p{Diacritic}/gu, "").toLowerCase().trim() ?? "";
+  const normalized = normalizeEmailAnalysisText(value ?? "");
   if (!normalized) {
     return false;
   }
 
-  return normalized.includes("teste controlado");
+  return includesAny(normalized, [
+    "teste controlado",
+    "shopee",
+    "lojas oficiais",
+    "newsletter",
+    "digest",
+    "read online",
+    "renegocia aqui",
+    "oferta do dia",
+    "cupom",
+    "liquidacao",
+    "liquidacao",
+    "sale",
+  ]);
+}
+
+interface MorningBriefEmailItem {
+  account: string;
+  uid: string;
+  subject: string;
+  from: string[];
+  priority: string;
+  action: string;
+  relationship: string;
+  group: EmailOperationalGroup;
+}
+
+interface MorningTaskBuckets {
+  today: Array<TaskSummary & { account: string }>;
+  overdue: Array<TaskSummary & { account: string }>;
+  stale: Array<TaskSummary & { account: string }>;
+  actionableCount: number;
+}
+
+function getBriefDayKey(date: Date, timezone: string): string {
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+  const parts = formatter.formatToParts(date);
+  const year = parts.find((part) => part.type === "year")?.value ?? "0000";
+  const month = parts.find((part) => part.type === "month")?.value ?? "00";
+  const day = parts.find((part) => part.type === "day")?.value ?? "00";
+  return `${year}-${month}-${day}`;
+}
+
+function diffDayKeys(left: string, right: string): number {
+  const leftDate = new Date(`${left}T00:00:00Z`);
+  const rightDate = new Date(`${right}T00:00:00Z`);
+  return Math.round((leftDate.getTime() - rightDate.getTime()) / (24 * 60 * 60 * 1000));
+}
+
+function classifyMorningTaskBucket(
+  task: TaskSummary & { account: string },
+  timezone: string,
+): "today" | "overdue" | "stale" {
+  const nowKey = getBriefDayKey(new Date(), timezone);
+  const dueDate = task.due ? new Date(task.due) : null;
+
+  if (dueDate) {
+    const dueKey = getBriefDayKey(dueDate, timezone);
+    if (dueKey === nowKey) {
+      return "today";
+    }
+    if (dueKey < nowKey) {
+      return diffDayKeys(nowKey, dueKey) > 7 ? "stale" : "overdue";
+    }
+    return "today";
+  }
+
+  const updatedDate = task.updated ? new Date(task.updated) : null;
+  if (!updatedDate) {
+    return "today";
+  }
+
+  const updatedKey = getBriefDayKey(updatedDate, timezone);
+  return diffDayKeys(nowKey, updatedKey) > 14 ? "stale" : "today";
+}
+
+function buildMorningTaskBuckets(
+  tasks: Array<TaskSummary & { account: string }>,
+  timezone: string,
+): MorningTaskBuckets {
+  const sorted = [...tasks].sort((left, right) =>
+    (left.due ?? left.updated ?? "").localeCompare(right.due ?? right.updated ?? ""),
+  );
+  const buckets: MorningTaskBuckets = {
+    today: [],
+    overdue: [],
+    stale: [],
+    actionableCount: 0,
+  };
+
+  for (const task of sorted) {
+    const bucket = classifyMorningTaskBucket(task, timezone);
+    buckets[bucket].push(task);
+  }
+
+  buckets.actionableCount = buckets.today.length + buckets.overdue.length;
+  return buckets;
+}
+
+function describeFounderSectionStatus(section: FounderOpsSnapshot["sections"][number]): string {
+  const statusLabel = section.status === "connected" ? "conectado" : "aguardando integração";
+  return `${section.title}: ${statusLabel} — ${section.summary}`;
+}
+
+function summarizeTrackedMetrics(metrics: string[]): string {
+  if (metrics.length === 0) {
+    return "";
+  }
+
+  const visible = metrics.slice(0, 6).join(", ");
+  const hidden = metrics.length - 6;
+  return hidden > 0 ? `${visible} e mais ${hidden}` : visible;
+}
+
+function emailRelationshipWeight(relationship: string): number {
+  switch (relationship) {
+    case "family":
+    case "partner":
+    case "client":
+    case "lead":
+    case "social_case":
+      return 18;
+    case "colleague":
+    case "vendor":
+      return 10;
+    case "friend":
+      return 8;
+    case "unknown":
+      return 2;
+    case "spam":
+      return -50;
+    default:
+      return 0;
+  }
+}
+
+function chooseMorningNextAction(input: {
+  timezone: string;
+  events: Array<{ summary: string; start: string | null }>;
+  taskBuckets: MorningTaskBuckets;
+  emails: MorningBriefEmailItem[];
+  approvals: Array<{ subject: string; actionKind: string; channel: string }>;
+  workflows: Array<{ id: number; title: string; status: string; nextAction: string | null }>;
+  focus: Array<{ title: string; nextAction: string }>;
+}): string | undefined {
+  const candidates: Array<{ score: number; text: string }> = [];
+  const nextEvent = input.events[0];
+  if (nextEvent?.start) {
+    const minutesUntil = Math.round((new Date(nextEvent.start).getTime() - Date.now()) / (60 * 1000));
+    const eventScore = minutesUntil <= 45
+      ? 100
+      : minutesUntil <= 120
+        ? 94
+        : minutesUntil <= 240
+          ? 84
+          : 70;
+    candidates.push({
+      score: eventScore,
+      text: `Preparar o compromisso das ${formatBriefDateTime(nextEvent.start, input.timezone)}: ${truncateBriefText(nextEvent.summary, 52)}.`,
+    });
+  }
+
+  const topEmail = input.emails[0];
+  if (topEmail) {
+    const baseScore = topEmail.priority === "alta" ? 88 : 66;
+    const groupBoost = topEmail.group === "seguranca" ? 12 : topEmail.group === "financeiro" ? 8 : 0;
+    candidates.push({
+      score: baseScore + groupBoost + emailRelationshipWeight(topEmail.relationship),
+      text: `Responder ou validar o email prioritário: ${truncateBriefText(topEmail.subject || "(sem assunto)", 56)}.`,
+    });
+  }
+
+  const overdueTask = input.taskBuckets.overdue[0];
+  if (overdueTask) {
+    candidates.push({
+      score: 86,
+      text: `Destravar a tarefa atrasada: ${truncateBriefText(overdueTask.title, 56)}.`,
+    });
+  }
+
+  const todayTask = input.taskBuckets.today[0];
+  if (todayTask) {
+    candidates.push({
+      score: 72,
+      text: `Atacar a tarefa de hoje: ${truncateBriefText(todayTask.title, 56)}.`,
+    });
+  }
+
+  if (input.approvals.length > 0) {
+    candidates.push({
+      score: 55 + Math.min(12, input.approvals.length * 2),
+      text: `Revisar a aprovação mais urgente no Telegram: ${truncateBriefText(input.approvals[0].subject, 56)}.`,
+    });
+  }
+
+  if (input.workflows[0]?.nextAction) {
+    candidates.push({
+      score: 36,
+      text: truncateBriefText(input.workflows[0].nextAction, 96),
+    });
+  }
+
+  if (input.focus[0]?.nextAction) {
+    candidates.push({
+      score: 28,
+      text: truncateBriefText(input.focus[0].nextAction, 96),
+    });
+  }
+
+  candidates.sort((left, right) => right.score - left.score);
+  return candidates[0]?.text;
 }
 
 function buildOperationalBriefReply(input: {
@@ -3052,16 +3267,8 @@ function classifyBriefPeriod(iso: string | null | undefined, timezone: string): 
 function buildMorningBriefReply(input: {
   timezone: string;
   events: Array<{ account: string; summary: string; start: string | null; location?: string; matchedTerms?: string[] }>;
-  tasks: Array<TaskSummary & { account: string }>;
-  emails: Array<{
-    account: string;
-    uid: string;
-    subject: string;
-    from: string[];
-    priority: string;
-    action: string;
-    relationship: string;
-  }>;
+  taskBuckets: MorningTaskBuckets;
+  emails: MorningBriefEmailItem[];
   approvals: Array<{ subject: string; actionKind: string; channel: string }>;
   workflows: Array<{ id: number; title: string; status: string; nextAction: string | null }>;
   focus: Array<{ title: string; nextAction: string }>;
@@ -3071,7 +3278,7 @@ function buildMorningBriefReply(input: {
   const attentionNow: string[] = [];
   const highestEmail = input.emails.find((item) => item.priority === "alta") ?? input.emails[0];
   const nextEvent = input.events[0];
-  const nextTask = input.tasks[0];
+  const nextTask = input.taskBuckets.today[0] ?? input.taskBuckets.overdue[0];
   const topWorkflow = input.workflows[0];
 
   if (input.approvals.length > 0) {
@@ -3090,7 +3297,9 @@ function buildMorningBriefReply(input: {
     );
   }
 
-  if (nextTask) {
+  if (input.taskBuckets.overdue.length > 0) {
+    attentionNow.push(`${input.taskBuckets.overdue.length} tarefa(s) atrasada(s) ainda exigem decisão.`);
+  } else if (nextTask) {
     attentionNow.push(
       `Tarefa mais próxima: ${truncateBriefText(nextTask.title)} — ${formatTaskDue(nextTask, input.timezone)} — ${nextTask.account}`,
     );
@@ -3104,8 +3313,8 @@ function buildMorningBriefReply(input: {
     "Briefing da manhã",
     "",
     "Resumo rápido:",
-    `- Hoje: ${input.events.length} compromisso(s) | ${input.tasks.length} tarefa(s) | ${input.emails.length} email(s)`,
-    `- Pendências: ${input.approvals.length} aprovação(ões) | ${input.workflows.length} workflow(s)`,
+    `- Hoje: ${input.events.length} compromisso(s) | ${input.taskBuckets.actionableCount} tarefa(s) acionáveis | ${input.emails.length} email(s)`,
+    `- Pendências: ${input.approvals.length} aprovação(ões) | ${input.workflows.length} workflow(s) | ${input.taskBuckets.stale.length} tarefa(s) no backlog antigo`,
   ];
 
   if (attentionNow.length > 0) {
@@ -3118,12 +3327,10 @@ function buildMorningBriefReply(input: {
   lines.push("", "Founder Brief:");
   lines.push(`- ${input.founderSnapshot.executiveLine}`);
   for (const section of input.founderSnapshot.sections) {
-    lines.push(
-      `- ${section.title}: ${section.summary}${section.requiredInputs.length > 0 ? ` | entradas esperadas: ${section.requiredInputs.join(", ")}` : ""}`,
-    );
+    lines.push(`- ${describeFounderSectionStatus(section)}`);
   }
   if (input.founderSnapshot.trackedMetrics.length > 0) {
-    lines.push(`- Métricas-alvo: ${input.founderSnapshot.trackedMetrics.join(", ")}`);
+    lines.push(`- Métricas-alvo prontas: ${summarizeTrackedMetrics(input.founderSnapshot.trackedMetrics)}.`);
   }
 
   lines.push("", "Agenda de hoje:");
@@ -3163,12 +3370,15 @@ function buildMorningBriefReply(input: {
   }
 
   lines.push("", "Tarefas em foco:");
-  if (input.tasks.length > 0) {
-    for (const task of input.tasks.slice(0, 3)) {
-      lines.push(`- ${truncateBriefText(task.title)} — ${formatTaskDue(task, input.timezone)} — ${task.account}`);
+  if (input.taskBuckets.today.length > 0 || input.taskBuckets.overdue.length > 0 || input.taskBuckets.stale.length > 0) {
+    for (const task of input.taskBuckets.today.slice(0, 2)) {
+      lines.push(`- Hoje: ${truncateBriefText(task.title)} — ${formatTaskDue(task, input.timezone)} — ${task.account}`);
     }
-    if (input.tasks.length > 3) {
-      lines.push(`- ... e mais ${input.tasks.length - 3} tarefa(s).`);
+    for (const task of input.taskBuckets.overdue.slice(0, 2)) {
+      lines.push(`- Atrasada: ${truncateBriefText(task.title)} — ${formatTaskDue(task, input.timezone)} — ${task.account}`);
+    }
+    if (input.taskBuckets.stale.length > 0) {
+      lines.push(`- Backlog antigo: ${input.taskBuckets.stale.length} tarefa(s) fora do foco imediato.`);
     }
   } else {
     lines.push("- Nenhuma tarefa aberta em foco.");
@@ -8723,18 +8933,10 @@ export class AgentCore {
     }
 
     events.sort((left, right) => (left.start ?? "").localeCompare(right.start ?? ""));
-    tasks.sort((left, right) => (left.due ?? left.updated ?? "").localeCompare(right.due ?? right.updated ?? ""));
     const visibleTasks = tasks.filter((task) => !isOperationalNoise(task.title));
+    const taskBuckets = buildMorningTaskBuckets(visibleTasks, this.config.google.defaultTimezone);
 
-    const prioritizedEmails: Array<{
-      account: string;
-      uid: string;
-      subject: string;
-      from: string[];
-      priority: string;
-      action: string;
-      relationship: string;
-    }> = [];
+    const prioritizedEmails: MorningBriefEmailItem[] = [];
 
     for (const alias of this.emailAccounts.getAliases()) {
       const reader = this.emailAccounts.getReader(alias);
@@ -8763,7 +8965,7 @@ export class AgentCore {
           from: message.from,
           text: message.preview,
         });
-        if (summary.priority === "baixa") {
+        if (summary.priority === "baixa" || classification.actionPolicy === "ignore" || classification.relationship === "spam") {
           continue;
         }
         prioritizedEmails.push({
@@ -8774,15 +8976,30 @@ export class AgentCore {
           priority: summary.priority,
           action: summary.action,
           relationship: classification.relationship,
+          group: summary.group,
         });
       }
     }
 
     const priorityOrder = { alta: 0, media: 1, baixa: 2 } as const;
+    const relationshipOrder = {
+      client: 0,
+      social_case: 1,
+      family: 2,
+      partner: 3,
+      lead: 4,
+      colleague: 5,
+      vendor: 6,
+      friend: 7,
+      unknown: 8,
+      spam: 9,
+    } as const;
     prioritizedEmails.sort(
       (left, right) =>
         priorityOrder[left.priority as keyof typeof priorityOrder]
-        - priorityOrder[right.priority as keyof typeof priorityOrder],
+        - priorityOrder[right.priority as keyof typeof priorityOrder]
+        || (relationshipOrder[left.relationship as keyof typeof relationshipOrder] ?? 50)
+          - (relationshipOrder[right.relationship as keyof typeof relationshipOrder] ?? 50),
     );
     const visibleEmails = prioritizedEmails.filter((item) => !isOperationalNoise(item.subject));
 
@@ -8808,23 +9025,22 @@ export class AgentCore {
     const visibleFocus = focus.filter((item) => !isOperationalNoise(item.title));
     const founderSnapshot = this.founderOps.getDailySnapshot();
 
-    const nextAction =
-      approvals.length > 0
-        ? "Revisar as aprovações pendentes no Telegram."
-        : visibleEmails.find((item) => item.priority === "alta")
-          ? "Responder o email mais urgente da inbox prioritária."
-          : events.length > 0
-            ? "Preparar o primeiro compromisso do dia."
-            : visibleTasks.length > 0
-              ? "Atacar a primeira tarefa com prazo do dia."
-              : visibleWorkflows[0]?.nextAction ?? visibleFocus[0]?.nextAction;
+    const nextAction = chooseMorningNextAction({
+      timezone: this.config.google.defaultTimezone,
+      events,
+      taskBuckets,
+      emails: visibleEmails,
+      approvals,
+      workflows: visibleWorkflows,
+      focus: visibleFocus,
+    });
 
     return {
       requestId,
       reply: buildMorningBriefReply({
         timezone: this.config.google.defaultTimezone,
         events,
-        tasks: visibleTasks,
+        taskBuckets,
         emails: visibleEmails,
         approvals,
         workflows: visibleWorkflows,
@@ -8839,7 +9055,7 @@ export class AgentCore {
           resultPreview: JSON.stringify(
             {
               events: events.length,
-              tasks: visibleTasks.length,
+              tasks: taskBuckets.actionableCount,
               emails: visibleEmails.length,
               approvals: approvals.length,
               workflows: visibleWorkflows.length,
