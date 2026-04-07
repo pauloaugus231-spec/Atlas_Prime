@@ -191,6 +191,7 @@ export async function createAgentCore() {
     clarifications,
     client,
     logger.child({ scope: "clarification-engine" }),
+    config.google.defaultTimezone,
   );
   const planBuilder = new WorkflowPlanBuilderService(
     client,

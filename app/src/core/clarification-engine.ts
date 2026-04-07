@@ -3,6 +3,12 @@ import type { Logger } from "../types/logger.js";
 import type { ClarificationInboxItemRecord } from "../types/clarification.js";
 import type { IntentResolution } from "./intent-router.js";
 import { ClarificationInboxStore } from "./clarification-inbox.js";
+import {
+  buildEventDraftFromPrompt,
+  buildTaskDraftFromPrompt,
+  isGoogleEventCreatePrompt,
+  isGoogleTaskCreatePrompt,
+} from "./google-draft-utils.js";
 
 function normalize(value: string): string {
   return value
@@ -43,6 +49,7 @@ export class ClarificationEngine {
     private readonly store: ClarificationInboxStore,
     private readonly client: LlmClient,
     private readonly logger: Logger,
+    private readonly defaultTimezone: string,
   ) {}
 
   getLatestPending(chatId: number): ClarificationInboxItemRecord | null {
@@ -129,6 +136,46 @@ export class ClarificationEngine {
 
   private buildHeuristicProposal(prompt: string, intent: IntentResolution): ClarificationProposal | null {
     const normalized = normalize(prompt);
+    if (isGoogleEventCreatePrompt(prompt)) {
+      const draftResult = buildEventDraftFromPrompt(prompt, this.defaultTimezone);
+      if (draftResult.draft) {
+        return null;
+      }
+      if (draftResult.reason?.includes("data")) {
+        return {
+          objectiveSummary: "Fechar a data do evento antes de montar o rascunho.",
+          rationale: "O pedido de agenda já tem estrutura suficiente, mas ainda falta a data.",
+          questions: ["Qual é a data do evento?"],
+        };
+      }
+      if (draftResult.reason?.includes("horário")) {
+        return {
+          objectiveSummary: "Fechar o horário do evento antes de montar o rascunho.",
+          rationale: "O pedido de agenda já tem estrutura suficiente, mas ainda falta o horário.",
+          questions: ["Qual é o horário do evento? Se quiser, pode dizer também a duração."],
+        };
+      }
+      if (draftResult.reason?.includes("título")) {
+        return {
+          objectiveSummary: "Fechar o título do evento antes de montar o rascunho.",
+          rationale: "O pedido de agenda já tem data e formato, mas ainda falta um título claro.",
+          questions: ["Qual deve ser o título do evento?"],
+        };
+      }
+    }
+
+    if (isGoogleTaskCreatePrompt(prompt)) {
+      const draftResult = buildTaskDraftFromPrompt(prompt, this.defaultTimezone);
+      if (draftResult.draft) {
+        return null;
+      }
+      return {
+        objectiveSummary: "Fechar os dados mínimos da tarefa antes de montar o rascunho.",
+        rationale: "O pedido de tarefa ainda não tem informação suficiente para criar um rascunho útil.",
+        questions: ["Qual é o título da tarefa? Se já souber, diga também o prazo."],
+      };
+    }
+
     const hasAgenda = ["agenda", "calendario", "calendário", "compromisso", "compromissos"].some((token) => normalized.includes(token));
     const hasApprovals = ["aprovacao", "aprovação", "aprovacoes", "aprovações", "approval"].some((token) => normalized.includes(token));
     const hasTimeScope = ["hoje", "amanha", "amanhã", "semana", "mes", "mês", "dia"].some((token) => normalized.includes(token));
@@ -260,6 +307,13 @@ export class ClarificationEngine {
   }
 
   private buildExecutionPrompt(item: ClarificationInboxItemRecord, answerText: string): string {
+    if (isGoogleEventCreatePrompt(item.originalPrompt) || isGoogleTaskCreatePrompt(item.originalPrompt)) {
+      return [
+        item.originalPrompt.trim(),
+        answerText.trim(),
+      ].filter(Boolean).join(" ");
+    }
+
     return [
       `Pedido original do usuário: ${item.originalPrompt}`,
       `Objetivo resumido: ${item.objectiveSummary}`,

@@ -2466,6 +2466,38 @@ export class TelegramService {
 
     if (pending.status === "pending_answer") {
       const updated = await this.clarificationEngine.answer(pending, normalizedText);
+      if (isGoogleEventCreatePrompt(pending.originalPrompt) || isGoogleTaskCreatePrompt(pending.originalPrompt)) {
+        const history = this.getChatHistory(message.chat.id);
+        const draftResult = await this.core.runUserPrompt(
+          buildAgentPrompt(
+            message,
+            updated.executionPrompt?.trim() || [pending.originalPrompt, normalizedText].filter(Boolean).join(" "),
+            history,
+          ),
+        );
+        const nextPendingDraft = extractPendingActionDraft(draftResult.reply);
+        if (nextPendingDraft) {
+          this.clarificationEngine.confirm(updated.id);
+          const visibleReply = sanitizeToolPayloadLeak(stripPendingDraftMarkers(draftResult.reply) || draftResult.reply);
+          const approval = this.persistPendingApproval(message.chat.id, nextPendingDraft);
+          this.pendingActionDrafts.set(message.chat.id, nextPendingDraft);
+          this.appendChatTurn(message.chat.id, {
+            role: "user",
+            text: normalizedText,
+          });
+          this.appendChatTurn(message.chat.id, {
+            role: "assistant",
+            text: visibleReply,
+          });
+          await this.sendText(message.chat.id, visibleReply, {
+            reply_to_message_id: message.message_id,
+            disable_web_page_preview: true,
+            reply_markup: approval ? buildApprovalInlineKeyboard(approval.id) : undefined,
+          });
+          return true;
+        }
+      }
+
       const reply = this.clarificationEngine.buildConfirmationMessage(updated);
       this.appendChatTurn(message.chat.id, {
         role: "user",
