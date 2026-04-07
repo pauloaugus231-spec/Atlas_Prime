@@ -1621,9 +1621,17 @@ export class TelegramService {
       return;
     }
     this.backgroundJobsStarted = true;
-    void this.runDailyEditorialResearchLoop(signal);
-    void this.runWeekdayMorningBriefLoop(signal);
-    void this.runDailyEditorialCutoffLoop(signal);
+    if (this.config.telegram.dailyEditorialAutomationEnabled) {
+      void this.runDailyEditorialResearchLoop(signal);
+      void this.runDailyEditorialCutoffLoop(signal);
+    } else {
+      this.logger.info("Daily editorial automation disabled; skipping automatic research and cutoff loops.");
+    }
+    if (this.config.telegram.morningBriefEnabled) {
+      void this.runWeekdayMorningBriefLoop(signal);
+    } else {
+      this.logger.info("Morning brief automation disabled; skipping weekday morning brief loop.");
+    }
   }
 
   private async runDailyEditorialResearchLoop(signal: AbortSignal): Promise<void> {

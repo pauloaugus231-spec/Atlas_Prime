@@ -575,6 +575,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       botToken: env.TELEGRAM_BOT_TOKEN?.trim() || undefined,
       allowedUserIds: parseAllowedUserIds(env.TELEGRAM_ALLOWED_USER_IDS),
       pollTimeoutSeconds: parsePositiveInteger(env.TELEGRAM_POLL_TIMEOUT_SECONDS, 30),
+      morningBriefEnabled: parseBoolean(env.TELEGRAM_MORNING_BRIEF_ENABLED, true),
+      dailyEditorialAutomationEnabled: parseBoolean(env.TELEGRAM_DAILY_EDITORIAL_AUTOMATION_ENABLED, false),
     },
     email: baseEmailConfig,
     emailAccounts,

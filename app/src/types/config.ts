@@ -30,6 +30,8 @@ export interface TelegramConfig {
   botToken?: string;
   allowedUserIds: number[];
   pollTimeoutSeconds: number;
+  morningBriefEnabled: boolean;
+  dailyEditorialAutomationEnabled: boolean;
 }
 
 export interface EmailConfig {
