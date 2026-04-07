@@ -284,11 +284,14 @@ function extractLocation(value: string): string | undefined {
   }
 
   const sanitized = value
+    .replace(/\b(?:na\s+minha\s+agenda(?:\s+\w+)?|na\s+agenda(?:\s+\w+)?|no\s+meu\s+calendario(?:\s+\w+)?|no\s+calendario(?:\s+\w+)?)\b/gi, " ")
     .replace(/\b(?:proxima|próxima|proximo|próximo)\s+(?:segunda(?:-feira)?|terca(?:-feira)?|terça(?:-feira)?|quarta(?:-feira)?|quinta(?:-feira)?|sexta(?:-feira)?|sabado|sábado|domingo)\b/gi, " ")
     .replace(/\b(?:amanha|amanhã|hoje)\b/gi, " ")
     .replace(/\bdas?\s+\d{1,2}(?::\d{2})?\s*(?:h)?\s+(?:as|a|ate)\s+\d{1,2}(?::\d{2})?\s*(?:h)?\b/gi, " ")
     .replace(/\bas?\s+\d{1,2}(?::\d{2})?\s*(?:h)?\b/gi, " ")
     .replace(/\b\d{1,2}h(?:\d{2})?\b/gi, " ")
+    .replace(/\b(?:principal|primary)\b/gi, " ")
+    .replace(/\bàs\b/gi, " ")
     .replace(/\s+/g, " ")
     .trim();
 
@@ -342,6 +345,7 @@ function cleanupEventTitle(value: string): string {
       /\b(?:coloque|coloca|adicione|adiciona|agende|agendar|marque|marcar|registre|salve)\b(?:\s+isso)?\s+(?:na\s+minha\s+agenda|na\s+agenda|no\s+meu\s+calendario|no\s+calendario|ao\s+calendario)\b/g,
       " ",
     )
+    .replace(/\b(?:na minha agenda(?: \w+)?|na agenda(?: \w+)?|no meu calendario(?: \w+)?|no calendario(?: \w+)?)\b/g, " ")
     .replace(/\b(?:um|uma)\s+(?:evento|compromisso|reuniao)\b/g, " ")
     .replace(/\b(?:convide|convidar|convidados?|participantes?)\b/g, " ")
     .replace(/\b(?:tenho|preciso|quero|gostaria)\s+(?:uma|um)\b/g, " ")
@@ -358,6 +362,8 @@ function cleanupEventTitle(value: string): string {
     .replace(/\bsala\b/g, " ")
     .replace(/\bprecisa\b/g, " ")
     .replace(/\bnao\b/g, " ")
+    .replace(/\bprincipal\b/g, " ")
+    .replace(/\bas\b/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 
@@ -406,7 +412,7 @@ function prettifyLocationLabel(value: string): string {
 
 function isWeakEventSummary(summary: string): boolean {
   const normalized = normalize(summary);
-  return [
+  if ([
     "",
     "teste",
     "de teste",
@@ -416,7 +422,16 @@ function isWeakEventSummary(summary: string): boolean {
     "reuniao teste",
     "compromisso teste",
     "evento teste",
-  ].includes(normalized);
+    "teste no caps",
+    "teste na caps",
+  ].includes(normalized)) {
+    return true;
+  }
+
+  return normalized.startsWith("teste no ")
+    || normalized.startsWith("teste na ")
+    || normalized.startsWith("de teste no ")
+    || normalized.startsWith("de teste na ");
 }
 
 function defaultEventSummary(normalizedPrompt: string): string {

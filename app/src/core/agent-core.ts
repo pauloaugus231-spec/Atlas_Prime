@@ -4834,6 +4834,17 @@ async function lookupVenueAddress(
     cityHints.add("porto alegre");
   }
 
+  const looksLikeGenericPublicService =
+    /\b(?:caps|creas|cras|ubs|upa)\b/i.test(location)
+    && cityHints.size === 0;
+  if (looksLikeGenericPublicService) {
+    logger.info("Skipping venue address enrichment due to ambiguous public-service location", {
+      location,
+      prompt,
+    });
+    return undefined;
+  }
+
   const compactLocation = location.replace(/\bna\b/gi, " ").replace(/\s+/g, " ").trim();
   const queries = [
     `${compactLocation} ${[...cityHints].join(" ")} endereco`,
