@@ -39,7 +39,8 @@ import { ProjectOpsService } from "./project-ops.js";
 import { SafeExecService } from "./safe-exec.js";
 import { WorkflowExecutionRuntime } from "./execution-runtime.js";
 import { EntityLinker } from "./entity-linker.js";
-import { IntentRouter } from "./intent-router.js";
+import { IntentRouter, type IntentResolution } from "./intent-router.js";
+import { MemoryEntityStore } from "./memory-entity-store.js";
 import { WorkflowPlanBuilderService } from "./plan-builder.js";
 import { ToolPluginRegistry } from "./plugin-registry.js";
 import { SocialAssistantStore } from "./social-assistant.js";
@@ -77,6 +78,7 @@ import { SupabaseMacCommandQueue } from "../integrations/supabase/mac-command-qu
 import { EvolutionApiClient, type EvolutionRecentChatRecord } from "../integrations/whatsapp/evolution-api.js";
 import type { OrchestrationContext } from "../types/orchestration.js";
 import type { ApprovalInboxItemRecord } from "../types/approval-inbox.js";
+import type { MemoryEntityKind, MemoryEntityRecord } from "../types/memory-entities.js";
 import type { UserPreferences } from "../types/user-preferences.js";
 import type {
   CreateWorkflowPlanInput,
@@ -917,6 +919,33 @@ function isUserPreferencesPrompt(prompt: string): boolean {
     "minhas preferencias",
     "minhas preferências",
   ]);
+}
+
+function isMemoryEntityListPrompt(prompt: string): boolean {
+  const normalized = prompt.toLowerCase();
+  return (
+    normalized.includes("liste as entidades") ||
+    normalized.includes("listar entidades") ||
+    normalized.includes("mostre as entidades") ||
+    normalized.includes("memoria do atlas") ||
+    normalized.includes("memória do atlas")
+  ) && !normalized.includes("busque");
+}
+
+function isMemoryEntitySearchPrompt(prompt: string): boolean {
+  const normalized = prompt.toLowerCase();
+  return normalized.includes("busque entidades")
+    || normalized.includes("buscar entidades")
+    || normalized.includes("procure entidades");
+}
+
+function isIntentResolvePrompt(prompt: string): boolean {
+  const normalized = prompt.toLowerCase();
+  return normalized.includes("analise a intencao")
+    || normalized.includes("analise a intenção")
+    || normalized.includes("analise este pedido")
+    || normalized.includes("inspecione a intencao")
+    || normalized.includes("mostre a intencao");
 }
 
 function extractPreferenceUpdate(prompt: string): import("../types/user-preferences.js").UpdateUserPreferencesInput | null {
@@ -3432,6 +3461,12 @@ function buildMorningBriefReply(input: ExecutiveMorningBrief): string {
     lines.push("", `Próxima ação: ${truncateBriefText(input.nextAction, 96)}`);
   }
 
+  lines.push("", "Mensagem do dia:");
+  lines.push(`"${input.motivation.text}"`);
+  if (input.motivation.author) {
+    lines.push(input.motivation.author);
+  }
+
   return lines.join("\n");
 }
 
@@ -3723,6 +3758,90 @@ function buildContactListReply(contacts: ContactProfileRecord[]): string {
     ...contacts.map((contact) =>
       `- ${contact.displayName ?? contact.identifier} | ${contact.relationship} | ${contact.persona} | ${contact.channel}`,
     ),
+  ].join("\n");
+}
+
+function extractMemoryEntityKindFromPrompt(prompt: string): MemoryEntityKind | undefined {
+  const normalized = prompt.toLowerCase();
+  if (includesAny(normalized, ["aprova", "approval"])) {
+    return "approval";
+  }
+  if (includesAny(normalized, ["workflow", "fluxo"])) {
+    return "workflow_run";
+  }
+  if (includesAny(normalized, ["contato", "contact"])) {
+    return "contact";
+  }
+  if (includesAny(normalized, ["projeto", "project"])) {
+    return "project";
+  }
+  if (includesAny(normalized, ["lead"])) {
+    return "lead";
+  }
+  if (includesAny(normalized, ["conteudo", "conteúdo", "content"])) {
+    return "content_item";
+  }
+  if (includesAny(normalized, ["pesquisa", "research"])) {
+    return "research_session";
+  }
+  if (includesAny(normalized, ["tarefa", "task"])) {
+    return "task";
+  }
+  return undefined;
+}
+
+function extractMemoryEntitySearchQuery(prompt: string): string | undefined {
+  const quoted = prompt.match(/["“](.+?)["”]/);
+  if (quoted?.[1]?.trim()) {
+    return quoted[1].trim();
+  }
+
+  const normalized = prompt
+    .replace(/^.*?(busque entidades|buscar entidades|procure entidades)\s*/i, "")
+    .replace(/\b(do tipo|tipo)\b.*$/i, "")
+    .trim();
+
+  return normalized || undefined;
+}
+
+function buildMemoryEntityListReply(entities: MemoryEntityRecord[], input: {
+  kind?: MemoryEntityKind;
+  query?: string;
+}): string {
+  if (entities.length === 0) {
+    if (input.query) {
+      return `Não encontrei entidades para a busca "${input.query}".`;
+    }
+    if (input.kind) {
+      return `Não encontrei entidades do tipo ${input.kind}.`;
+    }
+    return "Não encontrei entidades salvas na memória estruturada do Atlas.";
+  }
+
+  const header = input.query
+    ? `Entidades encontradas para "${input.query}": ${entities.length}.`
+    : input.kind
+      ? `Entidades do tipo ${input.kind}: ${entities.length}.`
+      : `Entidades recentes da memória do Atlas: ${entities.length}.`;
+
+  return [
+    header,
+    ...entities.slice(0, 10).map((entity) =>
+      `- ${entity.kind} | ${entity.title}${entity.tags.length ? ` | tags: ${entity.tags.slice(0, 4).join(", ")}` : ""}`,
+    ),
+  ].join("\n");
+}
+
+function buildIntentResolutionReply(input: IntentResolution): string {
+  return [
+    "Leitura de intenção:",
+    `- Domínio principal: ${input.orchestration.route.primaryDomain}`,
+    `- Domínios mencionados: ${input.mentionedDomains.join(", ") || "nenhum"}`,
+    `- Modo de ação: ${input.orchestration.route.actionMode}`,
+    `- Confiança: ${input.orchestration.route.confidence}`,
+    `- Pedido composto: ${input.compoundIntent ? "sim" : "não"}`,
+    `- Histórico recente aproveitável: ${input.historyUserTurns.length} turno(s)`,
+    `- Razões: ${input.orchestration.route.reasons.join(" | ")}`,
   ].join("\n");
 }
 
@@ -7445,6 +7564,7 @@ export class AgentCore {
     private readonly contacts: ContactIntelligenceStore,
     private readonly communicationRouter: CommunicationRouter,
     private readonly approvals: ApprovalInboxStore,
+    private readonly memoryEntities: MemoryEntityStore,
     private readonly whatsappMessages: WhatsAppMessageStore,
     private readonly workflows: WorkflowOrchestratorStore,
     private readonly workflowRuntime: WorkflowExecutionRuntime,
@@ -7941,6 +8061,33 @@ export class AgentCore {
     );
     if (directContactUpsertResult) {
       return directContactUpsertResult;
+    }
+    const directMemoryEntityListResult = await this.tryRunDirectMemoryEntityList(
+      activeUserPrompt,
+      requestId,
+      orchestration,
+      preferences,
+    );
+    if (directMemoryEntityListResult) {
+      return directMemoryEntityListResult;
+    }
+    const directMemoryEntitySearchResult = await this.tryRunDirectMemoryEntitySearch(
+      activeUserPrompt,
+      requestId,
+      orchestration,
+      preferences,
+    );
+    if (directMemoryEntitySearchResult) {
+      return directMemoryEntitySearchResult;
+    }
+    const directIntentResolveResult = await this.tryRunDirectIntentResolve(
+      activeUserPrompt,
+      requestId,
+      orchestration,
+      preferences,
+    );
+    if (directIntentResolveResult) {
+      return directIntentResolveResult;
     }
     const directWorkflowListResult = await this.tryRunDirectWorkflowList(
       activeUserPrompt,
@@ -12577,6 +12724,75 @@ export class AgentCore {
     return {
       requestId,
       reply: buildContactSaveReply(contact),
+      messages: buildBaseMessages(userPrompt, orchestration, preferences),
+      toolExecutions: [],
+    };
+  }
+
+  private async tryRunDirectMemoryEntityList(
+    userPrompt: string,
+    requestId: string,
+    orchestration: OrchestrationContext,
+    preferences: UserPreferences,
+  ): Promise<AgentRunResult | null> {
+    if (!isMemoryEntityListPrompt(userPrompt)) {
+      return null;
+    }
+
+    const kind = extractMemoryEntityKindFromPrompt(userPrompt);
+    const entities = this.memoryEntities.list(12, kind);
+    return {
+      requestId,
+      reply: buildMemoryEntityListReply(entities, { kind }),
+      messages: buildBaseMessages(userPrompt, orchestration, preferences),
+      toolExecutions: [],
+    };
+  }
+
+  private async tryRunDirectMemoryEntitySearch(
+    userPrompt: string,
+    requestId: string,
+    orchestration: OrchestrationContext,
+    preferences: UserPreferences,
+  ): Promise<AgentRunResult | null> {
+    if (!isMemoryEntitySearchPrompt(userPrompt)) {
+      return null;
+    }
+
+    const query = extractMemoryEntitySearchQuery(userPrompt);
+    if (!query) {
+      return {
+        requestId,
+        reply: "Para buscar entidades, eu preciso de um termo ou frase entre aspas.",
+        messages: buildBaseMessages(userPrompt, orchestration, preferences),
+        toolExecutions: [],
+      };
+    }
+
+    const kind = extractMemoryEntityKindFromPrompt(userPrompt);
+    const entities = this.memoryEntities.search(query, 12, kind);
+    return {
+      requestId,
+      reply: buildMemoryEntityListReply(entities, { kind, query }),
+      messages: buildBaseMessages(userPrompt, orchestration, preferences),
+      toolExecutions: [],
+    };
+  }
+
+  private async tryRunDirectIntentResolve(
+    userPrompt: string,
+    requestId: string,
+    orchestration: OrchestrationContext,
+    preferences: UserPreferences,
+  ): Promise<AgentRunResult | null> {
+    if (!isIntentResolvePrompt(userPrompt)) {
+      return null;
+    }
+
+    const resolution = this.intentRouter.resolve(userPrompt);
+    return {
+      requestId,
+      reply: buildIntentResolutionReply(resolution),
       messages: buildBaseMessages(userPrompt, orchestration, preferences),
       toolExecutions: [],
     };

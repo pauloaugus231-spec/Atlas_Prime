@@ -60,6 +60,7 @@ export interface ExecutiveBriefEntity {
   kind: MemoryEntityKind;
   title: string;
   tags: string[];
+  actionHint?: string;
 }
 
 export interface ExecutiveBriefEntitySummary {
@@ -77,6 +78,10 @@ export interface ExecutiveMorningBrief {
   workflows: ExecutiveBriefWorkflow[];
   focus: ExecutiveBriefFocusItem[];
   memoryEntities: ExecutiveBriefEntitySummary;
+  motivation: {
+    text: string;
+    author?: string;
+  };
   founderSnapshot: FounderOpsSnapshot;
   nextAction?: string;
 }
@@ -133,6 +138,14 @@ function getBriefDayKey(date: Date, timezone: string): string {
   const month = parts.find((part) => part.type === "month")?.value ?? "00";
   const day = parts.find((part) => part.type === "day")?.value ?? "00";
   return `${year}-${month}-${day}`;
+}
+
+function hashText(value: string): number {
+  let hash = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (hash * 31 + value.charCodeAt(index)) >>> 0;
+  }
+  return hash;
 }
 
 function diffDayKeys(left: string, right: string): number {
@@ -217,6 +230,7 @@ function chooseNextAction(input: {
   approvals: ApprovalInboxItemRecord[];
   workflows: ExecutiveBriefWorkflow[];
   focus: ExecutiveBriefFocusItem[];
+  memoryEntities: ExecutiveBriefEntitySummary;
 }): string | undefined {
   const candidates: Array<{ score: number; text: string }> = [];
   const nextEvent = input.events[0];
@@ -276,8 +290,73 @@ function chooseNextAction(input: {
     });
   }
 
+  const recentEntityWithAction = input.memoryEntities.recent.find((entity) => entity.actionHint);
+  if (recentEntityWithAction?.actionHint) {
+    const baseScore = recentEntityWithAction.kind === "approval"
+      ? 62
+      : recentEntityWithAction.kind === "workflow_run"
+        ? 44
+        : recentEntityWithAction.kind === "contact"
+          ? 34
+          : 22;
+    candidates.push({
+      score: baseScore,
+      text: recentEntityWithAction.actionHint,
+    });
+  }
+
   candidates.sort((left, right) => right.score - left.score);
   return candidates[0]?.text;
+}
+
+function deriveEntityActionHint(input: {
+  kind: MemoryEntityKind;
+  title: string;
+  state: Record<string, unknown>;
+}): string | undefined {
+  if (input.kind === "workflow_run") {
+    const nextAction = typeof input.state.nextAction === "string" ? input.state.nextAction.trim() : "";
+    if (nextAction) {
+      return nextAction;
+    }
+    return `Revisar o workflow: ${input.title}.`;
+  }
+
+  if (input.kind === "approval") {
+    const status = typeof input.state.status === "string" ? input.state.status.trim().toLowerCase() : "";
+    if (status === "pending") {
+      return `Decidir a aprovação pendente: ${input.title}.`;
+    }
+  }
+
+  if (input.kind === "contact") {
+    const priority = typeof input.state.priority === "string" ? input.state.priority.trim().toLowerCase() : "";
+    if (priority === "alta") {
+      return `Retomar o contato prioritário: ${input.title}.`;
+    }
+  }
+
+  return undefined;
+}
+
+function pickDailyMotivation(timezone: string): { text: string; author?: string } {
+  const catalog = [
+    { text: "Disciplina é continuar quando o entusiasmo já foi embora." },
+    { text: "A dificuldade mostra o tamanho do chamado. Responder a ela é parte da vitória." },
+    { text: "Você tem poder sobre sua mente, não sobre os eventos. Perceba isso, e encontrará força.", author: "Marco Aurélio" },
+    { text: "Não explique sua filosofia. Incorpore-a.", author: "Epicteto" },
+    { text: "A coragem cresce quando a ação começa antes da certeza completa." },
+    { text: "A constância resolve o que a pressa só agrava." },
+    { text: "Aquele que tem um porquê enfrenta quase qualquer como.", author: "Friedrich Nietzsche" },
+    { text: "Enquanto adiamos, o problema cresce; quando enfrentamos, ele começa a ceder." },
+    { text: "Dificuldades fortalecem a mente, como o trabalho fortalece o corpo.", author: "Sêneca" },
+    { text: "Resiliência não é negar a luta; é continuar útil dentro dela." },
+    { text: "O homem que move montanhas começa carregando pequenas pedras.", author: "Confúcio" },
+    { text: "Resolver bem hoje vale mais do que prometer muito amanhã." },
+  ] as const;
+
+  const key = getBriefDayKey(new Date(), timezone);
+  return catalog[hashText(key) % catalog.length];
 }
 
 export class PersonalOSService {
@@ -425,9 +504,15 @@ export class PersonalOSService {
         kind: item.kind,
         title: item.title,
         tags: item.tags,
+        actionHint: deriveEntityActionHint({
+          kind: item.kind,
+          title: item.title,
+          state: item.state,
+        }),
       })),
     };
     const founderSnapshot = this.founderOps.getDailySnapshot();
+    const motivation = pickDailyMotivation(this.timezone);
     const nextAction = chooseNextAction({
       timezone: this.timezone,
       events,
@@ -436,6 +521,7 @@ export class PersonalOSService {
       approvals,
       workflows,
       focus,
+      memoryEntities,
     });
 
     this.logger.debug("Built executive morning brief snapshot", {
@@ -455,6 +541,7 @@ export class PersonalOSService {
       workflows,
       focus,
       memoryEntities,
+      motivation,
       founderSnapshot,
       nextAction,
     };

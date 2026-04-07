@@ -200,6 +200,7 @@ export async function createAgentCore() {
     contacts,
     communicationRouter,
     approvals,
+    memoryEntities,
     whatsappMessages,
     workflows,
     workflowRuntime,
