@@ -2,10 +2,12 @@ import type { ApprovalInboxStore } from "./approval-inbox.js";
 import { isPersonallyRelevantCalendarEvent, matchPersonalCalendarTerms } from "./calendar-relevance.js";
 import type { CommunicationRouter } from "./contact-intelligence.js";
 import type { FounderOpsService, FounderOpsSnapshot } from "./founder-ops.js";
+import type { MemoryEntityStore } from "./memory-entity-store.js";
 import type { OperationalMemoryStore } from "./operational-memory.js";
 import type { WorkflowOrchestratorStore } from "./workflow-orchestrator.js";
 import type { Logger } from "../types/logger.js";
 import type { ApprovalInboxItemRecord } from "../types/approval-inbox.js";
+import type { MemoryEntityKind } from "../types/memory-entities.js";
 import type { TaskSummary } from "../integrations/google/google-workspace.js";
 import type { EmailAccountsService } from "../integrations/email/email-accounts.js";
 import type { GoogleWorkspaceAccountsService } from "../integrations/google/google-workspace-accounts.js";
@@ -53,6 +55,19 @@ export interface ExecutiveBriefFocusItem {
   nextAction: string;
 }
 
+export interface ExecutiveBriefEntity {
+  id: string;
+  kind: MemoryEntityKind;
+  title: string;
+  tags: string[];
+}
+
+export interface ExecutiveBriefEntitySummary {
+  total: number;
+  byKind: Partial<Record<MemoryEntityKind, number>>;
+  recent: ExecutiveBriefEntity[];
+}
+
 export interface ExecutiveMorningBrief {
   timezone: string;
   events: ExecutiveBriefEvent[];
@@ -61,6 +76,7 @@ export interface ExecutiveMorningBrief {
   approvals: ApprovalInboxItemRecord[];
   workflows: ExecutiveBriefWorkflow[];
   focus: ExecutiveBriefFocusItem[];
+  memoryEntities: ExecutiveBriefEntitySummary;
   founderSnapshot: FounderOpsSnapshot;
   nextAction?: string;
 }
@@ -275,6 +291,7 @@ export class PersonalOSService {
     private readonly workflows: WorkflowOrchestratorStore,
     private readonly founderOps: FounderOpsService,
     private readonly memory: OperationalMemoryStore,
+    private readonly memoryEntities: MemoryEntityStore,
   ) {}
 
   async getExecutiveMorningBrief(): Promise<ExecutiveMorningBrief> {
@@ -396,6 +413,20 @@ export class PersonalOSService {
         nextAction: item.nextAction,
       }))
       .filter((item) => !isExecutiveNoise(item.title));
+    const recentEntities = this.memoryEntities.list(12).filter((item) => !isExecutiveNoise(item.title));
+    const memoryEntities: ExecutiveBriefEntitySummary = {
+      total: recentEntities.length,
+      byKind: recentEntities.reduce<Partial<Record<MemoryEntityKind, number>>>((acc, item) => {
+        acc[item.kind] = (acc[item.kind] ?? 0) + 1;
+        return acc;
+      }, {}),
+      recent: recentEntities.slice(0, 4).map((item) => ({
+        id: item.id,
+        kind: item.kind,
+        title: item.title,
+        tags: item.tags,
+      })),
+    };
     const founderSnapshot = this.founderOps.getDailySnapshot();
     const nextAction = chooseNextAction({
       timezone: this.timezone,
@@ -423,6 +454,7 @@ export class PersonalOSService {
       approvals,
       workflows,
       focus,
+      memoryEntities,
       founderSnapshot,
       nextAction,
     };

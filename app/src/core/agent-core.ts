@@ -3327,6 +3327,17 @@ function buildMorningBriefReply(input: ExecutiveMorningBrief): string {
     lines.push(`- Métricas-alvo prontas: ${summarizeTrackedMetrics(input.founderSnapshot.trackedMetrics)}.`);
   }
 
+  if (input.memoryEntities.total > 0) {
+    const entityCounts = Object.entries(input.memoryEntities.byKind)
+      .map(([kind, count]) => `${kind}: ${count}`)
+      .join(" | ");
+    lines.push("", "Memória Atlas:");
+    lines.push(`- ${input.memoryEntities.total} entidade(s) recentes rastreadas${entityCounts ? ` | ${entityCounts}` : ""}`);
+    for (const entity of input.memoryEntities.recent.slice(0, 3)) {
+      lines.push(`- ${entity.kind}: ${truncateBriefText(entity.title)}${entity.tags.length ? ` — tags: ${entity.tags.slice(0, 3).join(", ")}` : ""}`);
+    }
+  }
+
   lines.push("", "Agenda de hoje:");
   if (input.events.length > 0) {
     const groupedEvents = {
