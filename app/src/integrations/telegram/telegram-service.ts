@@ -2621,6 +2621,19 @@ export class TelegramService {
       const accountAlias = this.resolveScheduleImportAccountAlias(captionText);
       const accountConfig = this.getGoogleAccountConfig(accountAlias);
       const timezone = accountConfig.defaultTimezone || this.config.google.defaultTimezone;
+      await this.sendText(
+        message.chat.id,
+        [
+          "Recebi a agenda e já estou processando.",
+          `- Arquivo: ${attachment.fileName}`,
+          `- Calendário alvo: ${accountAlias}`,
+          "Vou extrair os eventos e te devolver um rascunho para aprovação.",
+        ].join("\n"),
+        {
+          reply_to_message_id: message.message_id,
+          disable_web_page_preview: true,
+        },
+      );
       const remoteFile = await this.api.getFile(attachment.fileId);
       if (!remoteFile.file_path) {
         throw new Error("Telegram não retornou file_path para o arquivo enviado.");
