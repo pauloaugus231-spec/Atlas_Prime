@@ -17,6 +17,7 @@ import { GrowthOpsStore } from "./growth-ops.js";
 import { OpenAIClient } from "./openai-client.js";
 import { OllamaClient } from "./ollama-client.js";
 import { OperationalMemoryStore } from "./operational-memory.js";
+import { PersonalOSService } from "./personal-os.js";
 import { loadToolPlugins } from "./plugin-loader.js";
 import { ToolPluginRegistry } from "./plugin-registry.js";
 import { ProjectOpsService } from "./project-ops.js";
@@ -26,6 +27,8 @@ import { UserPreferencesStore } from "./user-preferences.js";
 import { WhatsAppMessageStore } from "./whatsapp-message-store.js";
 import { WorkflowOrchestratorStore } from "./workflow-orchestrator.js";
 import type { LlmClient } from "../types/llm.js";
+import { ApprovalPolicyService } from "./approval-policy.js";
+import { ApprovalEngine } from "./approval-engine.js";
 
 export async function createAgentCore() {
   const config = loadConfig();
@@ -58,6 +61,12 @@ export async function createAgentCore() {
   const approvals = new ApprovalInboxStore(
     config.paths.approvalInboxDbPath,
     logger.child({ scope: "approval-inbox" }),
+  );
+  const approvalPolicy = new ApprovalPolicyService();
+  const approvalEngine = new ApprovalEngine(
+    approvals,
+    approvalPolicy,
+    logger.child({ scope: "approval-engine" }),
   );
   const whatsappMessages = new WhatsAppMessageStore(
     config.paths.whatsappMessagesDbPath,
@@ -101,6 +110,17 @@ export async function createAgentCore() {
     config.emailAccounts,
     googleWorkspaces,
     logger.child({ scope: "email-accounts" }),
+  );
+  const personalOs = new PersonalOSService(
+    config.google.defaultTimezone,
+    logger.child({ scope: "personal-os" }),
+    googleWorkspaces,
+    emailAccounts,
+    communicationRouter,
+    approvals,
+    workflows,
+    founderOps,
+    memory,
   );
   const email = emailAccounts.getReader("primary");
   const emailWriter = emailAccounts.getWriter("primary");
@@ -159,7 +179,7 @@ export async function createAgentCore() {
     googleWorkspace,
     googleWorkspaces,
     googleMaps,
-    founderOps,
+    personalOs,
     pexelsMedia,
     projectOps,
     safeExec,
@@ -174,6 +194,8 @@ export async function createAgentCore() {
     socialAssistant,
     contacts,
     approvals,
+    approvalPolicy,
+    approvalEngine,
     whatsappMessages,
     communicationRouter,
     workflows,
@@ -190,6 +212,7 @@ export async function createAgentCore() {
     googleWorkspaces,
     googleMaps,
     founderOps,
+    personalOs,
     pexelsMedia,
     growthOps,
     projectOps,

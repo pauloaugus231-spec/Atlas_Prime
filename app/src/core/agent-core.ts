@@ -13,7 +13,7 @@ import type {
 import { FileAccessPolicy, type ReadableRootKey } from "./file-access-policy.js";
 import { ContentOpsStore } from "./content-ops.js";
 import { GrowthOpsStore } from "./growth-ops.js";
-import { FounderOpsService, type FounderOpsSnapshot } from "./founder-ops.js";
+import type { FounderOpsSnapshot } from "./founder-ops.js";
 import { inferPreferredDomains, resolveKnowledgeAlias } from "./knowledge-aliases.js";
 import { LocalKnowledgeService } from "./local-knowledge.js";
 import {
@@ -34,6 +34,7 @@ import type {
   PendingGoogleEventUpdateDraft,
 } from "./google-draft-utils.js";
 import { OperationalMemoryStore } from "./operational-memory.js";
+import { PersonalOSService, type ExecutiveMorningBrief } from "./personal-os.js";
 import { ProjectOpsService } from "./project-ops.js";
 import { SafeExecService } from "./safe-exec.js";
 import { ToolPluginRegistry } from "./plugin-registry.js";
@@ -3263,17 +3264,7 @@ function classifyBriefPeriod(iso: string | null | undefined, timezone: string): 
   return "noite";
 }
 
-function buildMorningBriefReply(input: {
-  timezone: string;
-  events: Array<{ account: string; summary: string; start: string | null; location?: string; matchedTerms?: string[] }>;
-  taskBuckets: MorningTaskBuckets;
-  emails: MorningBriefEmailItem[];
-  approvals: Array<{ subject: string; actionKind: string; channel: string }>;
-  workflows: Array<{ id: number; title: string; status: string; nextAction: string | null }>;
-  focus: Array<{ title: string; nextAction: string }>;
-  founderSnapshot: FounderOpsSnapshot;
-  nextAction?: string;
-}): string {
+function buildMorningBriefReply(input: ExecutiveMorningBrief): string {
   const attentionNow: string[] = [];
   const highestEmail = input.emails.find((item) => item.priority === "alta") ?? input.emails[0];
   const nextEvent = input.events[0];
@@ -7436,7 +7427,7 @@ export class AgentCore {
     private readonly googleWorkspace: GoogleWorkspaceService,
     private readonly googleWorkspaces: GoogleWorkspaceAccountsService,
     private readonly googleMaps: GoogleMapsService,
-    private readonly founderOps: FounderOpsService,
+    private readonly personalOs: PersonalOSService,
     private readonly pexelsMedia: PexelsMediaService,
     private readonly projectOps: ProjectOpsService,
     private readonly safeExec: SafeExecService,
@@ -8901,164 +8892,23 @@ export class AgentCore {
       domain: orchestration.route.primaryDomain,
     });
 
-    const events: Array<{ account: string; summary: string; start: string | null; location?: string; matchedTerms?: string[] }> = [];
-    const tasks: Array<TaskSummary & { account: string }> = [];
-    for (const alias of this.googleWorkspaces.getAliases()) {
-      const workspace = this.googleWorkspaces.getWorkspace(alias);
-      const status = workspace.getStatus();
-      if (!status.ready) {
-        continue;
-      }
-
-      const brief = await workspace.getDailyBrief();
-      events.push(
-        ...brief.events
-          .map((event) => ({
-            account: alias,
-            summary: event.summary,
-            start: event.start,
-            location: event.location,
-            description: event.description,
-            matchedTerms: matchPersonalCalendarTerms({
-              account: alias,
-              summary: event.summary,
-              description: event.description,
-              location: event.location,
-            }),
-          }))
-          .filter((event) => isPersonallyRelevantCalendarEvent(event)),
-      );
-      tasks.push(...brief.tasks.map((task) => ({ ...task, account: alias })));
-    }
-
-    events.sort((left, right) => (left.start ?? "").localeCompare(right.start ?? ""));
-    const visibleTasks = tasks.filter((task) => !isOperationalNoise(task.title));
-    const taskBuckets = buildMorningTaskBuckets(visibleTasks, this.config.google.defaultTimezone);
-
-    const prioritizedEmails: MorningBriefEmailItem[] = [];
-
-    for (const alias of this.emailAccounts.getAliases()) {
-      const reader = this.emailAccounts.getReader(alias);
-      const status = await reader.getStatus();
-      if (!status.ready) {
-        continue;
-      }
-
-      const messages = await reader.listRecentMessages({
-        limit: 8,
-        unreadOnly: true,
-        sinceHours: 18,
-      });
-
-      for (const message of messages) {
-        const sender = message.from[0] ?? "";
-        const classification = this.communicationRouter.classify({
-          channel: "email",
-          identifier: extractEmailIdentifier(message.from),
-          displayName: sender,
-          subject: message.subject,
-          text: message.preview,
-        });
-        const summary = summarizeEmailForOperations({
-          subject: message.subject,
-          from: message.from,
-          text: message.preview,
-        });
-        if (summary.priority === "baixa" || classification.actionPolicy === "ignore" || classification.relationship === "spam") {
-          continue;
-        }
-        prioritizedEmails.push({
-          account: alias,
-          uid: message.uid,
-          subject: message.subject,
-          from: message.from,
-          priority: summary.priority,
-          action: summary.action,
-          relationship: classification.relationship,
-          group: summary.group,
-        });
-      }
-    }
-
-    const priorityOrder = { alta: 0, media: 1, baixa: 2 } as const;
-    const relationshipOrder = {
-      client: 0,
-      social_case: 1,
-      family: 2,
-      partner: 3,
-      lead: 4,
-      colleague: 5,
-      vendor: 6,
-      friend: 7,
-      unknown: 8,
-      spam: 9,
-    } as const;
-    prioritizedEmails.sort(
-      (left, right) =>
-        priorityOrder[left.priority as keyof typeof priorityOrder]
-        - priorityOrder[right.priority as keyof typeof priorityOrder]
-        || (relationshipOrder[left.relationship as keyof typeof relationshipOrder] ?? 50)
-          - (relationshipOrder[right.relationship as keyof typeof relationshipOrder] ?? 50),
-    );
-    const visibleEmails = prioritizedEmails.filter((item) => !isOperationalNoise(item.subject));
-
-    const approvals = this.approvals.listPendingAll(6).map((item) => ({
-      subject: item.subject,
-      actionKind: item.actionKind,
-      channel: item.channel,
-    }));
-    const workflows = this.workflows
-      .listPlans(10)
-      .filter((plan) => plan.status === "active" || plan.status === "draft")
-      .map((plan) => ({
-        id: plan.id,
-        title: plan.title,
-        status: plan.status,
-        nextAction: plan.nextAction,
-      }));
-    const visibleWorkflows = workflows.filter((plan) => !isOperationalNoise(plan.title));
-    const focus = this.memory.getDailyFocus(3).map((item) => ({
-      title: item.item.title,
-      nextAction: item.nextAction,
-    }));
-    const visibleFocus = focus.filter((item) => !isOperationalNoise(item.title));
-    const founderSnapshot = this.founderOps.getDailySnapshot();
-
-    const nextAction = chooseMorningNextAction({
-      timezone: this.config.google.defaultTimezone,
-      events,
-      taskBuckets,
-      emails: visibleEmails,
-      approvals,
-      workflows: visibleWorkflows,
-      focus: visibleFocus,
-    });
+    const brief = await this.personalOs.getExecutiveMorningBrief();
 
     return {
       requestId,
-      reply: buildMorningBriefReply({
-        timezone: this.config.google.defaultTimezone,
-        events,
-        taskBuckets,
-        emails: visibleEmails,
-        approvals,
-        workflows: visibleWorkflows,
-        focus: visibleFocus,
-        founderSnapshot,
-        nextAction,
-      }),
+      reply: buildMorningBriefReply(brief),
       messages: buildBaseMessages(userPrompt, orchestration),
       toolExecutions: [
         {
           toolName: "morning_brief",
           resultPreview: JSON.stringify(
             {
-              events: events.length,
-              tasks: taskBuckets.actionableCount,
-              emails: visibleEmails.length,
-              approvals: approvals.length,
-              workflows: visibleWorkflows.length,
-              founderSections: founderSnapshot.sections.length,
+              events: brief.events.length,
+              tasks: brief.taskBuckets.actionableCount,
+              emails: brief.emails.length,
+              approvals: brief.approvals.length,
+              workflows: brief.workflows.length,
+              founderSections: brief.founderSnapshot.sections.length,
             },
             null,
             2,

@@ -26,7 +26,7 @@ import { ShortVideoRenderService } from "../media/short-video-renderer.js";
 import { OpenAiAudioTranscriptionService } from "../openai/audio-transcription.js";
 import { OpenAiScheduleImportService } from "../openai/schedule-import.js";
 import { YouTubePublisherService } from "../youtube/youtube-publisher.js";
-import type { ApprovalInboxStore } from "../../core/approval-inbox.js";
+import type { ApprovalEngine } from "../../core/approval-engine.js";
 import type { WhatsAppMessageStore } from "../../core/whatsapp-message-store.js";
 import { matchPersonalCalendarTerms } from "../../core/calendar-relevance.js";
 import { EvolutionApiClient } from "../whatsapp/evolution-api.js";
@@ -1542,7 +1542,7 @@ export class TelegramService {
     private readonly contentOps: ContentOpsStore,
     googleAuth: GoogleWorkspaceAuthService,
     private readonly api: TelegramApi,
-    private readonly approvals: ApprovalInboxStore,
+    private readonly approvalEngine: ApprovalEngine,
     private readonly whatsappMessages: WhatsAppMessageStore,
   ) {
     this.hasAllowlist = this.config.telegram.allowedUserIds.length > 0;
@@ -2180,7 +2180,7 @@ export class TelegramService {
     }
 
     if (text === "/approvals" || isApprovalListRequest(normalizedText)) {
-      const items = this.approvals.listPending(message.chat.id, 10);
+      const items = this.approvalEngine.listPending(message.chat.id, 10);
       await this.sendText(
         message.chat.id,
         buildApprovalListReply(
@@ -2550,7 +2550,7 @@ export class TelegramService {
       return;
     }
 
-    const item = this.approvals.getById(parsed.id);
+    const item = this.approvalEngine.getById(parsed.id);
     if (!item || item.chatId !== chatId) {
       await this.api.answerCallbackQuery(callback.id, {
         text: "Aprovação não encontrada.",
@@ -2567,7 +2567,7 @@ export class TelegramService {
 
     const draft = parsePendingActionDraftPayload(item.draftPayload);
     if (!draft) {
-      this.approvals.updateStatus(item.id, "failed");
+      this.approvalEngine.updateStatus(item.id, "failed");
       await this.api.answerCallbackQuery(callback.id, {
         text: "Rascunho inválido.",
         show_alert: true,
@@ -2576,7 +2576,7 @@ export class TelegramService {
     }
 
     if (parsed.action === "discard") {
-      this.approvals.updateStatus(item.id, "discarded");
+      this.approvalEngine.updateStatus(item.id, "discarded");
       this.pendingActionDrafts.delete(chatId);
       await this.api.answerCallbackQuery(callback.id, {
         text: "Rascunho descartado.",
@@ -2642,7 +2642,7 @@ export class TelegramService {
 
     try {
       const execution = await this.executePendingActionDraft(draft);
-      this.approvals.updateStatus(item.id, execution.ok ? "executed" : "failed");
+      this.approvalEngine.updateStatus(item.id, execution.ok ? "executed" : "failed");
       if (execution.ok) {
         this.captureCalendarUndoAction(chatId, draft, execution.rawResult);
         this.pendingActionDrafts.delete(chatId);
@@ -2653,7 +2653,7 @@ export class TelegramService {
         disable_web_page_preview: true,
       });
     } catch (error) {
-      this.approvals.updateStatus(item.id, "failed");
+      this.approvalEngine.updateStatus(item.id, "failed");
       await this.sendText(
         chatId,
         [
@@ -3444,7 +3444,7 @@ export class TelegramService {
         this.captureCalendarUndoAction(message.chat.id, pendingDraft, execution.rawResult);
         this.clearPendingActionDraft(message.chat.id, "executed");
       } else {
-        this.markLatestPendingApproval(message.chat.id, "failed");
+        this.approvalEngine.markLatestPending(message.chat.id, "failed");
       }
 
       this.appendChatTurn(message.chat.id, {
@@ -3749,26 +3749,22 @@ export class TelegramService {
   private clearPendingActionDraft(chatId: number, status?: "discarded" | "executed" | "superseded"): void {
     this.pendingActionDrafts.delete(chatId);
     if (status) {
-      this.markLatestPendingApproval(chatId, status);
+      this.approvalEngine.markLatestPending(chatId, status);
     }
   }
 
   private persistPendingApproval(chatId: number, draft: PendingActionDraft) {
-    return this.approvals.createPending({
+    const result = this.approvalEngine.request({
       chatId,
       channel: "telegram",
       actionKind: draft.kind,
       subject: buildPendingActionSubject(draft),
       draftPayload: JSON.stringify(draft),
     });
-  }
-
-  private markLatestPendingApproval(chatId: number, status: "discarded" | "executed" | "failed" | "superseded"): void {
-    const pending = this.approvals.getLatestPending(chatId);
-    if (!pending) {
-      return;
+    if (!result.approvalItem) {
+      throw new Error(`Approval request for ${draft.kind} was not persisted.`);
     }
-    this.approvals.updateStatus(pending.id, status);
+    return result.approvalItem;
   }
 
   private async sendText(
