@@ -7584,6 +7584,10 @@ export class AgentCore {
     private readonly safeExec: SafeExecService,
   ) {}
 
+  resolveIntent(userPrompt: string): IntentResolution {
+    return this.intentRouter.resolve(userPrompt);
+  }
+
   async runDailyEditorialResearch(input?: {
     channelKey?: string;
     timezone?: string;

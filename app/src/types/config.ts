@@ -16,6 +16,7 @@ export interface AppPathsConfig {
   memoryEntityDbPath: string;
   contactIntelligenceDbPath: string;
   approvalInboxDbPath: string;
+  clarificationInboxDbPath: string;
   whatsappMessagesDbPath: string;
 }
 

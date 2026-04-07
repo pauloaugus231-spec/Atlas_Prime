@@ -554,6 +554,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       memoryEntityDbPath: path.join(workspaceDir, ".agent-state", "memory-entities.sqlite"),
       contactIntelligenceDbPath: path.join(workspaceDir, ".agent-state", "contact-intelligence.sqlite"),
       approvalInboxDbPath: path.join(workspaceDir, ".agent-state", "approval-inbox.sqlite"),
+      clarificationInboxDbPath: path.join(workspaceDir, ".agent-state", "clarification-inbox.sqlite"),
       whatsappMessagesDbPath: path.join(workspaceDir, ".agent-state", "whatsapp-messages.sqlite"),
     },
     llm: {

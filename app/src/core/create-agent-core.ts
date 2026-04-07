@@ -36,6 +36,8 @@ import { MemoryEntityStore } from "./memory-entity-store.js";
 import { EntityLinker } from "./entity-linker.js";
 import { IntentRouter } from "./intent-router.js";
 import { WorkflowPlanBuilderService } from "./plan-builder.js";
+import { ClarificationInboxStore } from "./clarification-inbox.js";
+import { ClarificationEngine } from "./clarification-engine.js";
 
 export async function createAgentCore() {
   const config = loadConfig();
@@ -68,6 +70,10 @@ export async function createAgentCore() {
   const approvals = new ApprovalInboxStore(
     config.paths.approvalInboxDbPath,
     logger.child({ scope: "approval-inbox" }),
+  );
+  const clarifications = new ClarificationInboxStore(
+    config.paths.clarificationInboxDbPath,
+    logger.child({ scope: "clarification-inbox" }),
   );
   const memoryEntities = new MemoryEntityStore(
     config.paths.memoryEntityDbPath,
@@ -181,6 +187,11 @@ export async function createAgentCore() {
     ? new OpenAIClient(config, logger.child({ scope: "openai" }))
     : new OllamaClient(config, logger.child({ scope: "ollama" }));
   const intentRouter = new IntentRouter();
+  const clarificationEngine = new ClarificationEngine(
+    clarifications,
+    client,
+    logger.child({ scope: "clarification-engine" }),
+  );
   const planBuilder = new WorkflowPlanBuilderService(
     client,
     workflows,
@@ -229,9 +240,11 @@ export async function createAgentCore() {
     socialAssistant,
     contacts,
     approvals,
+    clarifications,
     memoryEntities,
     approvalPolicy,
     approvalEngine,
+    clarificationEngine,
     workflowRuntime,
     entityLinker,
     whatsappMessages,

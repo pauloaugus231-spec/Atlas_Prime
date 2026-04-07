@@ -27,6 +27,7 @@ import { OpenAiAudioTranscriptionService } from "../openai/audio-transcription.j
 import { OpenAiScheduleImportService } from "../openai/schedule-import.js";
 import { YouTubePublisherService } from "../youtube/youtube-publisher.js";
 import type { ApprovalEngine } from "../../core/approval-engine.js";
+import type { ClarificationEngine } from "../../core/clarification-engine.js";
 import type { WhatsAppMessageStore } from "../../core/whatsapp-message-store.js";
 import { matchPersonalCalendarTerms } from "../../core/calendar-relevance.js";
 import { EvolutionApiClient } from "../whatsapp/evolution-api.js";
@@ -723,6 +724,20 @@ function isDraftDiscardRequest(text: string): boolean {
     "cancele",
     "cancela",
   ].some((token) => normalized.includes(token));
+}
+
+function isClarificationCancelRequest(text: string): boolean {
+  const normalized = normalizeIntentText(text);
+  return [
+    "cancelar",
+    "cancelar pergunta",
+    "cancelar clarificacao",
+    "cancelar clarificação",
+    "deixa",
+    "deixa pra la",
+    "deixa pra lá",
+    "esquece",
+  ].some((token) => normalized === token || normalized.includes(token));
 }
 
 function isApprovalListRequest(text: string): boolean {
@@ -1554,6 +1569,7 @@ export class TelegramService {
     googleAuth: GoogleWorkspaceAuthService,
     private readonly api: TelegramApi,
     private readonly approvalEngine: ApprovalEngine,
+    private readonly clarificationEngine: ClarificationEngine,
     private readonly whatsappMessages: WhatsAppMessageStore,
   ) {
     this.hasAllowlist = this.config.telegram.allowedUserIds.length > 0;
@@ -2339,6 +2355,37 @@ export class TelegramService {
       return;
     }
 
+    if (!pendingDraft) {
+      const clarificationHandled = await this.handlePendingClarification(message, normalizedText);
+      if (clarificationHandled) {
+        return;
+      }
+
+      const history = this.getChatHistory(message.chat.id);
+      const clarification = await this.clarificationEngine.maybeRequest({
+        chatId: message.chat.id,
+        channel: "telegram",
+        prompt: normalizedText,
+        intent: this.core.resolveIntent(buildAgentPrompt(message, normalizedText, history)),
+      });
+      if (clarification) {
+        const reply = this.clarificationEngine.buildQuestionMessage(clarification);
+        this.appendChatTurn(message.chat.id, {
+          role: "user",
+          text: normalizedText,
+        });
+        this.appendChatTurn(message.chat.id, {
+          role: "assistant",
+          text: reply,
+        });
+        await this.sendText(message.chat.id, reply, {
+          reply_to_message_id: message.message_id,
+          disable_web_page_preview: true,
+        });
+        return;
+      }
+    }
+
     try {
       const history = this.getChatHistory(message.chat.id);
       const pendingEmailDraft = pendingDraft?.kind === "email_reply" ? pendingDraft : undefined;
@@ -2391,6 +2438,101 @@ export class TelegramService {
         disable_web_page_preview: true,
       });
     }
+  }
+
+  private async handlePendingClarification(message: TelegramMessage, normalizedText: string): Promise<boolean> {
+    const pending = this.clarificationEngine.getLatestPending(message.chat.id);
+    if (!pending) {
+      return false;
+    }
+
+    if (isClearlyNewTopLevelIntent(normalizedText)) {
+      this.clarificationEngine.cancel(pending.id);
+      return false;
+    }
+
+    if (isClarificationCancelRequest(normalizedText)) {
+      this.clarificationEngine.cancel(pending.id);
+      await this.sendText(
+        message.chat.id,
+        "Esclarecimento pendente cancelado. Pode mandar o próximo pedido.",
+        {
+          reply_to_message_id: message.message_id,
+          disable_web_page_preview: true,
+        },
+      );
+      return true;
+    }
+
+    if (pending.status === "pending_answer") {
+      const updated = await this.clarificationEngine.answer(pending, normalizedText);
+      const reply = this.clarificationEngine.buildConfirmationMessage(updated);
+      this.appendChatTurn(message.chat.id, {
+        role: "user",
+        text: normalizedText,
+      });
+      this.appendChatTurn(message.chat.id, {
+        role: "assistant",
+        text: reply,
+      });
+      await this.sendText(message.chat.id, reply, {
+        reply_to_message_id: message.message_id,
+        disable_web_page_preview: true,
+      });
+      return true;
+    }
+
+    if (pending.status === "pending_confirmation") {
+      if (isExplicitSendConfirmation(normalizedText)) {
+        this.clarificationEngine.confirm(pending.id);
+        const history = this.getChatHistory(message.chat.id);
+        const effectiveText = pending.executionPrompt?.trim() || pending.originalPrompt;
+        const result = await this.core.runUserPrompt(buildAgentPrompt(message, effectiveText, history));
+        const nextPendingDraft = extractPendingActionDraft(result.reply);
+        const baseVisibleReply = sanitizeToolPayloadLeak(stripPendingDraftMarkers(result.reply) || result.reply);
+        const visibleReply = baseVisibleReply;
+        const approval = nextPendingDraft
+          ? this.persistPendingApproval(message.chat.id, nextPendingDraft)
+          : undefined;
+        if (nextPendingDraft) {
+          this.pendingActionDrafts.set(message.chat.id, nextPendingDraft);
+        } else {
+          this.clearPendingActionDraft(message.chat.id);
+        }
+        this.appendChatTurn(message.chat.id, {
+          role: "user",
+          text: `${normalizedText} [confirmacao de contexto]`,
+        });
+        this.appendChatTurn(message.chat.id, {
+          role: "assistant",
+          text: visibleReply,
+        });
+        await this.sendText(message.chat.id, visibleReply, {
+          reply_to_message_id: message.message_id,
+          disable_web_page_preview: false,
+          reply_markup: approval ? buildApprovalInlineKeyboard(approval.id) : undefined,
+        });
+        return true;
+      }
+
+      const updated = await this.clarificationEngine.answer(pending, normalizedText);
+      const reply = this.clarificationEngine.buildConfirmationMessage(updated);
+      this.appendChatTurn(message.chat.id, {
+        role: "user",
+        text: `${normalizedText} [correcao de contexto]`,
+      });
+      this.appendChatTurn(message.chat.id, {
+        role: "assistant",
+        text: reply,
+      });
+      await this.sendText(message.chat.id, reply, {
+        reply_to_message_id: message.message_id,
+        disable_web_page_preview: true,
+      });
+      return true;
+    }
+
+    return false;
   }
 
   private resolveScheduleImportAccountAlias(contextText?: string): string {
