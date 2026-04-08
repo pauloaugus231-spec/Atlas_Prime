@@ -3302,11 +3302,6 @@ function buildMorningBriefReply(input: ExecutiveMorningBrief): string {
   const highestEmail = input.emails.find((item) => item.priority === "alta") ?? input.emails[0];
   const nextEvent = input.events[0];
   const nextTask = input.taskBuckets.today[0] ?? input.taskBuckets.overdue[0];
-  const topWorkflow = input.workflows[0];
-
-  if (input.approvals.length > 0) {
-    attentionNow.push(`${input.approvals.length} aprovação(ões) pendente(s).`);
-  }
 
   if (highestEmail) {
     attentionNow.push(
@@ -3328,42 +3323,18 @@ function buildMorningBriefReply(input: ExecutiveMorningBrief): string {
     );
   }
 
-  if (!nextEvent && !nextTask && topWorkflow) {
-    attentionNow.push(`Workflow #${topWorkflow.id}: ${truncateBriefText(topWorkflow.title)}`);
-  }
-
   const lines = [
     "Briefing da manhã",
     "",
     "Resumo rápido:",
     `- Hoje: ${input.events.length} compromisso(s) | ${input.taskBuckets.actionableCount} tarefa(s) acionáveis | ${input.emails.length} email(s)`,
-    `- Pendências: ${input.approvals.length} aprovação(ões) | ${input.workflows.length} workflow(s) | ${input.taskBuckets.stale.length} tarefa(s) no backlog antigo`,
+    `- Pendências: ${input.taskBuckets.overdue.length} tarefa(s) atrasada(s) | ${input.taskBuckets.stale.length} tarefa(s) no backlog antigo`,
   ];
 
   if (attentionNow.length > 0) {
     lines.push("", "Atenção agora:");
     for (const item of attentionNow.slice(0, 3)) {
       lines.push(`- ${item}`);
-    }
-  }
-
-  lines.push("", "Founder Brief:");
-  lines.push(`- ${input.founderSnapshot.executiveLine}`);
-  for (const section of input.founderSnapshot.sections) {
-    lines.push(`- ${describeFounderSectionStatus(section)}`);
-  }
-  if (input.founderSnapshot.trackedMetrics.length > 0) {
-    lines.push(`- Métricas-alvo prontas: ${summarizeTrackedMetrics(input.founderSnapshot.trackedMetrics)}.`);
-  }
-
-  if (input.memoryEntities.total > 0) {
-    const entityCounts = Object.entries(input.memoryEntities.byKind)
-      .map(([kind, count]) => `${kind}: ${count}`)
-      .join(" | ");
-    lines.push("", "Memória Atlas:");
-    lines.push(`- ${input.memoryEntities.total} entidade(s) recentes rastreadas${entityCounts ? ` | ${entityCounts}` : ""}`);
-    for (const entity of input.memoryEntities.recent.slice(0, 3)) {
-      lines.push(`- ${entity.kind}: ${truncateBriefText(entity.title)}${entity.tags.length ? ` — tags: ${entity.tags.slice(0, 3).join(", ")}` : ""}`);
     }
   }
 
@@ -3377,7 +3348,7 @@ function buildMorningBriefReply(input: ExecutiveMorningBrief): string {
 
     if (groupedEvents.manha.length > 0) {
       lines.push("- Manhã:");
-      for (const event of groupedEvents.manha.slice(0, 3)) {
+      for (const event of groupedEvents.manha) {
         lines.push(
           `  - ${formatBriefDateTime(event.start, input.timezone)} — ${truncateBriefText(event.summary)}${event.location ? ` — ${summarizeCalendarLocation(event.location)}` : ""} — ${event.account}${event.matchedTerms?.length ? ` — termos: ${event.matchedTerms.join(", ")}` : ""}`,
         );
@@ -3385,7 +3356,7 @@ function buildMorningBriefReply(input: ExecutiveMorningBrief): string {
     }
     if (groupedEvents.tarde.length > 0) {
       lines.push("- Tarde:");
-      for (const event of groupedEvents.tarde.slice(0, 3)) {
+      for (const event of groupedEvents.tarde) {
         lines.push(
           `  - ${formatBriefDateTime(event.start, input.timezone)} — ${truncateBriefText(event.summary)}${event.location ? ` — ${summarizeCalendarLocation(event.location)}` : ""} — ${event.account}${event.matchedTerms?.length ? ` — termos: ${event.matchedTerms.join(", ")}` : ""}`,
         );
@@ -3393,7 +3364,7 @@ function buildMorningBriefReply(input: ExecutiveMorningBrief): string {
     }
     if (groupedEvents.noite.length > 0) {
       lines.push("- Noite:");
-      for (const event of groupedEvents.noite.slice(0, 3)) {
+      for (const event of groupedEvents.noite) {
         lines.push(
           `  - ${formatBriefDateTime(event.start, input.timezone)} — ${truncateBriefText(event.summary)}${event.location ? ` — ${summarizeCalendarLocation(event.location)}` : ""} — ${event.account}${event.matchedTerms?.length ? ` — termos: ${event.matchedTerms.join(", ")}` : ""}`,
         );
@@ -3430,31 +3401,6 @@ function buildMorningBriefReply(input: ExecutiveMorningBrief): string {
     }
   } else {
     lines.push("- Nenhum email prioritário agora.");
-  }
-
-  if (input.approvals.length > 0) {
-    lines.push("", "Aprovações:");
-    for (const item of input.approvals.slice(0, 3)) {
-      lines.push(`- ${truncateBriefText(item.subject)} — ${item.actionKind} — ${item.channel}`);
-    }
-    if (input.approvals.length > 3) {
-      lines.push(`- ... e mais ${input.approvals.length - 3} aprovação(ões).`);
-    }
-  }
-
-  if (input.workflows.length > 0) {
-    lines.push("", "Radar:");
-    for (const workflow of input.workflows.slice(0, 2)) {
-      lines.push(`#${workflow.id} ${truncateBriefText(workflow.title)} — ${workflow.status}`);
-    }
-    if (input.workflows.length > 2) {
-      lines.push(`- ... e mais ${input.workflows.length - 2} workflow(s).`);
-    }
-  } else if (input.focus.length > 0) {
-    lines.push("", "Radar:");
-    for (const item of input.focus.slice(0, 2)) {
-      lines.push(`- ${truncateBriefText(item.title)}${item.nextAction ? ` — ${truncateBriefText(item.nextAction, 56)}` : ""}`);
-    }
   }
 
   if (input.nextAction) {

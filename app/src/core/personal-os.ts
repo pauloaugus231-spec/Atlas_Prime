@@ -86,6 +86,8 @@ export interface ExecutiveMorningBrief {
   nextAction?: string;
 }
 
+const EXECUTIVE_BRIEF_CALENDAR_ALIASES = new Set(["primary", "abordagem"]);
+
 function includesAny(source: string, tokens: string[]): boolean {
   return tokens.some((token) => source.includes(token));
 }
@@ -400,7 +402,12 @@ export class PersonalOSService {
               location: event.location,
             }),
           }))
-          .filter((event) => isPersonallyRelevantCalendarEvent(event)),
+          .filter((event) => {
+            if (EXECUTIVE_BRIEF_CALENDAR_ALIASES.has(alias)) {
+              return true;
+            }
+            return isPersonallyRelevantCalendarEvent(event);
+          }),
       );
       tasks.push(...brief.tasks.map((task) => ({ ...task, account: alias })));
     }
