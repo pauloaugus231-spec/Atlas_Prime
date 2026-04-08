@@ -120,25 +120,8 @@ export class WeatherService {
       return null;
     }
 
-    const geocodingUrl = new URL("https://geocoding-api.open-meteo.com/v1/search");
-    geocodingUrl.searchParams.set("name", location);
-    geocodingUrl.searchParams.set("count", "5");
-    geocodingUrl.searchParams.set("language", "pt");
-    geocodingUrl.searchParams.set("format", "json");
-
-    const geocodingResponse = await fetch(geocodingUrl, {
-      headers: {
-        "User-Agent": "AgenteAI-Local/1.0",
-      },
-      signal: AbortSignal.timeout(8000),
-    });
-
-    if (!geocodingResponse.ok) {
-      throw new Error(`Weather geocoding failed with status ${geocodingResponse.status}`);
-    }
-
-    const geocodingData = (await geocodingResponse.json()) as OpenMeteoGeocodingResponse;
-    const candidate = this.pickBestLocation(location, geocodingData.results ?? []);
+    const geocoding = await this.resolveLocation(location);
+    const candidate = geocoding?.candidate;
     if (!candidate) {
       return null;
     }
@@ -190,10 +173,84 @@ export class WeatherService {
       daily: this.buildDailyForecast(forecastData.daily),
       source: {
         provider: "Open-Meteo",
-        geocodingUrl: geocodingUrl.toString(),
+        geocodingUrl: geocoding?.url ?? "",
         forecastUrl: forecastUrl.toString(),
       },
     };
+  }
+
+  private async resolveLocation(query: string): Promise<{
+    candidate?: NonNullable<OpenMeteoGeocodingResponse["results"]>[number];
+    url?: string;
+  } | null> {
+    for (const candidateQuery of this.buildGeocodingQueries(query)) {
+      const geocodingUrl = new URL("https://geocoding-api.open-meteo.com/v1/search");
+      geocodingUrl.searchParams.set("name", candidateQuery);
+      geocodingUrl.searchParams.set("count", "5");
+      geocodingUrl.searchParams.set("language", "pt");
+      geocodingUrl.searchParams.set("format", "json");
+
+      const geocodingResponse = await fetch(geocodingUrl, {
+        headers: {
+          "User-Agent": "AgenteAI-Local/1.0",
+        },
+        signal: AbortSignal.timeout(8000),
+      });
+
+      if (!geocodingResponse.ok) {
+        throw new Error(`Weather geocoding failed with status ${geocodingResponse.status}`);
+      }
+
+      const geocodingData = (await geocodingResponse.json()) as OpenMeteoGeocodingResponse;
+      const candidate = this.pickBestLocation(candidateQuery, geocodingData.results ?? []);
+      if (candidate) {
+        if (candidateQuery !== query) {
+          this.logger.info("Weather geocoding used fallback query", {
+            originalQuery: query,
+            fallbackQuery: candidateQuery,
+            matchedLocation: candidate.name,
+          });
+        }
+        return {
+          candidate,
+          url: geocodingUrl.toString(),
+        };
+      }
+    }
+
+    return null;
+  }
+
+  private buildGeocodingQueries(query: string): string[] {
+    const variants = new Set<string>();
+    const trimmed = query.trim();
+    if (trimmed) {
+      variants.add(trimmed);
+    }
+
+    const commaParts = trimmed
+      .split(",")
+      .map((part) => part.trim())
+      .filter(Boolean);
+
+    if (commaParts.length > 0) {
+      variants.add(commaParts[0]);
+    }
+
+    if (commaParts.length > 1) {
+      variants.add(`${commaParts[0]} ${commaParts[1]}`);
+    }
+
+    if (commaParts.length > 2) {
+      variants.add(`${commaParts[0]} ${commaParts[1]} ${commaParts[2]}`);
+    }
+
+    const normalizedPunctuation = trimmed.replace(/[,\-]+/g, " ").replace(/\s+/g, " ").trim();
+    if (normalizedPunctuation) {
+      variants.add(normalizedPunctuation);
+    }
+
+    return [...variants];
   }
 
   private pickBestLocation(
