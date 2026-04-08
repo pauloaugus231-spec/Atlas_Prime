@@ -100,6 +100,39 @@ export function summarizeEmailForOperations(input: {
 
   if (
     includesAny(normalized, [
+      "adimplencia",
+      "inadimplencia",
+      "regularize seu contrato",
+      "regularize o contrato",
+      "regularizar contrato",
+      "chama a caixa no whatsapp",
+      "negociar bradesco",
+      "fase critica",
+      "seu cpf pode entrar em fase critica",
+      "renegocie",
+      "renegociacao",
+      "renegociação",
+      "acordo disponivel",
+      "acordo disponível",
+      "quite sua divida",
+      "quite sua dívida",
+      "limpe seu nome",
+      "nome negativado",
+    ])
+  ) {
+    return {
+      group: "promocional",
+      category: "cobranca/oferta financeira",
+      priority: "baixa",
+      status: "informativo",
+      summary: "Email de cobrança comercial ou renegociação com pouco valor operacional para o briefing principal.",
+      action: "Ignorar no briefing principal e tratar separadamente apenas se você decidir negociar.",
+      expected: false,
+    };
+  }
+
+  if (
+    includesAny(normalized, [
       "payment failed",
       "pagamento falhou",
       "pagamento recusado",

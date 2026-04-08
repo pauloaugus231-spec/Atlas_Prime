@@ -36,6 +36,12 @@ export interface TelegramConfig {
   dailyEditorialAutomationEnabled: boolean;
 }
 
+export interface BriefingConfig {
+  weatherEnabled: boolean;
+  weatherLocation: string;
+  weatherDays: number;
+}
+
 export interface EmailConfig {
   enabled: boolean;
   host?: string;
@@ -164,6 +170,7 @@ export interface AppConfig {
   paths: AppPathsConfig;
   llm: LlmConfig;
   telegram: TelegramConfig;
+  briefing: BriefingConfig;
   email: EmailConfig;
   emailAccounts: Record<string, EmailConfig>;
   google: GoogleWorkspaceConfig;

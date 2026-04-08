@@ -4,9 +4,11 @@ import type { CommunicationRouter } from "./contact-intelligence.js";
 import type { FounderOpsService, FounderOpsSnapshot } from "./founder-ops.js";
 import type { MemoryEntityStore } from "./memory-entity-store.js";
 import type { OperationalMemoryStore } from "./operational-memory.js";
+import { WeatherService, type WeatherForecastResult } from "./weather-service.js";
 import type { WorkflowOrchestratorStore } from "./workflow-orchestrator.js";
 import type { Logger } from "../types/logger.js";
 import type { ApprovalInboxItemRecord } from "../types/approval-inbox.js";
+import type { BriefingConfig } from "../types/config.js";
 import type { MemoryEntityKind } from "../types/memory-entities.js";
 import type { TaskSummary } from "../integrations/google/google-workspace.js";
 import type { EmailAccountsService } from "../integrations/email/email-accounts.js";
@@ -19,6 +21,7 @@ export interface ExecutiveBriefEvent {
   start: string | null;
   location?: string;
   matchedTerms?: string[];
+  owner: "paulo" | "equipe" | "delegavel";
 }
 
 export interface ExecutiveBriefEmail {
@@ -84,9 +87,41 @@ export interface ExecutiveMorningBrief {
   };
   founderSnapshot: FounderOpsSnapshot;
   nextAction?: string;
+  weather?: {
+    locationLabel: string;
+    current?: {
+      description: string;
+      temperatureC?: number;
+    };
+    days: Array<{
+      label: string;
+      description: string;
+      minTempC?: number;
+      maxTempC?: number;
+      precipitationProbabilityMax?: number;
+      tip: string;
+    }>;
+  };
 }
 
 const EXECUTIVE_BRIEF_CALENDAR_ALIASES = new Set(["primary", "abordagem"]);
+const TEAM_EVENT_HINTS = [
+  "juliana",
+  "maira",
+  "máira",
+  "simone",
+  "equipe",
+  "grupo",
+  "trabalho interno",
+  "acompanhamento",
+  "muralismo",
+  "reuniao",
+  "reunião",
+  "cras",
+  "creas",
+  "caps",
+  "domiciliados",
+];
 
 function includesAny(source: string, tokens: string[]): boolean {
   return tokens.some((token) => source.includes(token));
@@ -125,7 +160,113 @@ function isExecutiveNoise(value: string | null | undefined): boolean {
     "cupom",
     "liquidacao",
     "sale",
+    "caixa com voce",
+    "caixa com você",
+    "adimplencia",
+    "negociar bradesco",
+    "fase critica",
+    "fase crítica",
+    "renegociacao",
+    "renegociação",
+    "cpf pode entrar",
+    "nike",
   ]);
+}
+
+function classifyEventOwner(input: {
+  account: string;
+  summary?: string;
+  description?: string;
+  location?: string;
+  matchedTerms?: string[];
+}): "paulo" | "equipe" | "delegavel" {
+  if (input.account === "primary") {
+    return "paulo";
+  }
+
+  const normalized = normalizeEmailAnalysisText([
+    input.summary,
+    input.description,
+    input.location,
+    ...(input.matchedTerms ?? []),
+  ].filter(Boolean).join(" "));
+
+  if (!normalized) {
+    return "delegavel";
+  }
+
+  if (normalized.includes("paulo")) {
+    return "paulo";
+  }
+
+  if (includesAny(normalized, TEAM_EVENT_HINTS)) {
+    return "equipe";
+  }
+
+  return "delegavel";
+}
+
+function buildWeatherTip(day: {
+  description: string;
+  minTempC?: number;
+  maxTempC?: number;
+  precipitationProbabilityMax?: number;
+}): string {
+  const tips: string[] = [];
+  const rainChance = day.precipitationProbabilityMax ?? 0;
+  const maxTemp = day.maxTempC ?? 0;
+  const minTemp = day.minTempC ?? 0;
+  const normalizedDescription = normalizeEmailAnalysisText(day.description);
+
+  if (rainChance >= 50 || normalizedDescription.includes("chuva") || normalizedDescription.includes("trovoada")) {
+    tips.push("leve guarda-chuva");
+  } else if (rainChance >= 30) {
+    tips.push("guarda-chuva por precaução");
+  }
+
+  if (minTemp <= 12 || maxTemp <= 18) {
+    tips.push("agasalho");
+  } else if (minTemp <= 16) {
+    tips.push("agasalho leve cedo");
+  }
+
+  if (maxTemp >= 29) {
+    tips.push("roupa leve");
+  } else if (maxTemp >= 24) {
+    tips.push("roupa leve ou fresca");
+  }
+
+  if ((normalizedDescription.includes("limpo") || normalizedDescription.includes("sol")) && rainChance < 20 && maxTemp >= 23) {
+    tips.push("sol forte em parte do dia");
+  }
+
+  return tips.length > 0 ? tips.join(" | ") : "clima estável";
+}
+
+function buildBriefWeather(forecast: WeatherForecastResult | null | undefined): ExecutiveMorningBrief["weather"] | undefined {
+  if (!forecast || forecast.daily.length === 0) {
+    return undefined;
+  }
+
+  const days = forecast.daily.slice(0, 2).map((day, index) => ({
+    label: index === 0 ? "Hoje" : "Amanhã",
+    description: day.description,
+    minTempC: day.minTempC,
+    maxTempC: day.maxTempC,
+    precipitationProbabilityMax: day.precipitationProbabilityMax,
+    tip: buildWeatherTip(day),
+  }));
+
+  return {
+    locationLabel: forecast.locationLabel,
+    current: forecast.current
+      ? {
+          description: forecast.current.description,
+          temperatureC: forecast.current.temperatureC,
+        }
+      : undefined,
+    days,
+  };
 }
 
 function getBriefDayKey(date: Date, timezone: string): string {
@@ -362,9 +503,12 @@ function pickDailyMotivation(timezone: string): { text: string; author?: string 
 }
 
 export class PersonalOSService {
+  private readonly weather: WeatherService;
+
   constructor(
     private readonly timezone: string,
     private readonly logger: Logger,
+    private readonly briefingConfig: BriefingConfig,
     private readonly googleWorkspaces: GoogleWorkspaceAccountsService,
     private readonly emailAccounts: EmailAccountsService,
     private readonly communicationRouter: CommunicationRouter,
@@ -373,7 +517,9 @@ export class PersonalOSService {
     private readonly founderOps: FounderOpsService,
     private readonly memory: OperationalMemoryStore,
     private readonly memoryEntities: MemoryEntityStore,
-  ) {}
+  ) {
+    this.weather = new WeatherService(this.logger.child({ scope: "weather" }));
+  }
 
   async getExecutiveMorningBrief(): Promise<ExecutiveMorningBrief> {
     const events: ExecutiveBriefEvent[] = [];
@@ -389,19 +535,29 @@ export class PersonalOSService {
       const brief = await workspace.getDailyBrief();
       events.push(
         ...brief.events
-          .map((event) => ({
-            account: alias,
-            summary: event.summary,
-            start: event.start,
-            location: event.location,
-            description: event.description,
-            matchedTerms: matchPersonalCalendarTerms({
+          .map((event) => {
+            const matchedTerms = matchPersonalCalendarTerms({
               account: alias,
               summary: event.summary,
               description: event.description,
               location: event.location,
-            }),
-          }))
+            });
+            return {
+              account: alias,
+              summary: event.summary,
+              start: event.start,
+              location: event.location,
+              description: event.description,
+              matchedTerms,
+              owner: classifyEventOwner({
+                account: alias,
+                summary: event.summary,
+                description: event.description,
+                location: event.location,
+                matchedTerms,
+              }),
+            };
+          })
           .filter((event) => {
             if (EXECUTIVE_BRIEF_CALENDAR_ALIASES.has(alias)) {
               return true;
@@ -482,7 +638,32 @@ export class PersonalOSService {
           - (relationshipOrder[right.relationship as keyof typeof relationshipOrder] ?? 50),
     );
 
-    const emails = prioritizedEmails.filter((item) => !isExecutiveNoise(item.subject));
+    const emails = prioritizedEmails.filter((item) => {
+      if (isExecutiveNoise(item.subject)) {
+        return false;
+      }
+      if (item.group === "promocional") {
+        return false;
+      }
+      if (item.group === "financeiro") {
+        const normalizedSubject = normalizeEmailAnalysisText(item.subject);
+        if (includesAny(normalizedSubject, [
+          "adimplencia",
+          "regularize",
+          "renegoci",
+          "fase critica",
+          "cpf pode entrar",
+          "negociar",
+          "emprestimo",
+          "credito",
+          "crédito",
+          "nike",
+        ])) {
+          return false;
+        }
+      }
+      return true;
+    });
     const approvals = this.approvals.listPendingAll(6);
     const workflows = this.workflows
       .listPlans(10)
@@ -520,6 +701,20 @@ export class PersonalOSService {
     };
     const founderSnapshot = this.founderOps.getDailySnapshot();
     const motivation = pickDailyMotivation(this.timezone);
+    const weatherForecast = this.briefingConfig.weatherEnabled
+      ? await this.weather.getForecast({
+          location: this.briefingConfig.weatherLocation,
+          days: this.briefingConfig.weatherDays,
+          timezone: this.timezone,
+        }).catch((error) => {
+          this.logger.warn("Failed to load morning brief weather", {
+            error: error instanceof Error ? error.message : String(error),
+            location: this.briefingConfig.weatherLocation,
+          });
+          return null;
+        })
+      : null;
+    const weather = buildBriefWeather(weatherForecast);
     const nextAction = chooseNextAction({
       timezone: this.timezone,
       events,
@@ -550,6 +745,7 @@ export class PersonalOSService {
       memoryEntities,
       motivation,
       founderSnapshot,
+      weather,
       nextAction,
     };
   }

@@ -1,6 +1,6 @@
 import path from "node:path";
 import { existsSync, readFileSync } from "node:fs";
-import type { AltivaConfig, AppConfig, EmailConfig, GoogleMapsConfig, GoogleWorkspaceConfig, MediaConfig } from "../types/config.js";
+import type { AltivaConfig, AppConfig, BriefingConfig, EmailConfig, GoogleMapsConfig, GoogleWorkspaceConfig, MediaConfig } from "../types/config.js";
 import type { LogLevel } from "../types/logger.js";
 
 const DEFAULT_OLLAMA_BASE_URL = "http://host.docker.internal:11434";
@@ -396,6 +396,15 @@ function buildAltivaConfig(env: NodeJS.ProcessEnv, fallbackTimezone: string): Al
   };
 }
 
+function buildBriefingConfig(env: NodeJS.ProcessEnv): BriefingConfig {
+  const weatherLocation = env.BRIEFING_WEATHER_LOCATION?.trim() || "Porto Alegre, RS, Brasil";
+  return {
+    weatherEnabled: parseBoolean(env.BRIEFING_WEATHER_ENABLED, true),
+    weatherLocation,
+    weatherDays: Math.min(Math.max(parsePositiveInteger(env.BRIEFING_WEATHER_DAYS, 2), 1), 3),
+  };
+}
+
 function buildMediaConfig(env: NodeJS.ProcessEnv): MediaConfig {
   const pexelsApiKey = env.PEXELS_API_KEY?.trim() || undefined;
   const pexelsEnabled = parseBoolean(env.PEXELS_ENABLED, Boolean(pexelsApiKey));
@@ -580,6 +589,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       morningBriefEnabled: parseBoolean(env.TELEGRAM_MORNING_BRIEF_ENABLED, true),
       dailyEditorialAutomationEnabled: parseBoolean(env.TELEGRAM_DAILY_EDITORIAL_AUTOMATION_ENABLED, false),
     },
+    briefing: buildBriefingConfig(env),
     email: baseEmailConfig,
     emailAccounts,
     google: baseGoogleConfig,

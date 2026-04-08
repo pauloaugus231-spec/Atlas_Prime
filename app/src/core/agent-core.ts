@@ -3139,6 +3139,17 @@ function summarizeTrackedMetrics(metrics: string[]): string {
   return hidden > 0 ? `${visible} e mais ${hidden}` : visible;
 }
 
+function labelBriefOwner(owner: "paulo" | "equipe" | "delegavel"): string {
+  switch (owner) {
+    case "paulo":
+      return "Paulo";
+    case "equipe":
+      return "Equipe";
+    case "delegavel":
+      return "Delegável";
+  }
+}
+
 function emailRelationshipWeight(relationship: string): number {
   switch (relationship) {
     case "family":
@@ -3338,6 +3349,22 @@ function buildMorningBriefReply(input: ExecutiveMorningBrief): string {
     }
   }
 
+  if (input.weather?.days.length) {
+    lines.push("", "Tempo:");
+    if (input.weather.current) {
+      lines.push(
+        `- Agora em ${input.weather.locationLabel}: ${input.weather.current.description}, ${input.weather.current.temperatureC ?? "?"}°C.`,
+      );
+    } else {
+      lines.push(`- Referência: ${input.weather.locationLabel}.`);
+    }
+    for (const day of input.weather.days) {
+      lines.push(
+        `- ${day.label}: ${day.description} | ${day.minTempC ?? "?"}°-${day.maxTempC ?? "?"}°C${typeof day.precipitationProbabilityMax === "number" ? ` | chuva ${day.precipitationProbabilityMax}%` : ""} | dica: ${day.tip}.`,
+      );
+    }
+  }
+
   lines.push("", "Agenda de hoje:");
   if (input.events.length > 0) {
     const groupedEvents = {
@@ -3350,7 +3377,7 @@ function buildMorningBriefReply(input: ExecutiveMorningBrief): string {
       lines.push("- Manhã:");
       for (const event of groupedEvents.manha) {
         lines.push(
-          `  - ${formatBriefDateTime(event.start, input.timezone)} — ${truncateBriefText(event.summary)}${event.location ? ` — ${summarizeCalendarLocation(event.location)}` : ""} — ${event.account}${event.matchedTerms?.length ? ` — termos: ${event.matchedTerms.join(", ")}` : ""}`,
+          `  - ${formatBriefDateTime(event.start, input.timezone)} — ${truncateBriefText(event.summary)}${event.location ? ` — ${summarizeCalendarLocation(event.location)}` : ""} — ${labelBriefOwner(event.owner)} | ${event.account}`,
         );
       }
     }
@@ -3358,7 +3385,7 @@ function buildMorningBriefReply(input: ExecutiveMorningBrief): string {
       lines.push("- Tarde:");
       for (const event of groupedEvents.tarde) {
         lines.push(
-          `  - ${formatBriefDateTime(event.start, input.timezone)} — ${truncateBriefText(event.summary)}${event.location ? ` — ${summarizeCalendarLocation(event.location)}` : ""} — ${event.account}${event.matchedTerms?.length ? ` — termos: ${event.matchedTerms.join(", ")}` : ""}`,
+          `  - ${formatBriefDateTime(event.start, input.timezone)} — ${truncateBriefText(event.summary)}${event.location ? ` — ${summarizeCalendarLocation(event.location)}` : ""} — ${labelBriefOwner(event.owner)} | ${event.account}`,
         );
       }
     }
@@ -3366,7 +3393,7 @@ function buildMorningBriefReply(input: ExecutiveMorningBrief): string {
       lines.push("- Noite:");
       for (const event of groupedEvents.noite) {
         lines.push(
-          `  - ${formatBriefDateTime(event.start, input.timezone)} — ${truncateBriefText(event.summary)}${event.location ? ` — ${summarizeCalendarLocation(event.location)}` : ""} — ${event.account}${event.matchedTerms?.length ? ` — termos: ${event.matchedTerms.join(", ")}` : ""}`,
+          `  - ${formatBriefDateTime(event.start, input.timezone)} — ${truncateBriefText(event.summary)}${event.location ? ` — ${summarizeCalendarLocation(event.location)}` : ""} — ${labelBriefOwner(event.owner)} | ${event.account}`,
         );
       }
     }

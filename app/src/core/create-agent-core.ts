@@ -138,6 +138,7 @@ export async function createAgentCore() {
   const personalOs = new PersonalOSService(
     config.google.defaultTimezone,
     logger.child({ scope: "personal-os" }),
+    config.briefing,
     googleWorkspaces,
     emailAccounts,
     communicationRouter,
