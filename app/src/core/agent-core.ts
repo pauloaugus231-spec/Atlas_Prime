@@ -3150,6 +3150,23 @@ function labelBriefOwner(owner: "paulo" | "equipe" | "delegavel"): string {
   }
 }
 
+function formatBriefTemperature(value?: number): string {
+  return typeof value === "number" ? `${Math.round(value)}°C` : "?";
+}
+
+function formatBriefTemperatureRange(min?: number, max?: number): string {
+  if (typeof min === "number" && typeof max === "number") {
+    return `${Math.round(min)}° a ${Math.round(max)}°C`;
+  }
+  if (typeof max === "number") {
+    return `máx ${Math.round(max)}°C`;
+  }
+  if (typeof min === "number") {
+    return `mín ${Math.round(min)}°C`;
+  }
+  return "?";
+}
+
 function emailRelationshipWeight(relationship: string): number {
   switch (relationship) {
     case "family":
@@ -3352,16 +3369,21 @@ function buildMorningBriefReply(input: ExecutiveMorningBrief): string {
   if (input.weather?.days.length) {
     lines.push("", "Tempo:");
     if (input.weather.current) {
-      lines.push(
-        `- Agora em ${input.weather.locationLabel}: ${input.weather.current.description}, ${input.weather.current.temperatureC ?? "?"}°C.`,
-      );
+      lines.push("- Agora:");
+      lines.push(`  Local: ${input.weather.locationLabel}`);
+      lines.push(`  Condição: ${input.weather.current.description}`);
+      lines.push(`  Temperatura: ${formatBriefTemperature(input.weather.current.temperatureC)}`);
     } else {
       lines.push(`- Referência: ${input.weather.locationLabel}.`);
     }
     for (const day of input.weather.days) {
-      lines.push(
-        `- ${day.label}: ${day.description} | ${day.minTempC ?? "?"}°-${day.maxTempC ?? "?"}°C${typeof day.precipitationProbabilityMax === "number" ? ` | chuva ${day.precipitationProbabilityMax}%` : ""} | dica: ${day.tip}.`,
-      );
+      lines.push(`- ${day.label}:`);
+      lines.push(`  Condição: ${day.description}`);
+      lines.push(`  Temperatura: ${formatBriefTemperatureRange(day.minTempC, day.maxTempC)}`);
+      if (typeof day.precipitationProbabilityMax === "number") {
+        lines.push(`  Chuva: ${day.precipitationProbabilityMax}%`);
+      }
+      lines.push(`  Dica: ${day.tip}`);
     }
   }
 
