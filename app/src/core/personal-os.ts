@@ -212,35 +212,39 @@ function buildWeatherTip(day: {
   maxTempC?: number;
   precipitationProbabilityMax?: number;
 }): string {
-  const tips: string[] = [];
   const rainChance = day.precipitationProbabilityMax ?? 0;
   const maxTemp = day.maxTempC ?? 0;
   const minTemp = day.minTempC ?? 0;
   const normalizedDescription = normalizeEmailAnalysisText(day.description);
-
-  if (rainChance >= 50 || normalizedDescription.includes("chuva") || normalizedDescription.includes("trovoada")) {
-    tips.push("leve guarda-chuva");
-  } else if (rainChance >= 30) {
-    tips.push("guarda-chuva por precaução");
-  }
-
+  let clothingTip = "roupa confortável";
   if (minTemp <= 12 || maxTemp <= 18) {
-    tips.push("agasalho");
+    clothingTip = "agasalho";
   } else if (minTemp <= 16) {
-    tips.push("agasalho leve cedo");
-  }
-
-  if (maxTemp >= 29) {
-    tips.push("roupa leve");
+    clothingTip = "camada leve cedo";
+  } else if (minTemp <= 20 && maxTemp <= 25) {
+    clothingTip = "roupa leve com camada fina";
+  } else if (maxTemp >= 29) {
+    clothingTip = "roupa bem leve";
   } else if (maxTemp >= 24) {
-    tips.push("roupa leve ou fresca");
+    clothingTip = "roupa leve ou fresca";
   }
 
+  let carryTip = "sem necessidade de guarda-chuva";
+  if (rainChance >= 50 || normalizedDescription.includes("chuva") || normalizedDescription.includes("trovoada")) {
+    carryTip = "leve guarda-chuva";
+  } else if (rainChance >= 30) {
+    carryTip = "guarda-chuva por precaução";
+  }
+
+  const extras: string[] = [];
   if ((normalizedDescription.includes("limpo") || normalizedDescription.includes("sol")) && rainChance < 20 && maxTemp >= 23) {
-    tips.push("sol forte em parte do dia");
+    extras.push("óculos de sol");
+  }
+  if (normalizedDescription.includes("vento") || normalizedDescription.includes("encoberto")) {
+    extras.push("casaco leve se for sair cedo");
   }
 
-  return tips.length > 0 ? tips.join(" | ") : "clima estável";
+  return [`vestir: ${clothingTip}`, `levar: ${carryTip}`, ...extras].join(" | ");
 }
 
 function buildBriefWeather(forecast: WeatherForecastResult | null | undefined): ExecutiveMorningBrief["weather"] | undefined {
