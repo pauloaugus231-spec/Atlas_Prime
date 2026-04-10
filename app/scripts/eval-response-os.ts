@@ -105,6 +105,35 @@ function run() {
     detail: messageReply,
   });
 
+  const organizationReply = responseOs.buildOrganizationReply({
+    objective: "organizar o dia operacional",
+    currentSituation: [
+      "4 compromisso(s) no dia",
+      "1 conflito de agenda para Paulo",
+      "clima hoje: chuva fraca | vestir: camada leve | levar: guarda-chuva",
+    ],
+    priorities: [
+      "resolver o conflito de agenda em Espaço de Cuidados",
+      "preparar deslocamento para Sistemática",
+      "revisar a aprovação mais urgente: WhatsApp abordagem: Paulo Augusto",
+    ],
+    actionPlan: [
+      "resolver primeiro os conflitos da sua agenda",
+      "preparar deslocamento para Sistemática",
+      "definir dono para Banho e tirar isso do seu foco direto",
+    ],
+    recommendedNextStep: "Resolver o conflito envolvendo Espaço de Cuidados.",
+  });
+  results.push({
+    name: "organization_reply_contract",
+    passed: organizationReply.includes("Leitura operacional:")
+      && organizationReply.includes("Situação agora:")
+      && organizationReply.includes("Prioridades:")
+      && organizationReply.includes("Plano curto:")
+      && organizationReply.includes("Próxima ação:"),
+    detail: organizationReply,
+  });
+
   const failures = results.filter((item) => !item.passed);
   for (const item of results.filter((entry) => entry.passed)) {
     console.log(`PASS ${item.name}`);

@@ -59,17 +59,25 @@ export class ContextPackService {
   async buildForPrompt(prompt: string, intent: IntentResolution): Promise<ContextPack | null> {
     if (shouldLoadOperationalOverview(prompt, intent)) {
       const brief = await this.personalOs.getExecutiveMorningBrief();
+      const conflictCount = brief.events.filter((event) => event.owner === "paulo" && event.hasConflict).length;
       const signals: string[] = [
         `${brief.events.length} compromisso(s) hoje`,
         `${brief.taskBuckets.actionableCount} tarefa(s) acionáveis`,
         `${brief.approvals.length} aprovação(ões) pendente(s)`,
       ];
 
+      if (conflictCount > 0) {
+        signals.push(`${conflictCount} conflito(s) de agenda`);
+      }
+
       if (brief.nextAction) {
         signals.push(`próxima ação sugerida: ${brief.nextAction}`);
       }
       if (brief.emails[0]?.subject) {
         signals.push(`email prioritário: ${brief.emails[0].subject}`);
+      }
+      if (brief.weather?.days[0]?.tip) {
+        signals.push(`clima: ${brief.weather.days[0].tip}`);
       }
       const operationalMemory = this.contextMemory.summarize("operational", 3);
       signals.push(...operationalMemory.signals);

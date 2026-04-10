@@ -4016,31 +4016,74 @@ function buildOperationalPlanContract(prompt: string, brief: ExecutiveMorningBri
   const currentSituation: string[] = [];
   const priorities: string[] = [];
   const actionPlan: string[] = [];
+  const rankedApprovals = rankApprovals(brief.approvals);
+  const pauloEvents = brief.events.filter((event) => event.owner === "paulo");
+  const delegableEvents = brief.events.filter((event) => event.owner === "delegavel");
+  const conflictEvents = pauloEvents.filter((event) => event.hasConflict);
+  const nextPauloEvent = pauloEvents[0];
+  const weatherToday = brief.weather?.days[0];
+  const topApproval = rankedApprovals[0];
+  const topEmail = brief.emails[0];
+  const topOverdueTask = brief.taskBuckets.overdue[0];
 
-  if (brief.events[0]) {
-    currentSituation.push(`próximo compromisso: ${brief.events[0].summary}`);
-    priorities.push(`preparar o compromisso ${brief.events[0].summary}`);
+  if (brief.events.length > 0) {
+    currentSituation.push(`${brief.events.length} compromisso(s) no dia`);
   }
-  if (brief.approvals[0]) {
+  if (nextPauloEvent) {
+    currentSituation.push(`seu próximo compromisso: ${nextPauloEvent.summary}`);
+  }
+  if (delegableEvents.length > 0) {
+    currentSituation.push(`${delegableEvents.length} compromisso(s) delegável(is)`);
+  }
+  if (conflictEvents.length > 0) {
+    currentSituation.push(`${conflictEvents.length} conflito(s) de agenda para Paulo`);
+  }
+  if (topApproval) {
     currentSituation.push(`${brief.approvals.length} aprovação(ões) pendente(s)`);
-    priorities.push(`revisar a aprovação mais urgente: ${brief.approvals[0].subject}`);
   }
   if (brief.taskBuckets.overdue.length > 0) {
     currentSituation.push(`${brief.taskBuckets.overdue.length} tarefa(s) atrasada(s)`);
-    priorities.push(`decidir as tarefas atrasadas antes de abrir novas frentes`);
   }
-  if (brief.emails[0]) {
-    currentSituation.push(`email prioritário: ${brief.emails[0].subject}`);
+  if (topEmail) {
+    currentSituation.push(`email prioritário: ${topEmail.subject}`);
+  }
+  if (weatherToday) {
+    currentSituation.push(`clima hoje: ${weatherToday.description.toLowerCase()} | ${weatherToday.tip}`);
   }
 
-  if (includesAny(normalized, ["aprovacoes", "aprovações", "approval"])) {
+  if (conflictEvents[0]) {
+    priorities.push(`resolver o conflito de agenda em ${conflictEvents[0].summary}`);
+  }
+  if (nextPauloEvent) {
+    priorities.push(`${nextPauloEvent.prepHint} para ${nextPauloEvent.summary}`);
+  }
+  if (topApproval) {
+    priorities.push(`revisar a aprovação mais urgente: ${topApproval.item.subject} (${topApproval.reason})`);
+  }
+  if (topOverdueTask) {
+    priorities.push(`decidir a tarefa atrasada: ${topOverdueTask.title}`);
+  }
+  if (topEmail) {
+    priorities.push(`validar se o email ${topEmail.subject} exige ação agora`);
+  }
+
+  if (conflictEvents.length > 0) {
+    actionPlan.push("resolver primeiro os conflitos da sua agenda para não travar o restante do dia");
+  }
+  if (includesAny(normalized, ["aprovacoes", "aprovações", "approval"]) && topApproval) {
     actionPlan.push("revisar primeiro as aprovações que destravam hoje");
   }
-  if (brief.events[0]) {
-    actionPlan.push(`alinhar deslocamento, material ou contexto para ${brief.events[0].summary}`);
+  if (nextPauloEvent) {
+    actionPlan.push(`${nextPauloEvent.prepHint} para ${nextPauloEvent.summary}`);
   }
-  if (brief.emails[0]) {
-    actionPlan.push(`validar se o email ${brief.emails[0].subject} exige ação real ou pode esperar`);
+  if (delegableEvents[0]) {
+    actionPlan.push(`definir dono para ${delegableEvents[0].summary} e tirar isso do seu foco direto`);
+  }
+  if (topOverdueTask) {
+    actionPlan.push("decidir as tarefas atrasadas antes de abrir novas frentes");
+  }
+  if (topEmail) {
+    actionPlan.push(`validar se o email ${topEmail.subject} exige ação real ou pode esperar`);
   }
 
   return {
@@ -4079,7 +4122,13 @@ function buildOperationalPlanContract(prompt: string, brief: ExecutiveMorningBri
     currentSituation,
     priorities,
     actionPlan,
-    recommendedNextStep: brief.nextAction ?? actionPlan[0],
+    recommendedNextStep: conflictEvents[0]
+      ? `Resolver o conflito envolvendo ${conflictEvents[0].summary}.`
+      : nextPauloEvent
+        ? `${nextPauloEvent.prepHint[0]?.toUpperCase() ?? ""}${nextPauloEvent.prepHint.slice(1)} para ${nextPauloEvent.summary}.`
+        : topApproval
+          ? `Decidir a aprovação ${topApproval.item.subject}.`
+          : brief.nextAction ?? actionPlan[0],
   };
 }
 

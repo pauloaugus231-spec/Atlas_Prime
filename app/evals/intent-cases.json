@@ -43,5 +43,14 @@
       "actionMode": "plan",
       "compoundIntent": true
     }
+  },
+  {
+    "name": "organize_day_routes_to_secretary_plan",
+    "prompt": "organize meu dia",
+    "expect": {
+      "primaryDomain": "secretario_operacional",
+      "actionMode": "plan",
+      "compoundIntent": false
+    }
   }
 ]
