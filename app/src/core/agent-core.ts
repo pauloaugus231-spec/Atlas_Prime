@@ -2146,6 +2146,10 @@ function isCalendarLookupPrompt(prompt: string): boolean {
       "verifique meu calendário",
       "olhe meu calendario",
       "olhe meu calendário",
+      "veja meu calendario",
+      "veja meu calendário",
+      "analise meu calendario",
+      "analise meu calendário",
       "no calendario",
       "no calendário",
       "na agenda",
@@ -2155,6 +2159,42 @@ function isCalendarLookupPrompt(prompt: string): boolean {
     !normalized.includes("calendario editorial") &&
     !normalized.includes("calendário editorial")
   );
+}
+
+function getWeekdayTargetDate(normalized: string, timezone: string): { isoDate: string; label: string } | undefined {
+  const weekdayMap: Array<{ tokens: string[]; day: number; label: string }> = [
+    { tokens: ["domingo"], day: 0, label: "domingo" },
+    { tokens: ["segunda", "segunda feira"], day: 1, label: "segunda" },
+    { tokens: ["terca", "terça", "terca feira", "terça feira"], day: 2, label: "terça" },
+    { tokens: ["quarta", "quarta feira"], day: 3, label: "quarta" },
+    { tokens: ["quinta", "quinta feira"], day: 4, label: "quinta" },
+    { tokens: ["sexta", "sexta feira"], day: 5, label: "sexta" },
+    { tokens: ["sabado", "sábado", "sabado feira", "sábado feira"], day: 6, label: "sábado" },
+  ];
+
+  const match = weekdayMap.find((item) => item.tokens.some((token) => normalized.includes(token)));
+  if (!match) {
+    return undefined;
+  }
+
+  const now = new Date();
+  const localized = new Date(now.toLocaleString("en-US", { timeZone: timezone }));
+  localized.setHours(0, 0, 0, 0);
+  const currentDay = localized.getDay();
+  let diff = match.day - currentDay;
+  if (diff <= 0) {
+    diff += 7;
+  }
+  localized.setDate(localized.getDate() + diff);
+  const isoDate = [
+    String(localized.getFullYear()).padStart(4, "0"),
+    String(localized.getMonth() + 1).padStart(2, "0"),
+    String(localized.getDate()).padStart(2, "0"),
+  ].join("-");
+  return {
+    isoDate,
+    label: match.label,
+  };
 }
 
 function parseCalendarLookupDate(prompt: string, timezone: string): CalendarLookupRequest["targetDate"] | undefined {
@@ -2187,6 +2227,15 @@ function parseCalendarLookupDate(prompt: string, timezone: string): CalendarLook
       month = shiftMonth;
       day = shiftDay;
     } else if (!normalized.includes("hoje")) {
+      const weekdayTarget = getWeekdayTargetDate(normalized, timezone);
+      if (weekdayTarget) {
+        return {
+          isoDate: weekdayTarget.isoDate,
+          startIso: `${weekdayTarget.isoDate}T00:00:00-03:00`,
+          endIso: `${weekdayTarget.isoDate}T23:59:59-03:00`,
+          label: weekdayTarget.label,
+        };
+      }
       return undefined;
     }
   }
@@ -2337,6 +2386,17 @@ function parseCalendarPeriodWindow(prompt: string, timezone: string): CalendarPe
 
 function isCalendarPeriodListPrompt(prompt: string): boolean {
   const normalized = normalizeEmailAnalysisText(prompt);
+  const hasWeekday = includesAny(normalized, [
+    "segunda",
+    "terça",
+    "terca",
+    "quarta",
+    "quinta",
+    "sexta",
+    "sábado",
+    "sabado",
+    "domingo",
+  ]);
   return (
     includesAny(normalized, [
       "liste meus compromissos",
@@ -2345,9 +2405,21 @@ function isCalendarPeriodListPrompt(prompt: string): boolean {
       "quais eventos tenho",
       "mostre minha agenda",
       "mostrar minha agenda",
+      "veja minha agenda",
+      "veja o calendario",
+      "veja o calendário",
+      "analise o calendario",
+      "analise o calendário",
+      "agenda da",
+      "agenda do",
     ]) &&
     !normalized.includes("calendario editorial") &&
     !normalized.includes("calendário editorial")
+  ) || (
+    hasWeekday
+    && includesAny(normalized, ["agenda", "calendario", "calendário", "compromisso", "evento"])
+    && !normalized.includes("calendario editorial")
+    && !normalized.includes("calendário editorial")
   );
 }
 
@@ -9931,14 +10003,16 @@ export class AgentCore {
       }
     }
     requestLogger.info("Using direct calendar period list route", { period: window.label, account: explicitAccount ?? "all" });
+    const isSingleDayWindow = !includesAny(normalizeEmailAnalysisText(window.label), ["semana", "7 dias"]);
+    const previewLimit = isSingleDayWindow ? events.length : 8;
     const reply = events.length === 0
       ? `Nenhum compromisso em ${window.label}.`
       : [
           `${window.label[0]?.toUpperCase() ?? ""}${window.label.slice(1)}: ${events.length} compromisso${events.length > 1 ? "s" : ""}.`,
-          ...events.slice(0, 8).map((item) =>
+          ...events.slice(0, previewLimit).map((item) =>
             `- ${item.event.summary} — ${item.event.start ? new Intl.DateTimeFormat("pt-BR", { timeZone: this.config.google.defaultTimezone, day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }).format(new Date(item.event.start)) : "sem horário"}${item.event.end ? `–${new Intl.DateTimeFormat("pt-BR", { timeZone: this.config.google.defaultTimezone, hour: "2-digit", minute: "2-digit" }).format(new Date(item.event.end))}` : ""}${summarizeCalendarLocation(item.event.location) ? ` — local: ${summarizeCalendarLocation(item.event.location)}` : ""} | conta: ${item.account}`
           ),
-          ...(events.length > 8 ? [`- ... e mais ${events.length - 8} compromisso(s). Peça detalhes se quiser a lista completa.`] : []),
+          ...(events.length > previewLimit ? [`- ... e mais ${events.length - previewLimit} compromisso(s). Peça detalhes se quiser a lista completa.`] : []),
         ].join("\n");
     return {
       requestId,
