@@ -1,0 +1,38 @@
+[
+  {
+    "name": "mixed_operational_request_becomes_plan",
+    "prompt": "quero revisar aprovações e organizar minha agenda",
+    "expect": {
+      "primaryDomain": "secretario_operacional",
+      "actionMode": "plan",
+      "compoundIntent": true
+    }
+  },
+  {
+    "name": "simple_schedule_request_stays_schedule",
+    "prompt": "agende uma reunião amanhã às 14h",
+    "expect": {
+      "primaryDomain": "secretario_operacional",
+      "actionMode": "schedule",
+      "compoundIntent": false
+    }
+  },
+  {
+    "name": "growth_prompt_routes_to_growth",
+    "prompt": "preciso melhorar growth e conversão",
+    "expect": {
+      "primaryDomain": "analista_negocios_growth",
+      "actionMode": "analyze",
+      "compoundIntent": false
+    }
+  },
+  {
+    "name": "social_prompt_routes_to_social_media",
+    "prompt": "crie um roteiro para reels do instagram",
+    "expect": {
+      "primaryDomain": "social_media",
+      "actionMode": "execute",
+      "compoundIntent": false
+    }
+  }
+]

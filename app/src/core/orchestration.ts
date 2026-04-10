@@ -178,6 +178,10 @@ function detectActionMode(prompt: string): AgentActionMode {
     return "execute";
   }
 
+  if (includesAny(normalized, ["crie", "gere", "monte", "redija", "escreva", "roteiro", "rascunho"])) {
+    return "execute";
+  }
+
   if (includesAny(normalized, ["monitor", "acompanhe", "verifique continuamente", "triagem", "acompanhamento"])) {
     return "monitor";
   }

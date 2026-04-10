@@ -69,7 +69,21 @@ function detectCompoundIntent(prompt: string, mentionedDomains: AgentDomain[]): 
     return true;
   }
 
-  return normalized.includes(" e ")
+  const actionVerbMatches = [
+    "revis",
+    "organ",
+    "prioriz",
+    "agend",
+    "planej",
+    "respon",
+    "publique",
+    "ger",
+    "cri",
+    "corrig",
+    "implement",
+  ].filter((token) => normalized.includes(token)).length;
+
+  return (normalized.includes(" e ") && actionVerbMatches >= 2)
     || normalized.includes(" depois ")
     || normalized.includes(" em seguida ")
     || normalized.includes(" ao mesmo tempo ")
