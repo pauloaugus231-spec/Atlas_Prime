@@ -1375,9 +1375,23 @@ function buildApprovalListReply(items: Array<{
     return "Não há aprovações pendentes neste chat.";
   }
 
+  const byAction = new Map<string, number>();
+  for (const item of items) {
+    byAction.set(item.actionKind, (byAction.get(item.actionKind) ?? 0) + 1);
+  }
+
   return [
-    `Aprovações pendentes: ${items.length}.`,
+    "Leitura operacional:",
+    `- Objetivo: revisar aprovações pendentes neste chat`,
+    "",
+    "Situação agora:",
+    `- ${items.length} aprovação(ões) pendente(s)`,
+    `- Tipos: ${[...byAction.entries()].map(([kind, count]) => `${kind}=${count}`).join(" | ")}`,
+    "",
+    "Prioridades:",
     ...items.map((item) => `- #${item.id} | ${item.actionKind} | ${item.subject} | ${item.createdAt}`),
+    "",
+    `Próxima ação: decidir primeiro ${items[0].subject}.`,
   ].join("\n");
 }
 

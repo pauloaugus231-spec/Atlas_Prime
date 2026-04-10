@@ -30,3 +30,34 @@ export interface OrganizationResponseContract {
   actionPlan: string[];
   recommendedNextStep?: string;
 }
+
+export interface ApprovalReviewContractItem {
+  id?: number;
+  subject: string;
+  actionKind: string;
+  createdAt?: string | null;
+}
+
+export interface ApprovalReviewContract {
+  scopeLabel: string;
+  items: ApprovalReviewContractItem[];
+  recommendedNextStep?: string;
+}
+
+export interface InboxTriageContractItem {
+  uid: string;
+  subject: string;
+  from: string[];
+  relationship: string;
+  priority: "alta" | "media" | "baixa";
+  category: string;
+  action: string;
+}
+
+export interface InboxTriageContract {
+  scopeLabel: string;
+  unreadOnly: boolean;
+  limit: number;
+  items: InboxTriageContractItem[];
+  recommendedNextStep?: string;
+}

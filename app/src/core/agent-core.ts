@@ -10624,7 +10624,18 @@ export class AgentCore {
 
     return {
       requestId,
-      reply: buildWhatsAppPendingApprovalsReply(pending),
+      reply: this.responseOs.buildApprovalReviewReply({
+        scopeLabel: "WhatsApp",
+        items: pending.map((item) => ({
+          id: item.id,
+          subject: item.subject,
+          actionKind: item.actionKind,
+          createdAt: item.createdAt,
+        })),
+        recommendedNextStep: pending[0]
+          ? `Decidir a resposta pendente de WhatsApp: ${pending[0].subject}.`
+          : undefined,
+      }),
       messages: buildBaseMessages(activeUserPrompt, orchestration),
       toolExecutions: [],
     };
@@ -13828,7 +13839,23 @@ export class AgentCore {
 
     return {
       requestId,
-      reply: buildInboxTriageReply(items, { unreadOnly, limit }),
+      reply: this.responseOs.buildInboxTriageReply({
+        scopeLabel: "email principal",
+        unreadOnly,
+        limit,
+        items: items.map((item) => ({
+          uid: item.uid,
+          subject: item.subject,
+          from: item.from,
+          relationship: item.relationship,
+          priority: item.priority,
+          category: item.category,
+          action: item.action,
+        })),
+        recommendedNextStep: items[0]
+          ? `Executar a próxima ação do UID ${items[0].uid}: ${items[0].action}.`
+          : undefined,
+      }),
       messages: buildBaseMessages(userPrompt, orchestration),
       toolExecutions: [
         {

@@ -1,4 +1,6 @@
 import type {
+  ApprovalReviewContract,
+  InboxTriageContract,
   IntentAnalysisContract,
   OrganizationResponseContract,
   ResponseContractKind,
@@ -132,5 +134,85 @@ export class ResponseOS {
     }
 
     return this.finalize("organization", lines.join("\n"));
+  }
+
+  buildApprovalReviewReply(input: ApprovalReviewContract): string {
+    if (input.items.length === 0) {
+      return this.finalize("analysis", `Não há aprovações pendentes em ${input.scopeLabel}.`);
+    }
+
+    const lines = [
+      "Leitura operacional:",
+      `- Objetivo: revisar aprovações pendentes em ${input.scopeLabel}`,
+      "",
+      "Situação agora:",
+      `- ${input.items.length} aprovação(ões) pendente(s)`,
+    ];
+
+    const byAction = new Map<string, number>();
+    for (const item of input.items) {
+      byAction.set(item.actionKind, (byAction.get(item.actionKind) ?? 0) + 1);
+    }
+    if (byAction.size > 0) {
+      lines.push(`- Tipos: ${[...byAction.entries()].map(([kind, count]) => `${kind}=${count}`).join(" | ")}`);
+    }
+
+    lines.push("", "Prioridades:");
+    for (const item of input.items.slice(0, 4)) {
+      lines.push(`- ${truncate(item.subject, 120)}${typeof item.id === "number" ? ` | #${item.id}` : ""}${item.createdAt ? ` | ${item.createdAt}` : ""}`);
+    }
+
+    lines.push("", "Plano curto:");
+    lines.push("- revisar primeiro o item mais antigo ou o que destrava uma ação hoje");
+    lines.push("- aprovar, ajustar ou descartar sem abrir novas pendências");
+
+    if (input.recommendedNextStep) {
+      lines.push("", `Próxima ação: ${truncate(input.recommendedNextStep, 140)}`);
+    }
+
+    return this.finalize("organization", lines.join("\n"));
+  }
+
+  buildInboxTriageReply(input: InboxTriageContract): string {
+    if (input.items.length === 0) {
+      return this.finalize(
+        "analysis",
+        input.unreadOnly
+          ? `Triagem concluída. Não encontrei emails não lidos em ${input.scopeLabel}.`
+          : `Triagem concluída. Não encontrei emails relevantes em ${input.scopeLabel}.`,
+      );
+    }
+
+    const counts = {
+      alta: input.items.filter((item) => item.priority === "alta").length,
+      media: input.items.filter((item) => item.priority === "media").length,
+      baixa: input.items.filter((item) => item.priority === "baixa").length,
+    };
+
+    const lines = [
+      "Leitura operacional:",
+      `- Objetivo: triar o inbox de ${input.scopeLabel}`,
+      "",
+      "Situação agora:",
+      `- ${input.items.length} email(s) priorizado(s) dentro do limite ${input.limit}`,
+      `- Alta: ${counts.alta} | Média: ${counts.media} | Baixa: ${counts.baixa}`,
+      "",
+      "Prioridades:",
+    ];
+
+    for (const item of input.items.slice(0, 4)) {
+      lines.push(`- ${truncate(item.subject, 120)} | ${item.priority.toUpperCase()} | ${item.category} | ${item.relationship}`);
+    }
+
+    lines.push("", "Plano curto:");
+    for (const item of input.items.slice(0, 3)) {
+      lines.push(`- UID ${item.uid}: ${truncate(item.action, 140)}`);
+    }
+
+    if (input.recommendedNextStep) {
+      lines.push("", `Próxima ação: ${truncate(input.recommendedNextStep, 140)}`);
+    }
+
+    return this.finalize("analysis", lines.join("\n"));
   }
 }
