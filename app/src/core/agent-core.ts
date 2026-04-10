@@ -35,6 +35,7 @@ import type {
 } from "./google-draft-utils.js";
 import { OperationalMemoryStore } from "./operational-memory.js";
 import { PersonalOSService, type ExecutiveMorningBrief } from "./personal-os.js";
+import { rankApprovals } from "./approval-priority.js";
 import { ProjectOpsService } from "./project-ops.js";
 import { ResponseOS } from "./response-os.js";
 import { SafeExecService } from "./safe-exec.js";
@@ -3468,6 +3469,7 @@ function buildMorningBriefReply(input: ExecutiveMorningBrief): string {
   const highestEmail = input.emails.find((item) => item.priority === "alta") ?? input.emails[0];
   const nextEvent = input.events[0];
   const nextTask = input.taskBuckets.today[0] ?? input.taskBuckets.overdue[0];
+  const pauloConflicts = input.events.filter((event) => event.owner === "paulo" && event.hasConflict);
 
   if (highestEmail) {
     attentionNow.push(
@@ -3477,8 +3479,12 @@ function buildMorningBriefReply(input: ExecutiveMorningBrief): string {
 
   if (nextEvent) {
     attentionNow.push(
-      `Próximo compromisso: ${formatBriefDateTime(nextEvent.start, input.timezone)} — ${truncateBriefText(nextEvent.summary)}${nextEvent.location ? ` — ${summarizeCalendarLocation(nextEvent.location)}` : ""}`,
+      `Próximo compromisso: ${formatBriefDateTime(nextEvent.start, input.timezone)} — ${truncateBriefText(nextEvent.summary)}${nextEvent.location ? ` — ${summarizeCalendarLocation(nextEvent.location)}` : ""} — ${nextEvent.prepHint}`,
     );
+  }
+
+  if (pauloConflicts.length > 0) {
+    attentionNow.push(`${pauloConflicts.length} conflito(s) de agenda de Paulo exigem decisão.`);
   }
 
   if (input.taskBuckets.overdue.length > 0) {
@@ -3537,7 +3543,7 @@ function buildMorningBriefReply(input: ExecutiveMorningBrief): string {
       lines.push("- Manhã:");
       for (const event of groupedEvents.manha) {
         lines.push(
-          `  - ${formatBriefDateTime(event.start, input.timezone)} — ${truncateBriefText(event.summary)}${event.location ? ` — ${summarizeCalendarLocation(event.location)}` : ""} — ${labelBriefOwner(event.owner)} | ${event.account}`,
+          `  - ${formatBriefDateTime(event.start, input.timezone)} — ${truncateBriefText(event.summary)}${event.location ? ` — ${summarizeCalendarLocation(event.location)}` : ""} — ${labelBriefOwner(event.owner)} | ${event.context}${event.hasConflict ? " | conflito" : ""} | ${event.account}`,
         );
       }
     }
@@ -3545,7 +3551,7 @@ function buildMorningBriefReply(input: ExecutiveMorningBrief): string {
       lines.push("- Tarde:");
       for (const event of groupedEvents.tarde) {
         lines.push(
-          `  - ${formatBriefDateTime(event.start, input.timezone)} — ${truncateBriefText(event.summary)}${event.location ? ` — ${summarizeCalendarLocation(event.location)}` : ""} — ${labelBriefOwner(event.owner)} | ${event.account}`,
+          `  - ${formatBriefDateTime(event.start, input.timezone)} — ${truncateBriefText(event.summary)}${event.location ? ` — ${summarizeCalendarLocation(event.location)}` : ""} — ${labelBriefOwner(event.owner)} | ${event.context}${event.hasConflict ? " | conflito" : ""} | ${event.account}`,
         );
       }
     }
@@ -3553,7 +3559,7 @@ function buildMorningBriefReply(input: ExecutiveMorningBrief): string {
       lines.push("- Noite:");
       for (const event of groupedEvents.noite) {
         lines.push(
-          `  - ${formatBriefDateTime(event.start, input.timezone)} — ${truncateBriefText(event.summary)}${event.location ? ` — ${summarizeCalendarLocation(event.location)}` : ""} — ${labelBriefOwner(event.owner)} | ${event.account}`,
+          `  - ${formatBriefDateTime(event.start, input.timezone)} — ${truncateBriefText(event.summary)}${event.location ? ` — ${summarizeCalendarLocation(event.location)}` : ""} — ${labelBriefOwner(event.owner)} | ${event.context}${event.hasConflict ? " | conflito" : ""} | ${event.account}`,
         );
       }
     }
@@ -10770,19 +10776,20 @@ export class AgentCore {
     const pending = this.approvals
       .listPendingAll(12)
       .filter((item) => item.actionKind === "whatsapp_reply");
+    const rankedPending = rankApprovals(pending);
 
     return {
       requestId,
       reply: this.responseOs.buildApprovalReviewReply({
         scopeLabel: "WhatsApp",
-        items: pending.map((item) => ({
-          id: item.id,
-          subject: item.subject,
-          actionKind: item.actionKind,
-          createdAt: item.createdAt,
+        items: rankedPending.map((entry) => ({
+          id: entry.item.id,
+          subject: entry.item.subject,
+          actionKind: entry.item.actionKind,
+          createdAt: entry.item.createdAt,
         })),
-        recommendedNextStep: pending[0]
-          ? `Decidir a resposta pendente de WhatsApp: ${pending[0].subject}.`
+        recommendedNextStep: rankedPending[0]
+          ? `Decidir a resposta pendente de WhatsApp: ${rankedPending[0].item.subject}.`
           : undefined,
       }),
       messages: buildBaseMessages(activeUserPrompt, orchestration),

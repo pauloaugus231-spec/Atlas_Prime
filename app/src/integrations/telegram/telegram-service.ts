@@ -22,6 +22,7 @@ import {
 } from "../../core/google-draft-utils.js";
 import { extractLatestShortPackage, type ParsedShortPackage } from "../../core/short-video-package.js";
 import type { AppConfig } from "../../types/config.js";
+import type { ApprovalInboxItemRecord } from "../../types/approval-inbox.js";
 import type { ContentItemRecord } from "../../types/content-ops.js";
 import type { Logger } from "../../types/logger.js";
 import type { GoogleWorkspaceAuthService } from "../google/google-auth.js";
@@ -32,6 +33,7 @@ import { YouTubePublisherService } from "../youtube/youtube-publisher.js";
 import type { ApprovalEngine } from "../../core/approval-engine.js";
 import type { ClarificationEngine } from "../../core/clarification-engine.js";
 import type { WhatsAppMessageStore } from "../../core/whatsapp-message-store.js";
+import { rankApprovals } from "../../core/approval-priority.js";
 import { matchPersonalCalendarTerms } from "../../core/calendar-relevance.js";
 import { EvolutionApiClient } from "../whatsapp/evolution-api.js";
 import { TelegramApi } from "./telegram-api.js";
@@ -1365,19 +1367,15 @@ function buildWhatsAppSendSuccessMessage(rawResult: unknown, draft: PendingWhats
   ].filter(Boolean).join("\n");
 }
 
-function buildApprovalListReply(items: Array<{
-  id: number;
-  subject: string;
-  actionKind: string;
-  createdAt: string;
-}>): string {
+function buildApprovalListReply(items: ApprovalInboxItemRecord[]): string {
   if (items.length === 0) {
     return "Não há aprovações pendentes neste chat.";
   }
 
+  const ranked = rankApprovals(items);
   const byAction = new Map<string, number>();
-  for (const item of items) {
-    byAction.set(item.actionKind, (byAction.get(item.actionKind) ?? 0) + 1);
+  for (const entry of ranked) {
+    byAction.set(entry.item.actionKind, (byAction.get(entry.item.actionKind) ?? 0) + 1);
   }
 
   return [
@@ -1385,13 +1383,13 @@ function buildApprovalListReply(items: Array<{
     `- Objetivo: revisar aprovações pendentes neste chat`,
     "",
     "Situação agora:",
-    `- ${items.length} aprovação(ões) pendente(s)`,
+    `- ${ranked.length} aprovação(ões) pendente(s)`,
     `- Tipos: ${[...byAction.entries()].map(([kind, count]) => `${kind}=${count}`).join(" | ")}`,
     "",
     "Prioridades:",
-    ...items.map((item) => `- #${item.id} | ${item.actionKind} | ${item.subject} | ${item.createdAt}`),
+    ...ranked.map((entry) => `- #${entry.item.id} | ${entry.urgency.toUpperCase()} | ${entry.item.actionKind} | ${entry.item.subject} | ${entry.reason}`),
     "",
-    `Próxima ação: decidir primeiro ${items[0].subject}.`,
+    `Próxima ação: decidir primeiro ${ranked[0].item.subject}.`,
   ].join("\n");
 }
 
@@ -2222,14 +2220,7 @@ export class TelegramService {
       const items = this.approvalEngine.listPending(message.chat.id, 10);
       await this.sendText(
         message.chat.id,
-        buildApprovalListReply(
-          items.map((item) => ({
-            id: item.id,
-            subject: item.subject,
-            actionKind: item.actionKind,
-            createdAt: item.createdAt,
-          })),
-        ),
+        buildApprovalListReply(items),
         {
           reply_to_message_id: message.message_id,
           disable_web_page_preview: true,

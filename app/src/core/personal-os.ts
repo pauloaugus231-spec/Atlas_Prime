@@ -1,4 +1,5 @@
 import type { ApprovalInboxStore } from "./approval-inbox.js";
+import { rankApprovals } from "./approval-priority.js";
 import { isPersonallyRelevantCalendarEvent, matchPersonalCalendarTerms } from "./calendar-relevance.js";
 import type { CommunicationRouter } from "./contact-intelligence.js";
 import type { FounderOpsService, FounderOpsSnapshot } from "./founder-ops.js";
@@ -20,9 +21,13 @@ export interface ExecutiveBriefEvent {
   account: string;
   summary: string;
   start: string | null;
+  end?: string | null;
   location?: string;
   matchedTerms?: string[];
   owner: "paulo" | "equipe" | "delegavel";
+  context: "externo" | "interno";
+  hasConflict: boolean;
+  prepHint: string;
 }
 
 export interface ExecutiveBriefEmail {
@@ -124,6 +129,23 @@ const TEAM_EVENT_HINTS = [
   "domiciliados",
 ];
 
+const EXTERNAL_EVENT_HINTS = [
+  "creas",
+  "cras",
+  "caps",
+  "restinga",
+  "extremo sul",
+  "casa da sopa",
+  "amurt",
+  "amurtel",
+  "justica itinerante",
+  "justiça itinerante",
+  "rua",
+  "visita",
+  "acolhida",
+  "acompanhamento",
+];
+
 function includesAny(source: string, tokens: string[]): boolean {
   return tokens.some((token) => source.includes(token));
 }
@@ -205,6 +227,66 @@ function classifyEventOwner(input: {
   }
 
   return "delegavel";
+}
+
+function classifyEventContext(input: {
+  summary?: string;
+  location?: string;
+  description?: string;
+}): "externo" | "interno" {
+  const normalized = normalizeEmailAnalysisText([input.summary, input.location, input.description].filter(Boolean).join(" "));
+  if (includesAny(normalized, EXTERNAL_EVENT_HINTS) || Boolean(input.location)) {
+    return "externo";
+  }
+  return "interno";
+}
+
+function rangesOverlap(
+  leftStart: string | null | undefined,
+  leftEnd: string | null | undefined,
+  rightStart: string | null | undefined,
+  rightEnd: string | null | undefined,
+): boolean {
+  if (!leftStart || !leftEnd || !rightStart || !rightEnd) {
+    return false;
+  }
+  const leftStartMs = Date.parse(leftStart);
+  const leftEndMs = Date.parse(leftEnd);
+  const rightStartMs = Date.parse(rightStart);
+  const rightEndMs = Date.parse(rightEnd);
+  if (![leftStartMs, leftEndMs, rightStartMs, rightEndMs].every(Number.isFinite)) {
+    return false;
+  }
+  return leftStartMs < rightEndMs && rightStartMs < leftEndMs;
+}
+
+function annotateEvents(events: ExecutiveBriefEvent[]): ExecutiveBriefEvent[] {
+  return events.map((event, index) => {
+    const hasConflict = event.owner === "paulo"
+      && events.some((candidate, candidateIndex) =>
+        candidateIndex !== index
+        && candidate.owner === "paulo"
+        && rangesOverlap(event.start, event.end, candidate.start, candidate.end));
+
+    let prepHint = "preparar contexto";
+    if (hasConflict) {
+      prepHint = "validar conflito";
+    } else if (event.owner === "delegavel") {
+      prepHint = "confirmar responsável";
+    } else if (event.context === "externo") {
+      prepHint = "preparar deslocamento";
+    } else if (event.owner === "paulo") {
+      prepHint = "preparar material";
+    } else {
+      prepHint = "acompanhar execução";
+    }
+
+    return {
+      ...event,
+      hasConflict,
+      prepHint,
+    };
+  });
 }
 
 function buildWeatherTip(day: {
@@ -382,13 +464,20 @@ function chooseNextAction(input: {
   operationalMemory: ScopedMemorySummary;
 }): string | undefined {
   const candidates: Array<{ score: number; text: string }> = [];
+  const conflictEvent = input.events.find((event) => event.hasConflict);
+  if (conflictEvent) {
+    candidates.push({
+      score: 98,
+      text: `Resolver o conflito da agenda de Paulo: ${conflictEvent.summary}.`,
+    });
+  }
   const nextEvent = input.events[0];
   if (nextEvent?.start) {
     const minutesUntil = Math.round((new Date(nextEvent.start).getTime() - Date.now()) / (60 * 1000));
     const eventScore = minutesUntil <= 45 ? 100 : minutesUntil <= 120 ? 94 : minutesUntil <= 240 ? 84 : 70;
     candidates.push({
       score: eventScore,
-      text: `Preparar o compromisso das ${nextEvent.start}.`,
+      text: `${nextEvent.prepHint[0]?.toUpperCase() ?? ""}${nextEvent.prepHint.slice(1)} para ${nextEvent.summary} às ${nextEvent.start}.`,
     });
   }
 
@@ -418,10 +507,11 @@ function chooseNextAction(input: {
     });
   }
 
-  if (input.approvals.length > 0) {
+  const rankedApprovals = rankApprovals(input.approvals);
+  if (rankedApprovals.length > 0) {
     candidates.push({
-      score: 55 + Math.min(12, input.approvals.length * 2),
-      text: `Revisar a aprovação mais urgente no Telegram: ${input.approvals[0].subject}.`,
+      score: rankedApprovals[0].score,
+      text: `Revisar a aprovação mais urgente no Telegram: ${rankedApprovals[0].item.subject} (${rankedApprovals[0].reason}).`,
     });
   }
 
@@ -568,6 +658,7 @@ export class PersonalOSService {
               account: alias,
               summary: event.summary,
               start: event.start,
+              end: event.end,
               location: event.location,
               description: event.description,
               matchedTerms,
@@ -578,6 +669,13 @@ export class PersonalOSService {
                 location: event.location,
                 matchedTerms,
               }),
+              context: classifyEventContext({
+                summary: event.summary,
+                location: event.location,
+                description: event.description,
+              }),
+              hasConflict: false,
+              prepHint: "preparar contexto",
             };
           })
           .filter((event) => {
@@ -591,6 +689,7 @@ export class PersonalOSService {
     }
 
     events.sort((left, right) => (left.start ?? "").localeCompare(right.start ?? ""));
+    const annotatedEvents = annotateEvents(events);
     const visibleTasks = tasks.filter((task) => !isExecutiveNoise(task.title));
     const taskBuckets = bucketTasks(visibleTasks, this.timezone);
 
@@ -686,7 +785,9 @@ export class PersonalOSService {
       }
       return true;
     });
-    const approvals = this.approvals.listPendingAll(6);
+    const approvals = rankApprovals(this.approvals.listPendingAll(12))
+      .slice(0, 6)
+      .map((entry) => entry.item);
     const workflows = this.workflows
       .listPlans(10)
       .filter((plan) => (plan.status === "active" || plan.status === "draft") && !isExecutiveNoise(plan.title))
@@ -740,7 +841,7 @@ export class PersonalOSService {
     const weather = buildBriefWeather(weatherForecast);
     const nextAction = chooseNextAction({
       timezone: this.timezone,
-      events,
+      events: annotatedEvents,
       taskBuckets,
       emails,
       approvals,
@@ -751,7 +852,7 @@ export class PersonalOSService {
     });
 
     this.logger.debug("Built executive morning brief snapshot", {
-      events: events.length,
+      events: annotatedEvents.length,
       tasks: taskBuckets.actionableCount,
       emails: emails.length,
       approvals: approvals.length,
@@ -760,7 +861,7 @@ export class PersonalOSService {
 
     return {
       timezone: this.timezone,
-      events,
+      events: annotatedEvents,
       taskBuckets,
       emails,
       approvals,
