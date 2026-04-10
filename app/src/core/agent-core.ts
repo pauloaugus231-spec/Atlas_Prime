@@ -36,10 +36,12 @@ import type {
 import { OperationalMemoryStore } from "./operational-memory.js";
 import { PersonalOSService, type ExecutiveMorningBrief } from "./personal-os.js";
 import { ProjectOpsService } from "./project-ops.js";
+import { ResponseOS } from "./response-os.js";
 import { SafeExecService } from "./safe-exec.js";
 import { WorkflowExecutionRuntime } from "./execution-runtime.js";
 import { EntityLinker } from "./entity-linker.js";
 import { IntentRouter, type IntentResolution } from "./intent-router.js";
+import { ContextPackService } from "./context-pack.js";
 import { MemoryEntityStore } from "./memory-entity-store.js";
 import { WorkflowPlanBuilderService } from "./plan-builder.js";
 import { ToolPluginRegistry } from "./plugin-registry.js";
@@ -946,6 +948,41 @@ function isIntentResolvePrompt(prompt: string): boolean {
     || normalized.includes("analise este pedido")
     || normalized.includes("inspecione a intencao")
     || normalized.includes("mostre a intencao");
+}
+
+function extractIntentResolveSubject(prompt: string): string {
+  const cleaned = prompt
+    .replace(/^.*?(analise a intencao|analise a intenção|analise este pedido|inspecione a intencao|inspecione a intenção|mostre a intencao|mostre a intenção)\s*(?:de|:)?\s*/i, "")
+    .trim();
+  return cleaned || prompt.trim();
+}
+
+function isOperationalPlanningPrompt(prompt: string): boolean {
+  const normalized = normalizeEmailAnalysisText(prompt);
+  const hasPlanningVerb = includesAny(normalized, [
+    "organize",
+    "organizar",
+    "priorize",
+    "priorizar",
+    "alinhe",
+    "alinha",
+    "arrume",
+    "arrumar",
+    "planeje",
+    "planejar",
+    "revisar",
+  ]);
+  const hasOperationalScope = includesAny(normalized, [
+    "meu dia",
+    "minha agenda",
+    "agenda",
+    "compromissos",
+    "aprovacoes",
+    "aprovações",
+    "approval",
+    "foco hoje",
+  ]);
+  return hasPlanningVerb && hasOperationalScope;
 }
 
 function extractPreferenceUpdate(prompt: string): import("../types/user-preferences.js").UpdateUserPreferencesInput | null {
@@ -3827,17 +3864,116 @@ function buildMemoryEntityListReply(entities: MemoryEntityRecord[], input: {
   ].join("\n");
 }
 
-function buildIntentResolutionReply(input: IntentResolution): string {
-  return [
-    "Leitura de intenção:",
-    `- Domínio principal: ${input.orchestration.route.primaryDomain}`,
-    `- Domínios mencionados: ${input.mentionedDomains.join(", ") || "nenhum"}`,
-    `- Modo de ação: ${input.orchestration.route.actionMode}`,
-    `- Confiança: ${input.orchestration.route.confidence}`,
-    `- Pedido composto: ${input.compoundIntent ? "sim" : "não"}`,
-    `- Histórico recente aproveitável: ${input.historyUserTurns.length} turno(s)`,
-    `- Razões: ${input.orchestration.route.reasons.join(" | ")}`,
-  ].join("\n");
+function inferIntentObjective(prompt: string, input: IntentResolution): string {
+  const normalized = normalizeEmailAnalysisText(prompt);
+  if (includesAny(normalized, ["aprovacoes", "aprovações", "approval"]) && includesAny(normalized, ["agenda", "compromissos", "meu dia"])) {
+    return "revisar aprovações e reorganizar a agenda operacional";
+  }
+  if (includesAny(normalized, ["agenda", "compromissos", "calendario", "calendário"])) {
+    return "organizar agenda e compromissos";
+  }
+  if (includesAny(normalized, ["aprovacoes", "aprovações", "approval"])) {
+    return "revisar pendências que exigem aprovação";
+  }
+  if (input.orchestration.route.actionMode === "schedule") {
+    return "agendar ou ajustar um compromisso";
+  }
+  if (input.orchestration.route.actionMode === "plan") {
+    return "montar um plano operacional enxuto";
+  }
+  if (input.orchestration.route.actionMode === "analyze") {
+    return "analisar o pedido e definir o melhor caminho";
+  }
+  return "executar o pedido com o domínio correto";
+}
+
+function inferIntentNextStep(input: IntentResolution): string | undefined {
+  switch (input.orchestration.route.actionMode) {
+    case "plan":
+      return "Posso transformar isso em um plano curto e priorizado agora.";
+    case "schedule":
+      return "Posso montar um rascunho de agenda e pedir sua confirmação.";
+    case "communicate":
+      return "Posso preparar um rascunho de resposta antes de enviar.";
+    case "execute":
+      return "Posso seguir para a execução assim que o contexto crítico estiver fechado.";
+    case "monitor":
+      return "Posso consolidar os sinais mais relevantes e devolver um resumo acionável.";
+    default:
+      return undefined;
+  }
+}
+
+function buildOperationalPlanContract(prompt: string, brief: ExecutiveMorningBrief): import("../types/response-contracts.js").OrganizationResponseContract {
+  const normalized = normalizeEmailAnalysisText(prompt);
+  const currentSituation: string[] = [];
+  const priorities: string[] = [];
+  const actionPlan: string[] = [];
+
+  if (brief.events[0]) {
+    currentSituation.push(`próximo compromisso: ${brief.events[0].summary}`);
+    priorities.push(`preparar o compromisso ${brief.events[0].summary}`);
+  }
+  if (brief.approvals[0]) {
+    currentSituation.push(`${brief.approvals.length} aprovação(ões) pendente(s)`);
+    priorities.push(`revisar a aprovação mais urgente: ${brief.approvals[0].subject}`);
+  }
+  if (brief.taskBuckets.overdue.length > 0) {
+    currentSituation.push(`${brief.taskBuckets.overdue.length} tarefa(s) atrasada(s)`);
+    priorities.push(`decidir as tarefas atrasadas antes de abrir novas frentes`);
+  }
+  if (brief.emails[0]) {
+    currentSituation.push(`email prioritário: ${brief.emails[0].subject}`);
+  }
+
+  if (includesAny(normalized, ["aprovacoes", "aprovações", "approval"])) {
+    actionPlan.push("revisar primeiro as aprovações que destravam hoje");
+  }
+  if (brief.events[0]) {
+    actionPlan.push(`alinhar deslocamento, material ou contexto para ${brief.events[0].summary}`);
+  }
+  if (brief.emails[0]) {
+    actionPlan.push(`validar se o email ${brief.emails[0].subject} exige ação real ou pode esperar`);
+  }
+
+  return {
+    objective: inferIntentObjective(prompt, {
+      rawPrompt: prompt,
+      activeUserPrompt: prompt,
+      historyUserTurns: [],
+      orchestration: {
+        route: {
+          primaryDomain: "secretario_operacional",
+          secondaryDomains: [],
+          confidence: 1,
+          actionMode: "plan",
+          reasons: [],
+        },
+        policy: {
+          riskLevel: "low",
+          autonomyLevel: "observe_only",
+          guardrails: [],
+          requiresApprovalFor: [],
+          capabilities: {
+            canReadSensitiveChannels: false,
+            canDraftExternalReplies: false,
+            canSendExternalReplies: false,
+            canWriteWorkspace: false,
+            canPersistMemory: false,
+            canRunProjectTools: false,
+            canModifyCalendar: false,
+            canPublishContent: false,
+          },
+        },
+      },
+      mentionedDomains: [],
+      compoundIntent: includesAny(normalized, [" e ", " junto "]),
+    }),
+    currentSituation,
+    priorities,
+    actionPlan,
+    recommendedNextStep: brief.nextAction ?? actionPlan[0],
+  };
 }
 
 function buildWhatsAppDraftMarker(draft: {
@@ -7584,6 +7720,8 @@ export class AgentCore {
     private readonly googleMaps: GoogleMapsService,
     private readonly personalOs: PersonalOSService,
     private readonly intentRouter: IntentRouter,
+    private readonly responseOs: ResponseOS,
+    private readonly contextPacks: ContextPackService,
     private readonly planBuilder: WorkflowPlanBuilderService,
     private readonly pexelsMedia: PexelsMediaService,
     private readonly projectOps: ProjectOpsService,
@@ -8029,6 +8167,16 @@ export class AgentCore {
     );
     if (directMorningBriefResult) {
       return directMorningBriefResult;
+    }
+    const directOperationalPlanningResult = await this.tryRunDirectOperationalPlanning(
+      activeUserPrompt,
+      requestId,
+      requestLogger,
+      intent,
+      preferences,
+    );
+    if (directOperationalPlanningResult) {
+      return directOperationalPlanningResult;
     }
     const directMacQueueStatusResult = await this.tryRunDirectMacQueueStatus(
       activeUserPrompt,
@@ -12799,12 +12947,68 @@ export class AgentCore {
       return null;
     }
 
-    const resolution = this.intentRouter.resolve(userPrompt);
+    const subject = extractIntentResolveSubject(userPrompt);
+    const resolution = this.intentRouter.resolve(subject);
+    const contextPack = await this.contextPacks.buildForPrompt(subject, resolution);
     return {
       requestId,
-      reply: buildIntentResolutionReply(resolution),
+      reply: this.responseOs.buildIntentAnalysisReply({
+        objective: inferIntentObjective(subject, resolution),
+        primaryDomain: resolution.orchestration.route.primaryDomain,
+        mentionedDomains: resolution.mentionedDomains,
+        actionMode: resolution.orchestration.route.actionMode,
+        confidence: resolution.orchestration.route.confidence,
+        compound: resolution.compoundIntent,
+        contextSignals: contextPack?.signals ?? [],
+        reasons: resolution.orchestration.route.reasons,
+        recommendedNextStep: inferIntentNextStep(resolution),
+      }),
       messages: buildBaseMessages(userPrompt, orchestration, preferences),
       toolExecutions: [],
+    };
+  }
+
+  private async tryRunDirectOperationalPlanning(
+    userPrompt: string,
+    requestId: string,
+    requestLogger: Logger,
+    intent: IntentResolution,
+    preferences: UserPreferences,
+  ): Promise<AgentRunResult | null> {
+    if (!isOperationalPlanningPrompt(userPrompt)) {
+      return null;
+    }
+
+    requestLogger.info("Using direct operational planning route", {
+      primaryDomain: intent.orchestration.route.primaryDomain,
+      actionMode: intent.orchestration.route.actionMode,
+    });
+
+    const contextPack = await this.contextPacks.buildForPrompt(userPrompt, intent);
+    const brief = contextPack?.brief;
+    if (!brief) {
+      return null;
+    }
+
+    return {
+      requestId,
+      reply: this.responseOs.buildOrganizationReply(buildOperationalPlanContract(userPrompt, brief)),
+      messages: buildBaseMessages(userPrompt, intent.orchestration, preferences),
+      toolExecutions: [
+        {
+          toolName: "context_pack_operational_overview",
+          resultPreview: JSON.stringify(
+            {
+              events: brief.events.length,
+              approvals: brief.approvals.length,
+              tasks: brief.taskBuckets.actionableCount,
+              emails: brief.emails.length,
+            },
+            null,
+            2,
+          ),
+        },
+      ],
     };
   }
 

@@ -38,6 +38,8 @@ import { IntentRouter } from "./intent-router.js";
 import { WorkflowPlanBuilderService } from "./plan-builder.js";
 import { ClarificationInboxStore } from "./clarification-inbox.js";
 import { ClarificationEngine } from "./clarification-engine.js";
+import { ResponseOS } from "./response-os.js";
+import { ContextPackService } from "./context-pack.js";
 
 export async function createAgentCore() {
   const config = loadConfig();
@@ -194,6 +196,12 @@ export async function createAgentCore() {
     logger.child({ scope: "clarification-engine" }),
     config.google.defaultTimezone,
   );
+  const responseOs = new ResponseOS();
+  const contextPacks = new ContextPackService(
+    personalOs,
+    approvals,
+    logger.child({ scope: "context-pack" }),
+  );
   const planBuilder = new WorkflowPlanBuilderService(
     client,
     workflows,
@@ -227,6 +235,8 @@ export async function createAgentCore() {
     googleMaps,
     personalOs,
     intentRouter,
+    responseOs,
+    contextPacks,
     planBuilder,
     pexelsMedia,
     projectOps,
