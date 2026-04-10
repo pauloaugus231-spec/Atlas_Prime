@@ -40,6 +40,7 @@ import { ClarificationInboxStore } from "./clarification-inbox.js";
 import { ClarificationEngine } from "./clarification-engine.js";
 import { ResponseOS } from "./response-os.js";
 import { ContextPackService } from "./context-pack.js";
+import { ContextMemoryService } from "./context-memory.js";
 
 export async function createAgentCore() {
   const config = loadConfig();
@@ -83,6 +84,10 @@ export async function createAgentCore() {
   );
   const entityLinker = new EntityLinker(memoryEntities);
   const approvalPolicy = new ApprovalPolicyService();
+  const contextMemory = new ContextMemoryService(
+    memoryEntities,
+    logger.child({ scope: "context-memory" }),
+  );
   const approvalEngine = new ApprovalEngine(
     approvals,
     approvalPolicy,
@@ -201,6 +206,7 @@ export async function createAgentCore() {
   const contextPacks = new ContextPackService(
     personalOs,
     approvals,
+    contextMemory,
     logger.child({ scope: "context-pack" }),
   );
   const planBuilder = new WorkflowPlanBuilderService(

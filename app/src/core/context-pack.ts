@@ -1,6 +1,7 @@
 import type { Logger } from "../types/logger.js";
 import type { IntentResolution } from "./intent-router.js";
 import type { ApprovalInboxStore } from "./approval-inbox.js";
+import type { ContextMemoryService } from "./context-memory.js";
 import type { ExecutiveMorningBrief, PersonalOSService } from "./personal-os.js";
 
 function normalize(value: string): string {
@@ -51,6 +52,7 @@ export class ContextPackService {
   constructor(
     private readonly personalOs: PersonalOSService,
     private readonly approvals: ApprovalInboxStore,
+    private readonly contextMemory: ContextMemoryService,
     private readonly logger: Logger,
   ) {}
 
@@ -69,6 +71,8 @@ export class ContextPackService {
       if (brief.emails[0]?.subject) {
         signals.push(`email prioritário: ${brief.emails[0].subject}`);
       }
+      const operationalMemory = this.contextMemory.summarize("operational", 3);
+      signals.push(...operationalMemory.signals);
 
       return {
         kind: "operational_overview",
