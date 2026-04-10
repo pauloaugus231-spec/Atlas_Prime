@@ -1,8 +1,12 @@
 import type { ConversationMessage, LlmClient } from "../types/llm.js";
 import type { Logger } from "../types/logger.js";
 import type { ClarificationInboxItemRecord } from "../types/clarification.js";
-import type { IntentResolution } from "./intent-router.js";
+import { IntentRouter, type IntentResolution } from "./intent-router.js";
 import { ClarificationInboxStore } from "./clarification-inbox.js";
+import {
+  buildClarificationRuleProposal,
+  buildClarifiedExecutionPrompt,
+} from "./clarification-rules.js";
 import {
   buildEventDraftFromPrompt,
   buildTaskDraftFromPrompt,
@@ -50,6 +54,7 @@ export class ClarificationEngine {
     private readonly client: LlmClient,
     private readonly logger: Logger,
     private readonly defaultTimezone: string,
+    private readonly intentRouter: IntentRouter,
   ) {}
 
   getLatestPending(chatId: number): ClarificationInboxItemRecord | null {
@@ -190,6 +195,11 @@ export class ClarificationEngine {
       };
     }
 
+    const ruleBased = buildClarificationRuleProposal(prompt, intent);
+    if (ruleBased) {
+      return ruleBased;
+    }
+
     const hasAgenda = ["agenda", "calendario", "calendário", "compromisso", "compromissos"].some((token) => normalized.includes(token));
     const hasApprovals = ["aprovacao", "aprovação", "aprovacoes", "aprovações", "approval"].some((token) => normalized.includes(token));
     const hasTimeScope = ["hoje", "amanha", "amanhã", "semana", "mes", "mês", "dia"].some((token) => normalized.includes(token));
@@ -326,6 +336,12 @@ export class ClarificationEngine {
         item.originalPrompt.trim(),
         answerText.trim(),
       ].filter(Boolean).join(" ");
+    }
+
+    const intent = this.intentRouter.resolve(item.originalPrompt);
+    const clarifiedPrompt = buildClarifiedExecutionPrompt(item.originalPrompt, answerText, intent);
+    if (clarifiedPrompt) {
+      return clarifiedPrompt;
     }
 
     return [

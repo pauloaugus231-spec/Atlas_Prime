@@ -195,6 +195,7 @@ export async function createAgentCore() {
     client,
     logger.child({ scope: "clarification-engine" }),
     config.google.defaultTimezone,
+    intentRouter,
   );
   const responseOs = new ResponseOS();
   const contextPacks = new ContextPackService(
