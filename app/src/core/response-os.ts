@@ -2,9 +2,12 @@ import type {
   ApprovalReviewContract,
   InboxTriageContract,
   IntentAnalysisContract,
+  MessageHistoryContract,
   OrganizationResponseContract,
   ResponseContractKind,
   ResponseQualityAssessment,
+  ScheduleLookupContract,
+  TaskReviewContract,
 } from "../types/response-contracts.js";
 
 function compactBlankLines(lines: string[]): string[] {
@@ -213,6 +216,88 @@ export class ResponseOS {
       lines.push("", `Próxima ação: ${truncate(input.recommendedNextStep, 140)}`);
     }
 
+    return this.finalize("analysis", lines.join("\n"));
+  }
+
+  buildScheduleLookupReply(input: ScheduleLookupContract): string {
+    if (input.events.length === 0) {
+      const lines = [
+        "Leitura operacional:",
+        `- Objetivo: verificar agenda em ${input.targetLabel}${input.topicLabel ? ` sobre ${input.topicLabel}` : ""}`,
+        "",
+        "Situação agora:",
+        "- nenhum evento encontrado nas contas consultadas",
+      ];
+      if (typeof input.emailFallbackCount === "number" && input.emailFallbackCount > 0) {
+        lines.push(`- ${input.emailFallbackCount} email(s) relacionado(s) foram encontrados como fallback`);
+      }
+      if (input.recommendedNextStep) {
+        lines.push("", `Próxima ação: ${truncate(input.recommendedNextStep, 140)}`);
+      }
+      return this.finalize("analysis", lines.join("\n"));
+    }
+
+    const lines = [
+      "Leitura operacional:",
+      `- Objetivo: verificar agenda em ${input.targetLabel}${input.topicLabel ? ` sobre ${input.topicLabel}` : ""}`,
+      "",
+      "Situação agora:",
+      `- ${input.events.length} evento(s) encontrado(s)`,
+      "",
+      "Prioridades:",
+    ];
+    for (const item of input.events.slice(0, 4)) {
+      lines.push(`- ${truncate(item.summary, 120)}${item.start ? ` | ${item.start}` : ""}${item.location ? ` | ${truncate(item.location, 80)}` : ""} | ${item.account}`);
+    }
+    if (input.recommendedNextStep) {
+      lines.push("", `Próxima ação: ${truncate(input.recommendedNextStep, 140)}`);
+    }
+    return this.finalize("analysis", lines.join("\n"));
+  }
+
+  buildTaskReviewReply(input: TaskReviewContract): string {
+    if (input.items.length === 0) {
+      return this.finalize("analysis", `Não encontrei tarefas abertas em ${input.scopeLabel}.`);
+    }
+
+    const lines = [
+      "Leitura operacional:",
+      `- Objetivo: revisar tarefas em ${input.scopeLabel}`,
+      "",
+      "Situação agora:",
+      `- ${input.items.length} tarefa(s) aberta(s)`,
+      "",
+      "Prioridades:",
+    ];
+    for (const item of input.items.slice(0, 6)) {
+      lines.push(`- ${truncate(item.title, 120)} | ${item.taskListTitle} | ${item.account} | ${item.status} | ${item.dueLabel}`);
+    }
+    if (input.recommendedNextStep) {
+      lines.push("", `Próxima ação: ${truncate(input.recommendedNextStep, 140)}`);
+    }
+    return this.finalize("analysis", lines.join("\n"));
+  }
+
+  buildMessageHistoryReply(input: MessageHistoryContract): string {
+    if (input.items.length === 0) {
+      return this.finalize("analysis", `Não encontrei histórico recente em ${input.scopeLabel}.`);
+    }
+
+    const lines = [
+      "Leitura operacional:",
+      `- Objetivo: revisar histórico recente em ${input.scopeLabel}`,
+      "",
+      "Situação agora:",
+      `- ${input.items.length} mensagem(ns) recente(s) encontrada(s)`,
+      "",
+      "Contexto útil:",
+    ];
+    for (const item of input.items.slice(0, 6)) {
+      lines.push(`- ${item.direction} | ${item.when} | ${truncate(item.who, 48)} | ${truncate(item.text, 120)}`);
+    }
+    if (input.recommendedNextStep) {
+      lines.push("", `Próxima ação: ${truncate(input.recommendedNextStep, 140)}`);
+    }
     return this.finalize("analysis", lines.join("\n"));
   }
 }

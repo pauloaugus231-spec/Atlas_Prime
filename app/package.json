@@ -11,6 +11,8 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "eval:intents": "tsx scripts/eval-intents.ts",
+    "eval:clarification": "tsx scripts/eval-clarification.ts",
+    "eval:agenda-drafts": "tsx scripts/eval-agenda-drafts.ts",
     "eval:responses": "tsx scripts/eval-response-os.ts",
     "dev": "tsx src/index.ts",
     "core:doctor": "tsx src/index.ts doctor",

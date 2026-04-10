@@ -63,6 +63,48 @@ function run() {
     detail: inboxReply,
   });
 
+  const scheduleReply = responseOs.buildScheduleLookupReply({
+    targetLabel: "amanhã",
+    topicLabel: "muralismo",
+    events: [
+      {
+        account: "abordagem",
+        summary: "Paulo e Máira: Muralismo",
+        start: "09/04, 08:00",
+        location: "Casa da Sopa",
+      },
+    ],
+    recommendedNextStep: "Revisar os demais eventos do mesmo dia para confirmar conflito ou contexto.",
+  });
+  results.push({
+    name: "schedule_reply_contract",
+    passed: scheduleReply.includes("Leitura operacional:")
+      && scheduleReply.includes("Objetivo: verificar agenda")
+      && scheduleReply.includes("Prioridades:")
+      && scheduleReply.includes("Próxima ação:"),
+    detail: scheduleReply,
+  });
+
+  const messageReply = responseOs.buildMessageHistoryReply({
+    scopeLabel: "WhatsApp abordagem",
+    items: [
+      {
+        when: "10/04 09:00",
+        who: "Paulo Augusto",
+        direction: "recebida",
+        text: "Consegue me responder hoje?",
+      },
+    ],
+    recommendedNextStep: "Ler a última mensagem e decidir se o próximo passo é responder, acompanhar ou registrar contexto.",
+  });
+  results.push({
+    name: "message_history_reply_contract",
+    passed: messageReply.includes("Leitura operacional:")
+      && messageReply.includes("Contexto útil:")
+      && messageReply.includes("Próxima ação:"),
+    detail: messageReply,
+  });
+
   const failures = results.filter((item) => !item.passed);
   for (const item of results.filter((entry) => entry.passed)) {
     console.log(`PASS ${item.name}`);

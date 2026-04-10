@@ -61,3 +61,45 @@ export interface InboxTriageContract {
   items: InboxTriageContractItem[];
   recommendedNextStep?: string;
 }
+
+export interface ScheduleLookupContractItem {
+  account: string;
+  summary: string;
+  start?: string | null;
+  location?: string;
+}
+
+export interface ScheduleLookupContract {
+  targetLabel: string;
+  topicLabel?: string;
+  events: ScheduleLookupContractItem[];
+  emailFallbackCount?: number;
+  recommendedNextStep?: string;
+}
+
+export interface TaskReviewContractItem {
+  title: string;
+  taskListTitle: string;
+  account: string;
+  status: string;
+  dueLabel: string;
+}
+
+export interface TaskReviewContract {
+  scopeLabel: string;
+  items: TaskReviewContractItem[];
+  recommendedNextStep?: string;
+}
+
+export interface MessageHistoryContractItem {
+  when: string;
+  who: string;
+  direction: string;
+  text: string;
+}
+
+export interface MessageHistoryContract {
+  scopeLabel: string;
+  items: MessageHistoryContractItem[];
+  recommendedNextStep?: string;
+}

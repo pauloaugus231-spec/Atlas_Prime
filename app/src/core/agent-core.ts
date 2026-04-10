@@ -9506,9 +9506,18 @@ export class AgentCore {
 
     return {
       requestId,
-      reply: buildGoogleTasksReply({
-        timezone: this.config.google.defaultTimezone,
-        tasks,
+      reply: this.responseOs.buildTaskReviewReply({
+        scopeLabel: explicitAccount ? `Google Tasks da conta ${explicitAccount}` : "Google Tasks das contas conectadas",
+        items: tasks.map((task) => ({
+          title: task.title || "(sem titulo)",
+          taskListTitle: task.taskListTitle,
+          account: task.account,
+          status: task.status,
+          dueLabel: formatTaskDue(task, this.config.google.defaultTimezone),
+        })),
+        recommendedNextStep: tasks[0]
+          ? `Revisar a primeira tarefa aberta: ${tasks[0].title || "(sem titulo)"}.`
+          : undefined,
       }),
       messages: buildBaseMessages(userPrompt, orchestration, preferences),
       toolExecutions: [
@@ -9643,12 +9652,23 @@ export class AgentCore {
 
     return {
       requestId,
-      reply: buildCalendarLookupReply({
-        request: lookup,
-        eventMatches,
-        emailMatches,
-        timezone: this.config.google.defaultTimezone,
-        suggestNextStep: preferences.proactiveNextStep,
+      reply: this.responseOs.buildScheduleLookupReply({
+        targetLabel: lookup.targetDate.label,
+        topicLabel: lookup.topic,
+        events: eventMatches.map((item) => ({
+          account: item.account,
+          summary: item.summary,
+          start: item.start ? formatBriefDateTime(item.start, this.config.google.defaultTimezone) : null,
+          location: item.location ? summarizeCalendarLocation(item.location) : undefined,
+        })),
+        emailFallbackCount: emailMatches.length,
+        recommendedNextStep: preferences.proactiveNextStep
+          ? eventMatches.length > 1
+            ? "Revisar os demais eventos do mesmo dia para confirmar conflito ou contexto."
+            : emailMatches.length > 0
+              ? "Abrir o email mais recente para confirmar data, horário ou convite."
+              : "Verificar outras contas ou calendários se a busca precisar ser ampliada."
+          : undefined,
       }),
       messages: buildBaseMessages(userPrompt, orchestration, preferences),
       toolExecutions: [
@@ -10601,9 +10621,26 @@ export class AgentCore {
       : this.whatsappMessages.searchRecent(query, 8);
     return {
       requestId,
-      reply: isScopedAccountQuery && route.instanceName
-        ? buildWhatsAppScopedRecentMessagesReply(route.accountAlias, messages)
-        : buildWhatsAppRecentMessagesReply(query, messages),
+      reply: this.responseOs.buildMessageHistoryReply({
+        scopeLabel: isScopedAccountQuery && route.instanceName
+          ? `WhatsApp ${route.accountAlias}`
+          : `WhatsApp para ${query}`,
+        items: messages.map((item) => ({
+          when: new Intl.DateTimeFormat("pt-BR", {
+            timeZone: "America/Sao_Paulo",
+            day: "2-digit",
+            month: "2-digit",
+            hour: "2-digit",
+            minute: "2-digit",
+          }).format(new Date(item.createdAt)),
+          who: item.pushName ?? item.number ?? item.remoteJid,
+          direction: item.direction === "inbound" ? "recebida" : "enviada",
+          text: item.text,
+        })),
+        recommendedNextStep: messages[0]
+          ? `Ler a última mensagem e decidir se o próximo passo é responder, acompanhar ou registrar contexto.`
+          : undefined,
+      }),
       messages: buildBaseMessages(activeUserPrompt, orchestration),
       toolExecutions: [],
     };
