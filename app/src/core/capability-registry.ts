@@ -4,6 +4,7 @@ import type { CapabilityDefinition, RiskLevel, SideEffect } from "../types/capab
 import type { ToolExecutionContext, ToolPluginResult } from "../types/plugin.js";
 import { ToolPluginRegistry } from "./plugin-registry.js";
 import type { ApprovalEngine } from "./approval-engine.js";
+import type { ContextMemoryService } from "./context-memory.js";
 import type { IntentRouter } from "./intent-router.js";
 import type { MemoryEntityStore } from "./memory-entity-store.js";
 import type { PersonalOSService } from "./personal-os.js";
@@ -47,6 +48,7 @@ export interface CapabilityExecutionContext {
   approvalEngine: ApprovalEngine;
   workflowRuntime: WorkflowExecutionRuntime;
   memoryEntities: MemoryEntityStore;
+  contextMemory: ContextMemoryService;
   intentRouter: IntentRouter;
   toolContext?: ToolExecutionContext;
 }

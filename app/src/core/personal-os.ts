@@ -2,6 +2,7 @@ import type { ApprovalInboxStore } from "./approval-inbox.js";
 import { isPersonallyRelevantCalendarEvent, matchPersonalCalendarTerms } from "./calendar-relevance.js";
 import type { CommunicationRouter } from "./contact-intelligence.js";
 import type { FounderOpsService, FounderOpsSnapshot } from "./founder-ops.js";
+import type { ContextMemoryService, ScopedMemorySummary } from "./context-memory.js";
 import type { MemoryEntityStore } from "./memory-entity-store.js";
 import type { OperationalMemoryStore } from "./operational-memory.js";
 import { WeatherService, type WeatherForecastResult } from "./weather-service.js";
@@ -378,6 +379,7 @@ function chooseNextAction(input: {
   workflows: ExecutiveBriefWorkflow[];
   focus: ExecutiveBriefFocusItem[];
   memoryEntities: ExecutiveBriefEntitySummary;
+  operationalMemory: ScopedMemorySummary;
 }): string | undefined {
   const candidates: Array<{ score: number; text: string }> = [];
   const nextEvent = input.events[0];
@@ -434,6 +436,21 @@ function chooseNextAction(input: {
     candidates.push({
       score: 28,
       text: input.focus[0].nextAction,
+    });
+  }
+
+  const recentOperationalEntity = input.operationalMemory.entities[0];
+  if (recentOperationalEntity) {
+    const operationalScore = recentOperationalEntity.kind === "approval"
+      ? 68
+      : recentOperationalEntity.kind === "workflow_run"
+        ? 48
+        : recentOperationalEntity.kind === "task"
+          ? 40
+          : 20;
+    candidates.push({
+      score: operationalScore,
+      text: `Verificar o contexto operacional recente: ${recentOperationalEntity.title}.`,
     });
   }
 
@@ -521,6 +538,7 @@ export class PersonalOSService {
     private readonly founderOps: FounderOpsService,
     private readonly memory: OperationalMemoryStore,
     private readonly memoryEntities: MemoryEntityStore,
+    private readonly contextMemory: ContextMemoryService,
   ) {
     this.weather = new WeatherService(this.logger.child({ scope: "weather" }));
   }
@@ -705,6 +723,7 @@ export class PersonalOSService {
     };
     const founderSnapshot = this.founderOps.getDailySnapshot();
     const motivation = pickDailyMotivation(this.timezone);
+    const operationalMemory = this.contextMemory.summarize("operational", 4);
     const weatherForecast = this.briefingConfig.weatherEnabled
       ? await this.weather.getForecast({
           location: this.briefingConfig.weatherLocation,
@@ -728,6 +747,7 @@ export class PersonalOSService {
       workflows,
       focus,
       memoryEntities,
+      operationalMemory,
     });
 
     this.logger.debug("Built executive morning brief snapshot", {

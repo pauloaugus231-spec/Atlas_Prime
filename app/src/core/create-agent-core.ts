@@ -154,6 +154,7 @@ export async function createAgentCore() {
     founderOps,
     memory,
     memoryEntities,
+    contextMemory,
   );
   const email = emailAccounts.getReader("primary");
   const emailWriter = emailAccounts.getWriter("primary");

@@ -1,4 +1,5 @@
 import type { ApprovalEngine } from "../approval-engine.js";
+import type { ContextMemoryService } from "../context-memory.js";
 import type { IntentRouter } from "../intent-router.js";
 import type { MemoryEntityStore } from "../memory-entity-store.js";
 import type { PersonalOSService } from "../personal-os.js";
@@ -15,6 +16,7 @@ export interface BuiltInCapabilityExecutionContext {
   approvalEngine: ApprovalEngine;
   workflowRuntime: WorkflowExecutionRuntime;
   memoryEntities: MemoryEntityStore;
+  contextMemory: ContextMemoryService;
   intentRouter: IntentRouter;
 }
 
@@ -46,6 +48,36 @@ export function createBuiltInCapabilities(): BuiltInCapabilityDefinition[] {
       async execute(_input, context) {
         const brief = await context.personalOs.getExecutiveMorningBrief();
         return JSON.parse(JSON.stringify(brief)) as Record<string, unknown>;
+      },
+    },
+    {
+      name: "memory.scope.summarize",
+      domain: "orchestrator",
+      description: "Resume a memória estruturada do Atlas por escopo: profile, project, operational ou temporary.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          scope: {
+            type: "string",
+            enum: ["profile", "project", "operational", "temporary"],
+          },
+          limit: { type: "integer", minimum: 1, maximum: 50 },
+        },
+        required: ["scope"],
+        additionalProperties: false,
+      },
+      outputSchema: {
+        type: "object",
+      },
+      risk: "low",
+      sideEffects: ["read"],
+      requiresApproval: false,
+      idempotent: true,
+      execute(input, context) {
+        return JSON.parse(JSON.stringify(context.contextMemory.summarize(
+          String(input.scope) as "profile" | "project" | "operational" | "temporary",
+          typeof input.limit === "number" ? Number(input.limit) : 6,
+        ))) as Record<string, unknown>;
       },
     },
     {
