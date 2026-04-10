@@ -72,6 +72,19 @@ function run() {
     detail: JSON.stringify(codeProposal, null, 2),
   });
 
+  const supportIntent = router.resolve("organize minha fila de suporte");
+  const supportProposal = buildClarificationRuleProposal("organize minha fila de suporte", supportIntent);
+  results.push({
+    name: "support_clarification_asks_queue_action",
+    passed: Boolean(
+      supportProposal
+      && supportProposal.questions.length === 1
+      && supportProposal.questions[0]?.includes("triagem")
+      && supportProposal.questions[0]?.includes("prepare respostas"),
+    ),
+    detail: JSON.stringify(supportProposal, null, 2),
+  });
+
   const failures = results.filter((item) => !item.passed);
   for (const item of results.filter((entry) => entry.passed)) {
     console.log(`PASS ${item.name}`);

@@ -47,7 +47,7 @@ function detectMentionedDomains(prompt: string, orchestration: OrchestrationCont
   ]);
 
   const checks: Array<[AgentDomain, string[]]> = [
-    ["secretario_operacional", ["agenda", "compromisso", "follow-up", "prioridade", "briefing"]],
+    ["secretario_operacional", ["agenda", "compromisso", "follow-up", "prioridade", "briefing", "inbox", "email", "whatsapp", "aprovação", "aprovacao", "ticket", "tickets", "suporte", "atendimento", "tarefa"]],
     ["social_media", ["conteudo", "instagram", "youtube", "tiktok", "roteiro", "post"]],
     ["dev_full_stack", ["codigo", "api", "deploy", "bug", "build", "saas"]],
     ["analista_negocios_growth", ["growth", "receita", "mrr", "funil", "conversao", "lead"]],

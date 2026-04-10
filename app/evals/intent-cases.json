@@ -34,5 +34,14 @@
       "actionMode": "execute",
       "compoundIntent": false
     }
+  },
+  {
+    "name": "support_queue_routes_to_secretary_plan",
+    "prompt": "revise a fila de suporte e priorize os tickets de hoje",
+    "expect": {
+      "primaryDomain": "secretario_operacional",
+      "actionMode": "plan",
+      "compoundIntent": true
+    }
   }
 ]

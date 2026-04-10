@@ -57,6 +57,17 @@ function scoreDomain(prompt: string, domain: AgentDomain): number {
       "agende",
       "remarque",
       "tarefas do dia",
+      "inbox",
+      "email",
+      "whatsapp",
+      "aprovacoes",
+      "aprovações",
+      "suporte",
+      "ticket",
+      "tickets",
+      "fila de suporte",
+      "fila de atendimento",
+      "atendimento",
     ],
     social_media: [
       "post",
@@ -152,6 +163,28 @@ function detectActionMode(prompt: string): AgentActionMode {
   }
 
   if (hasPlanningIntent) {
+    return "plan";
+  }
+
+  if (
+    hasReviewIntent
+    && includesAny(normalized, [
+      "ticket",
+      "tickets",
+      "suporte",
+      "inbox",
+      "caixa de entrada",
+      "fila de suporte",
+      "fila de atendimento",
+      "approval",
+      "aprovac",
+      "tarefas",
+      "agenda",
+      "compromiss",
+      "whatsapp",
+      "atendimento",
+    ])
+  ) {
     return "plan";
   }
 

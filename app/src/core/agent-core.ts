@@ -331,6 +331,35 @@ function isInboxTriagePrompt(prompt: string): boolean {
   return hasTriageIntent && hasInboxIntent;
 }
 
+function isSupportReviewPrompt(prompt: string): boolean {
+  const normalized = normalizeEmailAnalysisText(prompt);
+  const hasSupportIntent = includesAny(normalized, [
+    "suporte",
+    "ticket",
+    "tickets",
+    "fila de suporte",
+    "fila de atendimento",
+    "atendimento",
+    "clientes",
+  ]);
+  const hasActionIntent = includesAny(normalized, [
+    "revise",
+    "revisar",
+    "organize",
+    "organizar",
+    "priorize",
+    "priorizar",
+    "triagem",
+    "triage",
+    "fila",
+    "responda",
+    "responder",
+    "mostre",
+    "liste",
+  ]);
+  return hasSupportIntent && hasActionIntent;
+}
+
 function isOperationalBriefPrompt(prompt: string): boolean {
   const normalized = normalizeEmailAnalysisText(prompt);
   return [
@@ -8311,6 +8340,15 @@ export class AgentCore {
     if (directMemoryUpdateGuardResult) {
       return directMemoryUpdateGuardResult;
     }
+    const directSupportReviewResult = await this.tryRunDirectSupportReview(
+      activeUserPrompt,
+      requestId,
+      requestLogger,
+      orchestration,
+    );
+    if (directSupportReviewResult) {
+      return directSupportReviewResult;
+    }
     const directInboxTriageResult = await this.tryRunDirectInboxTriage(
       activeUserPrompt,
       requestId,
@@ -13794,6 +13832,188 @@ export class AgentCore {
           successCriteria: "Nada crítico fica sem dono ou data.",
           dependsOn: [3, 4],
           suggestedTools: ["save_memory_item", "create_google_task", "create_calendar_event"],
+        },
+      ],
+    };
+  }
+
+  private async tryRunDirectSupportReview(
+    userPrompt: string,
+    requestId: string,
+    requestLogger: Logger,
+    orchestration: OrchestrationContext,
+  ): Promise<AgentRunResult | null> {
+    if (!isSupportReviewPrompt(userPrompt)) {
+      return null;
+    }
+
+    requestLogger.info("Using direct support review route");
+
+    const emailStatus = await this.email.getStatus();
+    const emails = emailStatus.ready
+      ? await this.email.listRecentMessages({
+        limit: 12,
+        unreadOnly: false,
+        sinceHours: 168,
+      })
+      : [];
+
+    const supportEmailItems = emails
+      .map((email) => {
+        const summary = summarizeEmailForOperations({
+          subject: email.subject,
+          from: email.from,
+          text: email.preview,
+        });
+        const routing = this.communicationRouter.classify({
+          channel: "email",
+          identifier: extractEmailIdentifier(email.from),
+          displayName: email.from.join(", "),
+          subject: email.subject,
+          text: email.preview,
+        });
+        const normalized = normalizeEmailAnalysisText([email.subject, email.preview].join("\n"));
+        const supportSignal = includesAny(normalized, [
+          "suporte",
+          "ticket",
+          "erro",
+          "problema",
+          "duvida",
+          "dúvida",
+          "ajuda",
+          "atendimento",
+          "cliente",
+        ]);
+        return {
+          email,
+          summary,
+          routing,
+          keep: routing.relationship === "client" || routing.relationship === "lead" || supportSignal,
+        };
+      })
+      .filter((item) => item.keep)
+      .slice(0, 4);
+
+    const pendingReplyApprovals = this.approvals
+      .listPendingAll(12)
+      .filter((item) => item.actionKind === "whatsapp_reply")
+      .slice(0, 4);
+
+    const recentSupportMessages = this.whatsappMessages
+      .listRecent(20)
+      .map((message) => {
+        const routing = this.communicationRouter.classify({
+          channel: "whatsapp",
+          identifier: message.number ?? message.remoteJid,
+          displayName: message.pushName,
+          text: message.text,
+        });
+        const normalized = normalizeEmailAnalysisText(message.text);
+        const supportSignal = includesAny(normalized, [
+          "suporte",
+          "erro",
+          "problema",
+          "duvida",
+          "dúvida",
+          "ajuda",
+          "cliente",
+          "atendimento",
+        ]);
+        return {
+          message,
+          routing,
+          keep: message.direction === "inbound" && (routing.relationship === "client" || routing.relationship === "lead" || supportSignal),
+        };
+      })
+      .filter((item) => item.keep)
+      .slice(0, 4);
+
+    if (supportEmailItems.length === 0 && pendingReplyApprovals.length === 0 && recentSupportMessages.length === 0) {
+      return {
+        requestId,
+        reply: this.responseOs.buildOrganizationReply({
+          objective: "revisar a fila de suporte e atendimento",
+          currentSituation: [
+            emailStatus.ready
+              ? "não encontrei sinais fortes de fila de suporte nas fontes recentes"
+              : "email indisponível; análise feita só com sinais locais disponíveis",
+          ],
+          priorities: ["validar se a fila de suporte está chegando por email, WhatsApp ou outro canal"],
+          actionPlan: ["definir o canal principal da fila e repetir a revisão com esse escopo"],
+          recommendedNextStep: "Se quiser, eu posso revisar primeiro o inbox, o WhatsApp ou só as aprovações pendentes.",
+        }),
+        messages: buildBaseMessages(userPrompt, orchestration),
+        toolExecutions: [],
+      };
+    }
+
+    const currentSituation: string[] = [];
+    if (supportEmailItems.length > 0) {
+      currentSituation.push(`${supportEmailItems.length} email(s) com sinal de suporte ou cliente`);
+    }
+    if (pendingReplyApprovals.length > 0) {
+      currentSituation.push(`${pendingReplyApprovals.length} resposta(s) de WhatsApp aguardando aprovação`);
+    }
+    if (recentSupportMessages.length > 0) {
+      currentSituation.push(`${recentSupportMessages.length} mensagem(ns) inbound recente(s) com contexto de cliente`);
+    }
+    if (!emailStatus.ready) {
+      currentSituation.push(`email indisponível: ${emailStatus.message}`);
+    }
+
+    const priorities: string[] = [];
+    for (const item of supportEmailItems.slice(0, 2)) {
+      priorities.push(`email: ${truncateBriefText(item.email.subject || "(sem assunto)", 88)} | ${item.summary.action}`);
+    }
+    for (const item of pendingReplyApprovals.slice(0, 2)) {
+      priorities.push(`aprovação: ${truncateBriefText(item.subject, 88)} | revisar rascunho antes de enviar`);
+    }
+    for (const item of recentSupportMessages.slice(0, 2)) {
+      priorities.push(`whatsapp: ${truncateBriefText(item.message.pushName ?? item.message.number ?? item.message.remoteJid, 48)} | ${truncateBriefText(item.message.text, 88)}`);
+    }
+
+    const actionPlan: string[] = [];
+    if (pendingReplyApprovals.length > 0) {
+      actionPlan.push("revisar primeiro as respostas pendentes que já estão prontas para decisão");
+    }
+    if (recentSupportMessages.length > 0) {
+      actionPlan.push("validar se as mensagens inbound recentes exigem resposta, acompanhamento ou registro");
+    }
+    if (supportEmailItems.length > 0) {
+      actionPlan.push("triar os emails de cliente e separar o que é resposta, risco ou tema recorrente");
+    }
+
+    let recommendedNextStep = "Escolher o primeiro caso para resposta ou priorização.";
+    if (pendingReplyApprovals[0]) {
+      recommendedNextStep = `Abrir a aprovação mais urgente: ${truncateBriefText(pendingReplyApprovals[0].subject, 96)}.`;
+    } else if (recentSupportMessages[0]) {
+      recommendedNextStep = `Ler a última mensagem de ${truncateBriefText(recentSupportMessages[0].message.pushName ?? recentSupportMessages[0].message.number ?? recentSupportMessages[0].message.remoteJid, 48)} e decidir a resposta.`;
+    } else if (supportEmailItems[0]) {
+      recommendedNextStep = `Revisar o email de cliente mais relevante: ${truncateBriefText(supportEmailItems[0].email.subject || "(sem assunto)", 96)}.`;
+    }
+
+    return {
+      requestId,
+      reply: this.responseOs.buildOrganizationReply({
+        objective: "revisar a fila de suporte e atendimento",
+        currentSituation,
+        priorities,
+        actionPlan,
+        recommendedNextStep,
+      }),
+      messages: buildBaseMessages(userPrompt, orchestration),
+      toolExecutions: [
+        {
+          toolName: "support_review_context",
+          resultPreview: JSON.stringify(
+            {
+              supportEmails: supportEmailItems.length,
+              pendingReplyApprovals: pendingReplyApprovals.length,
+              recentSupportMessages: recentSupportMessages.length,
+            },
+            null,
+            2,
+          ),
         },
       ],
     };

@@ -20,6 +20,10 @@ function includesAny(source: string, tokens: string[]): boolean {
   return tokens.some((token) => source.includes(token));
 }
 
+function isSupportPrompt(normalized: string): boolean {
+  return includesAny(normalized, ["suporte", "ticket", "tickets", "cliente", "clientes", "atendimento"]);
+}
+
 function normalizeAnswer(answerText: string): string {
   return answerText
     .trim()
@@ -72,7 +76,7 @@ function buildSecretaryProposal(prompt: string, intent: IntentResolution): Clari
 
 function buildSupportProposal(prompt: string): ClarificationRuleProposal | null {
   const normalized = normalize(prompt);
-  if (!includesAny(normalized, ["suporte", "ticket", "tickets", "cliente", "clientes", "atendimento"])) {
+  if (!isSupportPrompt(normalized)) {
     return null;
   }
 
@@ -123,7 +127,7 @@ export function buildClarificationRuleProposal(
     return secretary;
   }
 
-  if (intent.orchestration.route.primaryDomain === "assistente_social") {
+  if (intent.orchestration.route.primaryDomain === "assistente_social" || intent.orchestration.route.primaryDomain === "secretario_operacional") {
     const support = buildSupportProposal(prompt);
     if (support) {
       return support;
@@ -165,7 +169,7 @@ export function buildClarifiedExecutionPrompt(
     return `Revise a fila de aprovações com base neste ajuste confirmado: ${normalizedAnswer}.`;
   }
 
-  if (intent.orchestration.route.primaryDomain === "assistente_social") {
+  if (isSupportPrompt(normalizedPrompt) || intent.orchestration.route.primaryDomain === "assistente_social") {
     return `Atue na fila de suporte e casos com base neste ajuste confirmado: ${normalizedAnswer}.`;
   }
 
