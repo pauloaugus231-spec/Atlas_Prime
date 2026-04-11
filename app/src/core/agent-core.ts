@@ -2426,6 +2426,20 @@ function parseCalendarPeriodWindow(prompt: string, timezone: string): CalendarPe
       label: "esta semana",
     };
   }
+  if (normalized.includes("proxima semana") || normalized.includes("próxima semana") || normalized.includes("semana que vem")) {
+    const start = new Date(startOfToday);
+    const day = start.getDay();
+    const diffToNextMonday = day === 0 ? 1 : 8 - day;
+    start.setDate(start.getDate() + diffToNextMonday);
+    const end = new Date(start);
+    end.setDate(end.getDate() + 7);
+    end.setMilliseconds(-1);
+    return {
+      startIso: start.toISOString().replace("Z", "-03:00"),
+      endIso: end.toISOString().replace("Z", "-03:00"),
+      label: "próxima semana",
+    };
+  }
   if (normalized.includes("proximos 7 dias") || normalized.includes("próximos 7 dias")) {
     const end = new Date(startOfToday);
     end.setDate(end.getDate() + 7);
@@ -2579,6 +2593,9 @@ function matchesCalendarEventTopic(summary: string, topic: string): boolean {
 
 function extractExplicitAccountAlias(prompt: string, aliases: string[]): string | undefined {
   const normalized = normalizeEmailAnalysisText(prompt);
+  if (includesAny(normalized, ["conta principal", "agenda principal", "calendario principal", "calendário principal", "primary"])) {
+    return "primary";
+  }
   for (const alias of aliases) {
     if (alias === "primary") {
       continue;
@@ -2598,6 +2615,46 @@ function extractExplicitAccountAlias(prompt: string, aliases: string[]): string 
   }
 
   return undefined;
+}
+
+function shouldSearchAllCalendars(prompt: string): boolean {
+  const normalized = normalizeEmailAnalysisText(prompt);
+  if (includesAny(normalized, [
+    "todos os calendarios",
+    "todos os calendários",
+    "todas as agendas",
+    "todos os eventos",
+    "todas as agendas conectadas",
+  ])) {
+    return true;
+  }
+
+  return normalized.includes("todas")
+    && includesAny(normalized, ["agenda", "calendario", "calendário", "eventos", "compromissos"]);
+}
+
+function resolveCalendarTargets(
+  workspace: GoogleWorkspaceService,
+  prompt: string,
+): string[] {
+  const explicitCalendarAlias = extractExplicitCalendarAlias(
+    prompt,
+    Object.keys(workspace.getCalendarAliases()),
+  );
+  if (explicitCalendarAlias) {
+    return [explicitCalendarAlias];
+  }
+
+  if (!shouldSearchAllCalendars(prompt)) {
+    return [workspace.resolveCalendarId()];
+  }
+
+  const calendars = workspace.listConfiguredCalendars()
+    .filter((calendar) => calendar.selected !== false)
+    .map((calendar) => calendar.id)
+    .filter(Boolean);
+
+  return calendars.length > 0 ? [...new Set(calendars)] : [workspace.resolveCalendarId()];
 }
 
 function extractExplicitCalendarAlias(prompt: string, aliases: string[]): string | undefined {
@@ -9857,35 +9914,34 @@ export class AgentCore {
         continue;
       }
 
-      const explicitCalendarAlias = extractExplicitCalendarAlias(
-        userPrompt,
-        Object.keys(workspace.getCalendarAliases()),
-      );
+      const calendarTargets = resolveCalendarTargets(workspace, userPrompt);
 
-      const events = await workspace.listEventsInWindow({
-        timeMin: lookup.targetDate.startIso,
-        timeMax: lookup.targetDate.endIso,
-        maxResults: 10,
-        ...(explicitCalendarAlias ? { calendarId: explicitCalendarAlias } : {}),
-        ...(lookup.topic ? { query: lookup.topic } : {}),
-      });
-
-      for (const event of events) {
-        if (!isPersonallyRelevantCalendarEvent({
-          account: alias,
-          summary: event.summary,
-          description: event.description,
-          location: event.location,
-        })) {
-          continue;
-        }
-        eventMatches.push({
-          account: alias,
-          summary: event.summary,
-          start: event.start,
-          location: event.location,
-          htmlLink: event.htmlLink,
+      for (const calendarId of calendarTargets) {
+        const events = await workspace.listEventsInWindow({
+          timeMin: lookup.targetDate.startIso,
+          timeMax: lookup.targetDate.endIso,
+          maxResults: 10,
+          calendarId,
+          ...(lookup.topic ? { query: lookup.topic } : {}),
         });
+
+        for (const event of events) {
+          if (!isPersonallyRelevantCalendarEvent({
+            account: alias,
+            summary: event.summary,
+            description: event.description,
+            location: event.location,
+          })) {
+            continue;
+          }
+          eventMatches.push({
+            account: alias,
+            summary: event.summary,
+            start: event.start,
+            location: event.location,
+            htmlLink: event.htmlLink,
+          });
+        }
       }
     }
 
@@ -10162,21 +10218,25 @@ export class AgentCore {
     for (const alias of aliases) {
       const workspace = this.googleWorkspaces.getWorkspace(alias);
       if (!workspace.getStatus().ready) continue;
-      const items = await workspace.listEventsInWindow({
-        timeMin: window.startIso,
-        timeMax: window.endIso,
-        maxResults: 20,
-      });
-      for (const event of items) {
-        if (!isPersonallyRelevantCalendarEvent({
-          account: alias,
-          summary: event.summary,
-          description: event.description,
-          location: event.location,
-        })) {
-          continue;
+      const calendarTargets = resolveCalendarTargets(workspace, userPrompt);
+      for (const calendarId of calendarTargets) {
+        const items = await workspace.listEventsInWindow({
+          timeMin: window.startIso,
+          timeMax: window.endIso,
+          maxResults: 20,
+          calendarId,
+        });
+        for (const event of items) {
+          if (!isPersonallyRelevantCalendarEvent({
+            account: alias,
+            summary: event.summary,
+            description: event.description,
+            location: event.location,
+          })) {
+            continue;
+          }
+          events.push({ account: alias, event });
         }
-        events.push({ account: alias, event });
       }
     }
     requestLogger.info("Using direct calendar period list route", { period: window.label, account: explicitAccount ?? "all" });

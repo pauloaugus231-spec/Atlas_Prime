@@ -27,7 +27,7 @@ function looksLikeReadOnlyCalendarReviewPrompt(prompt: string): boolean {
   const normalized = normalize(prompt);
   const hasCalendarSignal = ["agenda", "calendario", "compromisso", "evento"].some((token) => normalized.includes(token));
   const hasTimeSignal = /\b\d{1,2}\/\d{1,2}(?:\/\d{2,4})?\b/.test(normalized)
-    || ["hoje", "amanha", "esta semana", "essa semana", "proximos 7 dias", "proximos sete dias", "segunda", "terca", "quarta", "quinta", "sexta", "sabado", "domingo"].some((token) => normalized.includes(token));
+    || ["hoje", "amanha", "esta semana", "essa semana", "proxima semana", "semana que vem", "proximos 7 dias", "proximos sete dias", "segunda", "terca", "quarta", "quinta", "sexta", "sabado", "domingo"].some((token) => normalized.includes(token));
   const hasReadIntent = ["veja", "mostre", "mostrar", "quais", "tenho", "olhe", "verifique", "analise"].some((token) => normalized.includes(token));
   const hasWriteIntent = ["agende", "crie", "mova", "reagende", "delete", "apague", "cancele"].some((token) => normalized.includes(token));
   return hasCalendarSignal && hasTimeSignal && hasReadIntent && !hasWriteIntent;
