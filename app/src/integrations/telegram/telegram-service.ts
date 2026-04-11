@@ -46,6 +46,7 @@ import type {
 } from "./types.js";
 
 const MAX_CHAT_HISTORY_TURNS = 6;
+const RECENT_PENDING_CONFIRMATION_WINDOW_MS = 30 * 60 * 1000;
 
 interface ChatTurn {
   role: "user" | "assistant";
@@ -2235,7 +2236,7 @@ export class TelegramService {
     }
 
     if (isExplicitSendConfirmation(normalizedText)) {
-      const pendingDraft = this.pendingActionDrafts.get(message.chat.id);
+      const pendingDraft = this.tryHydratePendingDraftForConfirmation(message.chat.id);
       if (pendingDraft) {
         await this.handlePendingActionConfirmation(message, normalizedText, pendingDraft);
         return;
@@ -3965,6 +3966,44 @@ export class TelegramService {
     if (status) {
       this.approvalEngine.markLatestPending(chatId, status);
     }
+  }
+
+  private tryHydratePendingDraftForConfirmation(chatId: number): PendingActionDraft | undefined {
+    const pendingDraft = this.pendingActionDrafts.get(chatId);
+    if (pendingDraft) {
+      return pendingDraft;
+    }
+
+    const latestApproval = this.approvalEngine.getLatestPending(chatId);
+    if (!latestApproval) {
+      return undefined;
+    }
+
+    const approvalUpdatedAt = Date.parse(latestApproval.updatedAt || latestApproval.createdAt);
+    if (Number.isFinite(approvalUpdatedAt) && Date.now() - approvalUpdatedAt > RECENT_PENDING_CONFIRMATION_WINDOW_MS) {
+      return undefined;
+    }
+
+    const latestClarification = this.clarificationEngine.getLatestPending(chatId);
+    const clarificationUpdatedAt = latestClarification
+      ? Date.parse(latestClarification.updatedAt || latestClarification.createdAt)
+      : Number.NaN;
+    if (Number.isFinite(approvalUpdatedAt) && Number.isFinite(clarificationUpdatedAt) && clarificationUpdatedAt > approvalUpdatedAt) {
+      return undefined;
+    }
+
+    const hydratedDraft = parsePendingActionDraftPayload(latestApproval.draftPayload);
+    if (!hydratedDraft) {
+      return undefined;
+    }
+
+    this.pendingActionDrafts.set(chatId, hydratedDraft);
+    this.logger.info("Hydrated pending action draft from approval inbox for explicit confirmation", {
+      chatId,
+      approvalId: latestApproval.id,
+      kind: hydratedDraft.kind,
+    });
+    return hydratedDraft;
   }
 
   private persistPendingApproval(chatId: number, draft: PendingActionDraft) {
