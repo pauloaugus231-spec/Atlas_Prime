@@ -361,6 +361,48 @@ function isSupportReviewPrompt(prompt: string): boolean {
   return hasSupportIntent && hasActionIntent;
 }
 
+function isUrgentSupportSignal(value: string): boolean {
+  const normalized = normalizeEmailAnalysisText(value);
+  return includesAny(normalized, [
+    "urgente",
+    "hoje",
+    "agora",
+    "falha",
+    "erro",
+    "problema",
+    "travado",
+    "travou",
+    "nao consigo",
+    "não consigo",
+    "bloqueado",
+    "bloqueada",
+    "sem acesso",
+  ]);
+}
+
+function extractSupportTheme(value: string): string | null {
+  const normalized = normalizeEmailAnalysisText(value);
+  if (!normalized) {
+    return null;
+  }
+  if (includesAny(normalized, ["login", "acesso", "senha", "entrar"])) {
+    return "acesso e login";
+  }
+  if (includesAny(normalized, ["pagamento", "cobranca", "cobrança", "boleto", "pix", "assinatura"])) {
+    return "pagamento e cobrança";
+  }
+  if (includesAny(normalized, ["erro", "falha", "bug", "travado", "travou", "problema"])) {
+    return "erro e instabilidade";
+  }
+  if (includesAny(normalized, ["duvida", "dúvida", "como", "onboarding", "configurar", "usar"])) {
+    return "uso e onboarding";
+  }
+  if (includesAny(normalized, ["cancel", "reembolso", "reembols", "encerrar"])) {
+    return "cancelamento e risco";
+  }
+  return "atendimento geral";
+}
+
 function isOperationalBriefPrompt(prompt: string): boolean {
   const normalized = normalizeEmailAnalysisText(prompt);
   return [
@@ -14018,6 +14060,8 @@ export class AgentCore {
           email,
           summary,
           routing,
+          urgent: isUrgentSupportSignal([email.subject, email.preview].join("\n")),
+          theme: extractSupportTheme([email.subject, email.preview].join("\n")),
           keep: routing.relationship === "client" || routing.relationship === "lead" || supportSignal,
         };
       })
@@ -14052,24 +14096,37 @@ export class AgentCore {
         return {
           message,
           routing,
+          urgent: isUrgentSupportSignal(message.text),
+          theme: extractSupportTheme(message.text),
           keep: message.direction === "inbound" && (routing.relationship === "client" || routing.relationship === "lead" || supportSignal),
         };
       })
       .filter((item) => item.keep)
       .slice(0, 4);
 
+    const contextPack = await this.contextPacks.buildForPrompt(userPrompt, {
+      rawPrompt: userPrompt,
+      activeUserPrompt: userPrompt,
+      historyUserTurns: [],
+      orchestration,
+      mentionedDomains: [orchestration.route.primaryDomain],
+      compoundIntent: /\s+e\s+|depois|em seguida|ao mesmo tempo|junto com/i.test(userPrompt),
+    });
+
     if (supportEmailItems.length === 0 && pendingReplyApprovals.length === 0 && recentSupportMessages.length === 0) {
       return {
         requestId,
-        reply: this.responseOs.buildOrganizationReply({
+        reply: this.responseOs.buildSupportQueueReply({
           objective: "revisar a fila de suporte e atendimento",
           currentSituation: [
             emailStatus.ready
               ? "não encontrei sinais fortes de fila de suporte nas fontes recentes"
               : "email indisponível; análise feita só com sinais locais disponíveis",
           ],
-          priorities: ["validar se a fila de suporte está chegando por email, WhatsApp ou outro canal"],
-          actionPlan: ["definir o canal principal da fila e repetir a revisão com esse escopo"],
+          channelSummary: ["sem sinais suficientes por email ou WhatsApp para montar uma fila real agora"],
+          criticalCases: [],
+          pendingReplies: [],
+          recurringThemes: contextPack?.signals ?? ["validar se a fila de suporte está chegando por email, WhatsApp ou outro canal"],
           recommendedNextStep: "Se quiser, eu posso revisar primeiro o inbox, o WhatsApp ou só as aprovações pendentes.",
         }),
         messages: buildBaseMessages(userPrompt, orchestration),
@@ -14091,31 +14148,66 @@ export class AgentCore {
       currentSituation.push(`email indisponível: ${emailStatus.message}`);
     }
 
-    const priorities: string[] = [];
-    for (const item of supportEmailItems.slice(0, 2)) {
-      priorities.push(`email: ${truncateBriefText(item.email.subject || "(sem assunto)", 88)} | ${item.summary.action}`);
-    }
-    for (const item of pendingReplyApprovals.slice(0, 2)) {
-      priorities.push(`aprovação: ${truncateBriefText(item.subject, 88)} | revisar rascunho antes de enviar`);
-    }
-    for (const item of recentSupportMessages.slice(0, 2)) {
-      priorities.push(`whatsapp: ${truncateBriefText(item.message.pushName ?? item.message.number ?? item.message.remoteJid, 48)} | ${truncateBriefText(item.message.text, 88)}`);
-    }
-
-    const actionPlan: string[] = [];
-    if (pendingReplyApprovals.length > 0) {
-      actionPlan.push("revisar primeiro as respostas pendentes que já estão prontas para decisão");
+    const channelSummary: string[] = [];
+    if (supportEmailItems.length > 0) {
+      channelSummary.push(`email: ${supportEmailItems.length} caso(s) com sinal de cliente ou suporte`);
     }
     if (recentSupportMessages.length > 0) {
-      actionPlan.push("validar se as mensagens inbound recentes exigem resposta, acompanhamento ou registro");
+      channelSummary.push(`whatsapp: ${recentSupportMessages.length} mensagem(ns) inbound de cliente`);
     }
-    if (supportEmailItems.length > 0) {
-      actionPlan.push("triar os emails de cliente e separar o que é resposta, risco ou tema recorrente");
+    if (pendingReplyApprovals.length > 0) {
+      channelSummary.push(`aprovações: ${pendingReplyApprovals.length} resposta(s) pronta(s) para decidir`);
     }
+
+    const criticalCases = [
+      ...pendingReplyApprovals.slice(0, 2).map((item) => ({
+        label: item.subject,
+        channel: "approval" as const,
+        detail: "resposta pronta aguardando decisão",
+      })),
+      ...supportEmailItems.filter((item) => item.urgent).slice(0, 2).map((item) => ({
+        label: item.email.subject || "(sem assunto)",
+        channel: "email" as const,
+        detail: `${item.theme ?? "atendimento geral"} | ${item.summary.action}`,
+      })),
+      ...recentSupportMessages.filter((item) => item.urgent).slice(0, 2).map((item) => ({
+        label: item.message.pushName ?? item.message.number ?? item.message.remoteJid,
+        channel: "whatsapp" as const,
+        detail: `${item.theme ?? "atendimento geral"} | ${truncateBriefText(item.message.text, 88)}`,
+      })),
+    ].slice(0, 4);
+
+    const pendingReplies = [
+      ...pendingReplyApprovals.slice(0, 3).map((item) => ({
+        label: item.subject,
+        channel: "approval" as const,
+        detail: "revisar rascunho antes de enviar",
+      })),
+      ...recentSupportMessages.slice(0, 2).map((item) => ({
+        label: item.message.pushName ?? item.message.number ?? item.message.remoteJid,
+        channel: "whatsapp" as const,
+        detail: truncateBriefText(item.message.text, 88),
+      })),
+    ].slice(0, 4);
+
+    const themeCounts = new Map<string, number>();
+    for (const item of [...supportEmailItems, ...recentSupportMessages]) {
+      const theme = item.theme;
+      if (!theme) {
+        continue;
+      }
+      themeCounts.set(theme, (themeCounts.get(theme) ?? 0) + 1);
+    }
+    const recurringThemes = [...themeCounts.entries()]
+      .sort((left, right) => right[1] - left[1])
+      .slice(0, 3)
+      .map(([theme, count]) => `${theme}: ${count} ocorrência(s)`);
 
     let recommendedNextStep = "Escolher o primeiro caso para resposta ou priorização.";
     if (pendingReplyApprovals[0]) {
       recommendedNextStep = `Abrir a aprovação mais urgente: ${truncateBriefText(pendingReplyApprovals[0].subject, 96)}.`;
+    } else if (criticalCases[0]) {
+      recommendedNextStep = `Atacar primeiro o caso crítico em ${criticalCases[0].channel}: ${truncateBriefText(criticalCases[0].label, 96)}.`;
     } else if (recentSupportMessages[0]) {
       recommendedNextStep = `Ler a última mensagem de ${truncateBriefText(recentSupportMessages[0].message.pushName ?? recentSupportMessages[0].message.number ?? recentSupportMessages[0].message.remoteJid, 48)} e decidir a resposta.`;
     } else if (supportEmailItems[0]) {
@@ -14124,11 +14216,15 @@ export class AgentCore {
 
     return {
       requestId,
-      reply: this.responseOs.buildOrganizationReply({
+      reply: this.responseOs.buildSupportQueueReply({
         objective: "revisar a fila de suporte e atendimento",
         currentSituation,
-        priorities,
-        actionPlan,
+        channelSummary,
+        criticalCases,
+        pendingReplies,
+        recurringThemes: recurringThemes.length > 0
+          ? recurringThemes
+          : (contextPack?.signals ?? []).slice(0, 3),
         recommendedNextStep,
       }),
       messages: buildBaseMessages(userPrompt, orchestration),
@@ -14140,6 +14236,7 @@ export class AgentCore {
               supportEmails: supportEmailItems.length,
               pendingReplyApprovals: pendingReplyApprovals.length,
               recentSupportMessages: recentSupportMessages.length,
+              criticalCases: criticalCases.length,
             },
             null,
             2,

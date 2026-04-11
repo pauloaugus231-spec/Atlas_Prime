@@ -134,6 +134,54 @@ function run() {
     detail: organizationReply,
   });
 
+  const supportReply = responseOs.buildSupportQueueReply({
+    objective: "revisar a fila de suporte e atendimento",
+    currentSituation: [
+      "2 email(s) com sinal de suporte ou cliente",
+      "1 resposta de WhatsApp aguardando aprovação",
+      "1 mensagem inbound recente com contexto de cliente",
+    ],
+    channelSummary: [
+      "email: 2 caso(s) com sinal de cliente ou suporte",
+      "whatsapp: 1 mensagem inbound de cliente",
+      "aprovações: 1 resposta pronta para decidir",
+    ],
+    criticalCases: [
+      {
+        label: "WhatsApp abordagem: Paulo Augusto",
+        channel: "approval",
+        detail: "resposta pronta aguardando decisão",
+      },
+      {
+        label: "Cliente sem acesso à conta",
+        channel: "email",
+        detail: "acesso e login | responder hoje com instrução objetiva",
+      },
+    ],
+    pendingReplies: [
+      {
+        label: "WhatsApp abordagem: Paulo Augusto",
+        channel: "approval",
+        detail: "revisar rascunho antes de enviar",
+      },
+    ],
+    recurringThemes: [
+      "acesso e login: 2 ocorrência(s)",
+      "erro e instabilidade: 1 ocorrência(s)",
+    ],
+    recommendedNextStep: "Abrir a aprovação mais urgente: WhatsApp abordagem: Paulo Augusto.",
+  });
+  results.push({
+    name: "support_queue_reply_contract",
+    passed: supportReply.includes("Leitura operacional:")
+      && supportReply.includes("Fila por canal:")
+      && supportReply.includes("Casos críticos:")
+      && supportReply.includes("Respostas pendentes:")
+      && supportReply.includes("Temas recorrentes:")
+      && supportReply.includes("Próxima ação:"),
+    detail: supportReply,
+  });
+
   const failures = results.filter((item) => !item.passed);
   for (const item of results.filter((entry) => entry.passed)) {
     console.log(`PASS ${item.name}`);

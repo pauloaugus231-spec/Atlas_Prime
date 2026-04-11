@@ -31,6 +31,22 @@ export interface OrganizationResponseContract {
   recommendedNextStep?: string;
 }
 
+export interface SupportQueueContractItem {
+  label: string;
+  channel: "email" | "whatsapp" | "approval";
+  detail: string;
+}
+
+export interface SupportQueueContract {
+  objective: string;
+  currentSituation: string[];
+  channelSummary: string[];
+  criticalCases: SupportQueueContractItem[];
+  pendingReplies: SupportQueueContractItem[];
+  recurringThemes: string[];
+  recommendedNextStep?: string;
+}
+
 export interface ApprovalReviewContractItem {
   id?: number;
   subject: string;

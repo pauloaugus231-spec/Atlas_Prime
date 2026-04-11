@@ -7,6 +7,7 @@ import type {
   ResponseContractKind,
   ResponseQualityAssessment,
   ScheduleLookupContract,
+  SupportQueueContract,
   TaskReviewContract,
 } from "../types/response-contracts.js";
 
@@ -129,6 +130,54 @@ export class ResponseOS {
       lines.push("", "Plano curto:");
       for (const item of input.actionPlan.slice(0, 3)) {
         lines.push(`- ${truncate(item, 140)}`);
+      }
+    }
+
+    if (input.recommendedNextStep) {
+      lines.push("", `Próxima ação: ${truncate(input.recommendedNextStep, 140)}`);
+    }
+
+    return this.finalize("organization", lines.join("\n"));
+  }
+
+  buildSupportQueueReply(input: SupportQueueContract): string {
+    const lines = [
+      "Leitura operacional:",
+      `- Objetivo: ${truncate(input.objective, 120)}`,
+    ];
+
+    if (input.currentSituation.length > 0) {
+      lines.push("", "Situação agora:");
+      for (const item of input.currentSituation.slice(0, 4)) {
+        lines.push(`- ${truncate(item, 120)}`);
+      }
+    }
+
+    if (input.channelSummary.length > 0) {
+      lines.push("", "Fila por canal:");
+      for (const item of input.channelSummary.slice(0, 4)) {
+        lines.push(`- ${truncate(item, 120)}`);
+      }
+    }
+
+    if (input.criticalCases.length > 0) {
+      lines.push("", "Casos críticos:");
+      for (const item of input.criticalCases.slice(0, 4)) {
+        lines.push(`- [${item.channel}] ${truncate(item.label, 72)} | ${truncate(item.detail, 96)}`);
+      }
+    }
+
+    if (input.pendingReplies.length > 0) {
+      lines.push("", "Respostas pendentes:");
+      for (const item of input.pendingReplies.slice(0, 4)) {
+        lines.push(`- [${item.channel}] ${truncate(item.label, 72)} | ${truncate(item.detail, 96)}`);
+      }
+    }
+
+    if (input.recurringThemes.length > 0) {
+      lines.push("", "Temas recorrentes:");
+      for (const item of input.recurringThemes.slice(0, 3)) {
+        lines.push(`- ${truncate(item, 120)}`);
       }
     }
 

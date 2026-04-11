@@ -20,6 +20,7 @@ function includesAny(source: string, tokens: string[]): boolean {
 export type ContextPackKind =
   | "operational_overview"
   | "approval_review"
+  | "support_overview"
   | "intent_inspection";
 
 export interface ContextPack {
@@ -45,6 +46,34 @@ function shouldLoadOperationalOverview(prompt: string, intent: IntentResolution)
     "o que devo fazer hoje",
     "revisar aprovacoes",
     "revisar aprovações",
+  ]);
+}
+
+function shouldLoadSupportOverview(prompt: string, intent: IntentResolution): boolean {
+  const normalized = normalize(prompt);
+  if (intent.orchestration.route.primaryDomain !== "secretario_operacional") {
+    return false;
+  }
+
+  return includesAny(normalized, [
+    "fila de suporte",
+    "fila de atendimento",
+    "suporte",
+    "tickets",
+    "ticket",
+    "atendimento",
+    "clientes",
+  ]) && includesAny(normalized, [
+    "revise",
+    "revisar",
+    "organize",
+    "organizar",
+    "priorize",
+    "priorizar",
+    "triagem",
+    "triage",
+    "responda",
+    "responder",
   ]);
 }
 
@@ -86,6 +115,20 @@ export class ContextPackService {
         kind: "operational_overview",
         brief,
         signals,
+      };
+    }
+
+    if (shouldLoadSupportOverview(prompt, intent)) {
+      const pending = this.approvals.listPendingAll(12);
+      const pendingReplyApprovals = pending.filter((item) => item.actionKind === "whatsapp_reply");
+      const operationalMemory = this.contextMemory.summarize("operational", 4);
+      return {
+        kind: "support_overview",
+        signals: [
+          `${pendingReplyApprovals.length} resposta(s) pendente(s) de WhatsApp`,
+          ...pendingReplyApprovals.slice(0, 3).map((item) => `aprovação: ${item.subject}`),
+          ...operationalMemory.signals,
+        ],
       };
     }
 
