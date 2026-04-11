@@ -3247,6 +3247,67 @@ function formatBriefDateTime(value: string | null, timezone: string): string {
   }).format(date);
 }
 
+function formatCalendarDayHeader(value: string | null, timezone: string): string {
+  if (!value) {
+    return "(sem dia)";
+  }
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  const weekday = new Intl.DateTimeFormat("pt-BR", {
+    timeZone: timezone,
+    weekday: "long",
+  }).format(date);
+  const dayMonth = new Intl.DateTimeFormat("pt-BR", {
+    timeZone: timezone,
+    day: "2-digit",
+    month: "2-digit",
+  }).format(date);
+
+  return `${weekday[0]?.toUpperCase() ?? ""}${weekday.slice(1)}, ${dayMonth}`;
+}
+
+function formatCalendarTimeRange(
+  start: string | null | undefined,
+  end: string | null | undefined,
+  timezone: string,
+): string {
+  if (!start) {
+    return "sem horário";
+  }
+
+  const startDate = new Date(start);
+  if (Number.isNaN(startDate.getTime())) {
+    return start;
+  }
+
+  const startLabel = new Intl.DateTimeFormat("pt-BR", {
+    timeZone: timezone,
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(startDate);
+
+  if (!end) {
+    return startLabel;
+  }
+
+  const endDate = new Date(end);
+  if (Number.isNaN(endDate.getTime())) {
+    return startLabel;
+  }
+
+  const endLabel = new Intl.DateTimeFormat("pt-BR", {
+    timeZone: timezone,
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(endDate);
+
+  return `${startLabel}–${endLabel}`;
+}
+
 function formatTaskDue(task: TaskSummary, timezone: string): string {
   return formatBriefDateTime(task.due ?? task.updated, timezone);
 }
@@ -10240,17 +10301,34 @@ export class AgentCore {
       }
     }
     requestLogger.info("Using direct calendar period list route", { period: window.label, account: explicitAccount ?? "all" });
-    const isSingleDayWindow = !includesAny(normalizeEmailAnalysisText(window.label), ["semana", "7 dias"]);
-    const previewLimit = isSingleDayWindow ? events.length : 8;
+    const sortedEvents = [...events].sort((left, right) => {
+      const leftStart = left.event.start ? Date.parse(left.event.start) : Number.MAX_SAFE_INTEGER;
+      const rightStart = right.event.start ? Date.parse(right.event.start) : Number.MAX_SAFE_INTEGER;
+      if (leftStart !== rightStart) {
+        return leftStart - rightStart;
+      }
+      return left.event.summary.localeCompare(right.event.summary);
+    });
+
     const reply = events.length === 0
       ? `Nenhum compromisso em ${window.label}.`
-      : [
-          `${window.label[0]?.toUpperCase() ?? ""}${window.label.slice(1)}: ${events.length} compromisso${events.length > 1 ? "s" : ""}.`,
-          ...events.slice(0, previewLimit).map((item) =>
-            `- ${item.event.summary} — ${item.event.start ? new Intl.DateTimeFormat("pt-BR", { timeZone: this.config.google.defaultTimezone, day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }).format(new Date(item.event.start)) : "sem horário"}${item.event.end ? `–${new Intl.DateTimeFormat("pt-BR", { timeZone: this.config.google.defaultTimezone, hour: "2-digit", minute: "2-digit" }).format(new Date(item.event.end))}` : ""}${summarizeCalendarLocation(item.event.location) ? ` — local: ${summarizeCalendarLocation(item.event.location)}` : ""} | conta: ${item.account}`
-          ),
-          ...(events.length > previewLimit ? [`- ... e mais ${events.length - previewLimit} compromisso(s). Peça detalhes se quiser a lista completa.`] : []),
-        ].join("\n");
+      : (() => {
+          const lines = [
+            `${window.label[0]?.toUpperCase() ?? ""}${window.label.slice(1)}: ${sortedEvents.length} compromisso${sortedEvents.length > 1 ? "s" : ""}.`,
+          ];
+          let currentDayHeader: string | null = null;
+          for (const item of sortedEvents) {
+            const dayHeader = formatCalendarDayHeader(item.event.start, this.config.google.defaultTimezone);
+            if (dayHeader !== currentDayHeader) {
+              lines.push("", `${dayHeader}:`);
+              currentDayHeader = dayHeader;
+            }
+            lines.push(
+              `- ${formatCalendarTimeRange(item.event.start, item.event.end, this.config.google.defaultTimezone)} — ${item.event.summary}${summarizeCalendarLocation(item.event.location) ? ` — local: ${summarizeCalendarLocation(item.event.location)}` : ""} | conta: ${item.account}`,
+            );
+          }
+          return lines.join("\n");
+        })();
     return {
       requestId,
       reply,
