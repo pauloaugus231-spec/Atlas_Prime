@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { AppConfig } from "../types/config.js";
+import type { LeadRecord } from "../types/growth-ops.js";
 import type { ConversationMessage, LlmClient, LlmToolCall } from "../types/llm.js";
 import type { Logger } from "../types/logger.js";
 import type {
@@ -323,13 +324,34 @@ function isEmailSummaryPrompt(prompt: string): boolean {
 
 function isInboxTriagePrompt(prompt: string): boolean {
   const normalized = prompt.toLowerCase();
-  const hasTriageIntent = ["triagem", "triage", "classifique", "priorize", "prioridade"].some((token) =>
+  const hasTriageIntent = ["triagem", "triage", "classifique", "priorize", "prioridade", "organize", "executivo"].some((token) =>
     normalized.includes(token),
   );
-  const hasInboxIntent = ["inbox", "caixa de entrada", "emails recentes", "emails nao lidos", "emails não lidos"].some((token) =>
+  const hasInboxIntent = ["inbox", "caixa de entrada", "emails recentes", "emails nao lidos", "emails não lidos", "email principal"].some((token) =>
     normalized.includes(token),
   );
   return hasTriageIntent && hasInboxIntent;
+}
+
+function isFollowUpReviewPrompt(prompt: string): boolean {
+  const normalized = normalizeEmailAnalysisText(prompt);
+  const hasFollowUp = includesAny(normalized, ["follow-up", "follow up", "followup", "retorno", "retornos"]);
+  const hasAction = includesAny(normalized, ["revise", "revisar", "organize", "organizar", "priorize", "priorizar", "mostre", "liste"]);
+  return hasFollowUp && hasAction;
+}
+
+function isNextCommitmentPrepPrompt(prompt: string): boolean {
+  const normalized = normalizeEmailAnalysisText(prompt);
+  return includesAny(normalized, [
+    "prepare meu proximo compromisso",
+    "prepare meu próximo compromisso",
+    "preparar meu proximo compromisso",
+    "preparar meu próximo compromisso",
+    "como me preparar para meu proximo compromisso",
+    "como me preparar para meu próximo compromisso",
+    "preparar o proximo compromisso",
+    "preparar o próximo compromisso",
+  ]);
 }
 
 function isSupportReviewPrompt(prompt: string): boolean {
@@ -5473,6 +5495,46 @@ function formatCurrency(value: number): string {
   }).format(value);
 }
 
+function formatFollowUpDueLabel(value: string | null | undefined): string {
+  if (!value) {
+    return "sem data";
+  }
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return value;
+  }
+  return new Intl.DateTimeFormat("pt-BR", {
+    timeZone: "America/Sao_Paulo",
+    day: "2-digit",
+    month: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(parsed);
+}
+
+function classifyFollowUpBucket(lead: LeadRecord): "overdue" | "today" | "upcoming" | "unscheduled" | "later" {
+  if (!lead.nextFollowUpAt) {
+    return "unscheduled";
+  }
+  const followUpAt = new Date(lead.nextFollowUpAt);
+  if (Number.isNaN(followUpAt.getTime())) {
+    return "unscheduled";
+  }
+  const now = new Date();
+  const sameDay = now.toDateString() === followUpAt.toDateString();
+  const diffHours = (followUpAt.getTime() - now.getTime()) / (60 * 60 * 1000);
+  if (followUpAt.getTime() < now.getTime()) {
+    return "overdue";
+  }
+  if (sameDay || diffHours <= 24) {
+    return "today";
+  }
+  if (diffHours <= 24 * 7) {
+    return "upcoming";
+  }
+  return "later";
+}
+
 function buildRevenueScoreboardReply(input: {
   referenceMonth: string;
   totalProjected: number;
@@ -8518,6 +8580,15 @@ export class AgentCore {
     if (directSupportReviewResult) {
       return directSupportReviewResult;
     }
+    const directFollowUpReviewResult = await this.tryRunDirectFollowUpReview(
+      activeUserPrompt,
+      requestId,
+      requestLogger,
+      orchestration,
+    );
+    if (directFollowUpReviewResult) {
+      return directFollowUpReviewResult;
+    }
     const directInboxTriageResult = await this.tryRunDirectInboxTriage(
       activeUserPrompt,
       requestId,
@@ -8535,6 +8606,15 @@ export class AgentCore {
     );
     if (directOperationalBriefResult) {
       return directOperationalBriefResult;
+    }
+    const directNextCommitmentPrepResult = await this.tryRunDirectNextCommitmentPrep(
+      activeUserPrompt,
+      requestId,
+      requestLogger,
+      orchestration,
+    );
+    if (directNextCommitmentPrepResult) {
+      return directNextCommitmentPrepResult;
     }
     const directCalendarLookupResult = await this.tryRunDirectCalendarLookup(
       activeUserPrompt,
@@ -14321,6 +14401,23 @@ export class AgentCore {
         return (right.date ?? "").localeCompare(left.date ?? "");
       });
 
+    const categoryCounts = new Map<string, number>();
+    const relationshipCounts = new Map<string, number>();
+    for (const item of items) {
+      categoryCounts.set(item.category, (categoryCounts.get(item.category) ?? 0) + 1);
+      relationshipCounts.set(item.relationship, (relationshipCounts.get(item.relationship) ?? 0) + 1);
+    }
+    const groupSummary = [
+      ...[...categoryCounts.entries()]
+        .sort((left, right) => right[1] - left[1])
+        .slice(0, 2)
+        .map(([category, count]) => `categoria ${category}: ${count} email(s)`),
+      ...[...relationshipCounts.entries()]
+        .sort((left, right) => right[1] - left[1])
+        .slice(0, 2)
+        .map(([relationship, count]) => `relação ${relationship}: ${count} email(s)`),
+    ];
+
     return {
       requestId,
       reply: this.responseOs.buildInboxTriageReply({
@@ -14336,6 +14433,7 @@ export class AgentCore {
           category: item.category,
           action: item.action,
         })),
+        groupSummary,
         recommendedNextStep: items[0]
           ? `Executar a próxima ação do UID ${items[0].uid}: ${items[0].action}.`
           : undefined,
@@ -14349,6 +14447,176 @@ export class AgentCore {
               total: emails.length,
               unreadOnly,
               limit,
+            },
+            null,
+            2,
+          ),
+        },
+      ],
+    };
+  }
+
+  private async tryRunDirectFollowUpReview(
+    userPrompt: string,
+    requestId: string,
+    requestLogger: Logger,
+    orchestration: OrchestrationContext,
+  ): Promise<AgentRunResult | null> {
+    if (!isFollowUpReviewPrompt(userPrompt)) {
+      return null;
+    }
+
+    requestLogger.info("Using direct follow-up review route");
+    const leads = this.growthOps.listLeads({ limit: 30 });
+    const openLeads = leads.filter((lead) => !["won", "lost"].includes(lead.status));
+    const overdueItems = openLeads
+      .filter((lead) => classifyFollowUpBucket(lead) === "overdue")
+      .slice(0, 4)
+      .map((lead) => ({
+        label: `${lead.name}${lead.company ? ` | ${lead.company}` : ""}`,
+        status: lead.status,
+        dueLabel: `vencido desde ${formatFollowUpDueLabel(lead.nextFollowUpAt)}`,
+      }));
+    const todayItems = openLeads
+      .filter((lead) => classifyFollowUpBucket(lead) === "today")
+      .slice(0, 4)
+      .map((lead) => ({
+        label: `${lead.name}${lead.company ? ` | ${lead.company}` : ""}`,
+        status: lead.status,
+        dueLabel: `hoje às ${formatFollowUpDueLabel(lead.nextFollowUpAt)}`,
+      }));
+    const unscheduledItems = openLeads
+      .filter((lead) => classifyFollowUpBucket(lead) === "unscheduled")
+      .slice(0, 3)
+      .map((lead) => ({
+        label: `${lead.name}${lead.company ? ` | ${lead.company}` : ""}`,
+        status: lead.status,
+        dueLabel: "sem data",
+      }));
+
+    const currentSituation = [
+      `${openLeads.length} lead(s) abertos no pipeline`,
+      `${overdueItems.length} follow-up(s) vencido(s)`,
+      `${todayItems.length} follow-up(s) para hoje ou próximas 24h`,
+    ];
+
+    const recommendedNextStep = overdueItems[0]
+      ? `Atacar primeiro o follow-up vencido de ${truncateBriefText(overdueItems[0].label, 96)}.`
+      : todayItems[0]
+        ? `Executar o follow-up de hoje: ${truncateBriefText(todayItems[0].label, 96)}.`
+        : unscheduledItems[0]
+          ? `Definir data para o lead sem follow-up: ${truncateBriefText(unscheduledItems[0].label, 96)}.`
+          : "Se quiser, eu posso abrir o pipeline e listar cada lead por estágio.";
+
+    return {
+      requestId,
+      reply: this.responseOs.buildFollowUpReviewReply({
+        scopeLabel: "pipeline e leads ativos",
+        currentSituation,
+        overdueItems,
+        todayItems,
+        unscheduledItems,
+        recommendedNextStep,
+      }),
+      messages: buildBaseMessages(userPrompt, orchestration),
+      toolExecutions: [
+        {
+          toolName: "follow_up_review_context",
+          resultPreview: JSON.stringify(
+            {
+              openLeads: openLeads.length,
+              overdue: overdueItems.length,
+              today: todayItems.length,
+              unscheduled: unscheduledItems.length,
+            },
+            null,
+            2,
+          ),
+        },
+      ],
+    };
+  }
+
+  private async tryRunDirectNextCommitmentPrep(
+    userPrompt: string,
+    requestId: string,
+    requestLogger: Logger,
+    orchestration: OrchestrationContext,
+  ): Promise<AgentRunResult | null> {
+    if (!isNextCommitmentPrepPrompt(userPrompt)) {
+      return null;
+    }
+
+    requestLogger.info("Using direct next commitment prep route");
+    const brief = await this.personalOs.getExecutiveMorningBrief();
+    const nextEvent = brief.events.find((event) => event.owner === "paulo") ?? brief.events[0];
+    if (!nextEvent?.start) {
+      return {
+        requestId,
+        reply: "Não encontrei um próximo compromisso para preparar agora.",
+        messages: buildBaseMessages(userPrompt, orchestration),
+        toolExecutions: [],
+      };
+    }
+
+    const eventDate = new Date(nextEvent.start);
+    const todayKey = eventDate.toDateString();
+    const nowKey = new Date().toDateString();
+    const weatherTip = todayKey === nowKey
+      ? brief.weather?.days[0]?.tip
+      : brief.weather?.days[1]?.tip ?? brief.weather?.days[0]?.tip;
+
+    const checklist: string[] = [];
+    if (nextEvent.context === "externo") {
+      checklist.push("confirmar endereço e rota antes de sair");
+    }
+    if (nextEvent.owner === "delegavel") {
+      checklist.push("validar quem será o responsável por tocar esse compromisso");
+    } else {
+      checklist.push(nextEvent.prepHint);
+    }
+    if (nextEvent.location) {
+      checklist.push(`levar o local salvo: ${summarizeCalendarLocation(nextEvent.location)}`);
+    }
+    if (weatherTip) {
+      checklist.push(weatherTip);
+    }
+
+    const alerts: string[] = [];
+    if (nextEvent.hasConflict) {
+      alerts.push("há conflito de agenda nesse horário");
+    }
+    if (nextEvent.context === "externo" && !nextEvent.location) {
+      alerts.push("compromisso externo sem local claro");
+    }
+
+    return {
+      requestId,
+      reply: this.responseOs.buildCommitmentPrepReply({
+        title: nextEvent.summary,
+        startLabel: formatBriefDateTime(nextEvent.start, brief.timezone),
+        account: nextEvent.account,
+        owner: nextEvent.owner,
+        context: nextEvent.context,
+        location: nextEvent.location,
+        weatherTip,
+        checklist,
+        alerts,
+        recommendedNextStep: alerts[0]
+          ? `Resolver primeiro este alerta: ${alerts[0]}.`
+          : `${nextEvent.prepHint[0]?.toUpperCase() ?? ""}${nextEvent.prepHint.slice(1)} para ${nextEvent.summary}.`,
+      }),
+      messages: buildBaseMessages(userPrompt, orchestration),
+      toolExecutions: [
+        {
+          toolName: "next_commitment_prep",
+          resultPreview: JSON.stringify(
+            {
+              summary: nextEvent.summary,
+              start: nextEvent.start,
+              owner: nextEvent.owner,
+              context: nextEvent.context,
+              hasConflict: nextEvent.hasConflict,
             },
             null,
             2,

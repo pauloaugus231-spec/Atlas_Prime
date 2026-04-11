@@ -32,6 +32,10 @@ function run() {
     scopeLabel: "email principal",
     unreadOnly: true,
     limit: 10,
+    groupSummary: [
+      "categoria operacional: 1 email(s)",
+      "relação client: 1 email(s)",
+    ],
     items: [
       {
         uid: "1001",
@@ -58,6 +62,7 @@ function run() {
     name: "inbox_reply_contract",
     passed: inboxReply.includes("Leitura operacional:")
       && inboxReply.includes("Situação agora:")
+      && inboxReply.includes("Focos executivos:")
       && inboxReply.includes("Plano curto:")
       && inboxReply.includes("UID 1001"),
     detail: inboxReply,
@@ -180,6 +185,68 @@ function run() {
       && supportReply.includes("Temas recorrentes:")
       && supportReply.includes("Próxima ação:"),
     detail: supportReply,
+  });
+
+  const followUpReply = responseOs.buildFollowUpReviewReply({
+    scopeLabel: "pipeline e leads ativos",
+    currentSituation: [
+      "6 lead(s) abertos no pipeline",
+      "2 follow-up(s) vencido(s)",
+      "1 follow-up para hoje ou próximas 24h",
+    ],
+    overdueItems: [
+      {
+        label: "Clínica Aurora | Aurora Psi",
+        status: "proposal",
+        dueLabel: "vencido desde 10/04 09:00",
+      },
+    ],
+    todayItems: [
+      {
+        label: "Instituto Delta",
+        status: "qualified",
+        dueLabel: "hoje às 11/04 15:00",
+      },
+    ],
+    unscheduledItems: [
+      {
+        label: "Lead sem data",
+        status: "contacted",
+        dueLabel: "sem data",
+      },
+    ],
+    recommendedNextStep: "Atacar primeiro o follow-up vencido de Clínica Aurora | Aurora Psi.",
+  });
+  results.push({
+    name: "follow_up_reply_contract",
+    passed: followUpReply.includes("Prioridades:")
+      && followUpReply.includes("Sem follow-up definido:")
+      && followUpReply.includes("Próxima ação:"),
+    detail: followUpReply,
+  });
+
+  const commitmentPrepReply = responseOs.buildCommitmentPrepReply({
+    title: "Reunião no CAPS Girassol",
+    startLabel: "11/04, 10:00",
+    account: "primary",
+    owner: "paulo",
+    context: "externo",
+    location: "CAPS Girassol",
+    weatherTip: "vestir: roupa leve | levar: guarda-chuva",
+    checklist: [
+      "confirmar endereço e rota antes de sair",
+      "levar o local salvo: CAPS Girassol",
+    ],
+    alerts: ["há conflito de agenda nesse horário"],
+    recommendedNextStep: "Resolver primeiro este alerta: há conflito de agenda nesse horário.",
+  });
+  results.push({
+    name: "commitment_prep_reply_contract",
+    passed: commitmentPrepReply.includes("Preparação do compromisso:")
+      && commitmentPrepReply.includes("Checklist:")
+      && commitmentPrepReply.includes("Alertas:")
+      && commitmentPrepReply.includes("Próxima ação:"),
+    detail: commitmentPrepReply,
   });
 
   const failures = results.filter((item) => !item.passed);

@@ -75,6 +75,22 @@ export interface InboxTriageContract {
   unreadOnly: boolean;
   limit: number;
   items: InboxTriageContractItem[];
+  groupSummary?: string[];
+  recommendedNextStep?: string;
+}
+
+export interface FollowUpReviewContractItem {
+  label: string;
+  status: string;
+  dueLabel: string;
+}
+
+export interface FollowUpReviewContract {
+  scopeLabel: string;
+  currentSituation: string[];
+  overdueItems: FollowUpReviewContractItem[];
+  todayItems: FollowUpReviewContractItem[];
+  unscheduledItems: FollowUpReviewContractItem[];
   recommendedNextStep?: string;
 }
 
@@ -117,5 +133,18 @@ export interface MessageHistoryContractItem {
 export interface MessageHistoryContract {
   scopeLabel: string;
   items: MessageHistoryContractItem[];
+  recommendedNextStep?: string;
+}
+
+export interface CommitmentPrepContract {
+  title: string;
+  startLabel: string;
+  account: string;
+  owner: string;
+  context: string;
+  location?: string;
+  weatherTip?: string;
+  checklist: string[];
+  alerts: string[];
   recommendedNextStep?: string;
 }

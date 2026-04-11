@@ -1,5 +1,7 @@
 import type {
   ApprovalReviewContract,
+  CommitmentPrepContract,
+  FollowUpReviewContract,
   InboxTriageContract,
   IntentAnalysisContract,
   MessageHistoryContract,
@@ -252,6 +254,13 @@ export class ResponseOS {
       "Prioridades:",
     ];
 
+    if (input.groupSummary && input.groupSummary.length > 0) {
+      lines.push("", "Focos executivos:");
+      for (const item of input.groupSummary.slice(0, 4)) {
+        lines.push(`- ${truncate(item, 120)}`);
+      }
+    }
+
     for (const item of input.items.slice(0, 4)) {
       lines.push(`- ${truncate(item.subject, 120)} | ${item.priority.toUpperCase()} | ${item.category} | ${item.relationship}`);
     }
@@ -266,6 +275,42 @@ export class ResponseOS {
     }
 
     return this.finalize("analysis", lines.join("\n"));
+  }
+
+  buildFollowUpReviewReply(input: FollowUpReviewContract): string {
+    const lines = [
+      "Leitura operacional:",
+      `- Objetivo: revisar follow-ups em ${input.scopeLabel}`,
+    ];
+
+    if (input.currentSituation.length > 0) {
+      lines.push("", "Situação agora:");
+      for (const item of input.currentSituation.slice(0, 4)) {
+        lines.push(`- ${truncate(item, 120)}`);
+      }
+    }
+
+    lines.push("", "Prioridades:");
+    if (input.overdueItems.length === 0 && input.todayItems.length === 0) {
+      lines.push("- Nenhum follow-up vencido ou para hoje.");
+    } else {
+      for (const item of [...input.overdueItems, ...input.todayItems].slice(0, 5)) {
+        lines.push(`- ${truncate(item.label, 88)} | ${item.status} | ${item.dueLabel}`);
+      }
+    }
+
+    if (input.unscheduledItems.length > 0) {
+      lines.push("", "Sem follow-up definido:");
+      for (const item of input.unscheduledItems.slice(0, 3)) {
+        lines.push(`- ${truncate(item.label, 88)} | ${item.status}`);
+      }
+    }
+
+    if (input.recommendedNextStep) {
+      lines.push("", `Próxima ação: ${truncate(input.recommendedNextStep, 140)}`);
+    }
+
+    return this.finalize("organization", lines.join("\n"));
   }
 
   buildScheduleLookupReply(input: ScheduleLookupContract): string {
@@ -348,5 +393,43 @@ export class ResponseOS {
       lines.push("", `Próxima ação: ${truncate(input.recommendedNextStep, 140)}`);
     }
     return this.finalize("analysis", lines.join("\n"));
+  }
+
+  buildCommitmentPrepReply(input: CommitmentPrepContract): string {
+    const lines = [
+      "Preparação do compromisso:",
+      `- Compromisso: ${truncate(input.title, 120)}`,
+      `- Quando: ${input.startLabel}`,
+      `- Conta: ${input.account}`,
+      `- Responsável: ${input.owner}`,
+      `- Contexto: ${input.context}`,
+    ];
+
+    if (input.location) {
+      lines.push(`- Local: ${truncate(input.location, 120)}`);
+    }
+    if (input.weatherTip) {
+      lines.push(`- Clima: ${truncate(input.weatherTip, 140)}`);
+    }
+
+    if (input.checklist.length > 0) {
+      lines.push("", "Checklist:");
+      for (const item of input.checklist.slice(0, 5)) {
+        lines.push(`- ${truncate(item, 120)}`);
+      }
+    }
+
+    if (input.alerts.length > 0) {
+      lines.push("", "Alertas:");
+      for (const item of input.alerts.slice(0, 3)) {
+        lines.push(`- ${truncate(item, 120)}`);
+      }
+    }
+
+    if (input.recommendedNextStep) {
+      lines.push("", `Próxima ação: ${truncate(input.recommendedNextStep, 140)}`);
+    }
+
+    return this.finalize("organization", lines.join("\n"));
   }
 }

@@ -52,5 +52,23 @@
       "actionMode": "plan",
       "compoundIntent": false
     }
+  },
+  {
+    "name": "follow_up_review_routes_to_secretary_plan",
+    "prompt": "revise meus follow-ups",
+    "expect": {
+      "primaryDomain": "secretario_operacional",
+      "actionMode": "plan",
+      "compoundIntent": false
+    }
+  },
+  {
+    "name": "commitment_prep_routes_to_secretary_schedule",
+    "prompt": "prepare meu próximo compromisso",
+    "expect": {
+      "primaryDomain": "secretario_operacional",
+      "actionMode": "schedule",
+      "compoundIntent": false
+    }
   }
 ]
