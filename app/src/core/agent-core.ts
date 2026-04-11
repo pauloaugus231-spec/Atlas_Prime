@@ -2540,20 +2540,33 @@ function extractCalendarMoveParts(prompt: string): { source: string; targetInstr
 
 function isCalendarDeletePrompt(prompt: string): boolean {
   const normalized = normalizeEmailAnalysisText(prompt);
-  return includesAny(normalized, [
-    "cancele o evento",
-    "cancela o evento",
-    "exclua o evento",
-    "excluir o evento",
-    "delete o evento",
-    "remova o evento",
+  const hasDeleteVerb = includesAny(normalized, [
+    "cancele",
+    "cancela",
+    "cancelar",
+    "exclua",
+    "excluir",
+    "delete",
+    "apague",
+    "apagar",
+    "remova",
+    "remover",
   ]);
+  const hasCalendarObject = includesAny(normalized, [
+    "evento",
+    "compromisso",
+    "agenda",
+    "calendario",
+    "calendário",
+    "reuniao",
+    "reunião",
+  ]);
+  return hasDeleteVerb && hasCalendarObject;
 }
 
 function extractCalendarDeleteTopic(prompt: string): string | undefined {
   const patterns = [
-    /\b(?:cancele|cancela|exclua|excluir|delete|remova)\s+o?\s*evento\s+["“]?(.+?)["”]?(?=(?:\s+amanh[ãa]|\s+hoje|\s+dia\s+\d|\s+em\s+\d{1,2}\/\d{1,2}|\?|$))/i,
-    /\b(?:cancele|cancela|exclua|excluir|delete|remova)\s+["“]?(.+?)["”]?(?=(?:\s+amanh[ãa]|\s+hoje|\s+dia\s+\d|\s+em\s+\d{1,2}\/\d{1,2}|\?|$))/i,
+    /\b(?:cancele|cancela|cancelar|exclua|excluir|delete|apague|apagar|remova|remover)\s+(?:o|a|os|as)?\s*(?:evento|compromisso|reuniao|reunião)?\s+["“]?(.+?)["”]?(?=(?:\s+amanh[ãa]|\s+hoje|\s+dia\s+\d|\s+em\s+\d{1,2}\/\d{1,2}|\s+na\s+conta\b|\s+no\s+calend[aá]rio\b|\s+na\s+agenda\b|\s+se\s+for\s+recorrent|\s+e\s+se\s+for\s+recorrent|\?|$))/i,
   ];
   for (const pattern of patterns) {
     const match = prompt.match(pattern);
@@ -2571,6 +2584,12 @@ function cleanCalendarEventTopicReference(value: string | undefined): string | u
     .replace(/\s+\bde\s+(?:amanh[ãa]|hoje)\b/gi, "")
     .replace(/\s+em\s+\d{1,2}\/\d{1,2}(?:\/\d{2,4})?\b/gi, "")
     .replace(/\s+\b(?:amanh[ãa]|hoje)\b/gi, "")
+    .replace(/\s+na\s+conta\s+\b(?:primary|principal|abordagem)\b.*$/gi, "")
+    .replace(/\s+na\s+\b(?:agenda|abordagem)\b.*$/gi, "")
+    .replace(/\s+no\s+calend[aá]rio\b.*$/gi, "")
+    .replace(/\s+se\s+for\s+recorrent[ea].*$/gi, "")
+    .replace(/\s+e\s+se\s+for\s+recorrent[ea].*$/gi, "")
+    .replace(/\s+e\s+apague.*$/gi, "")
     .replace(/\bde$/i, "")
     .replace(/[?.!,;:]+$/g, "")
     .trim();

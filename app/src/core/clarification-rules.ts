@@ -24,6 +24,32 @@ function isSupportPrompt(normalized: string): boolean {
   return includesAny(normalized, ["suporte", "ticket", "tickets", "cliente", "clientes", "atendimento"]);
 }
 
+export function looksLikeCalendarDeletePrompt(prompt: string): boolean {
+  const normalized = normalize(prompt);
+  const hasDeleteVerb = includesAny(normalized, [
+    "cancele",
+    "cancela",
+    "cancelar",
+    "exclua",
+    "excluir",
+    "delete",
+    "apague",
+    "apagar",
+    "remova",
+    "remover",
+  ]);
+  const hasCalendarObject = includesAny(normalized, [
+    "evento",
+    "compromisso",
+    "agenda",
+    "calendario",
+    "calendário",
+    "reuniao",
+    "reunião",
+  ]);
+  return hasDeleteVerb && hasCalendarObject;
+}
+
 function normalizeAnswer(answerText: string): string {
   return answerText
     .trim()
@@ -160,6 +186,10 @@ export function buildClarifiedExecutionPrompt(
 ): string | null {
   const normalizedPrompt = normalize(originalPrompt);
   const normalizedAnswer = normalizeAnswer(answerText);
+
+  if (looksLikeCalendarDeletePrompt(originalPrompt)) {
+    return [originalPrompt.trim(), answerText.trim()].filter(Boolean).join(" ");
+  }
 
   if (includesAny(normalizedPrompt, ["aprova", "approval"]) && includesAny(normalizedPrompt, ["agenda", "compromiss", "dia"])) {
     return `Revise as aprovações pendentes e organize a agenda com base neste ajuste confirmado: ${normalizedAnswer}.`;

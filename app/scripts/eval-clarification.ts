@@ -3,6 +3,7 @@ import { IntentRouter } from "../src/core/intent-router.js";
 import {
   buildClarificationRuleProposal,
   buildClarifiedExecutionPrompt,
+  looksLikeCalendarDeletePrompt,
 } from "../src/core/clarification-rules.js";
 
 interface EvalResult {
@@ -83,6 +84,22 @@ function run() {
       && supportProposal.questions[0]?.includes("prepare respostas"),
     ),
     detail: JSON.stringify(supportProposal, null, 2),
+  });
+
+  const deleteExecutionPrompt = buildClarifiedExecutionPrompt(
+    "exclua o evento Banho na abordagem em 13/04, e se for recorrente apague a recorrência",
+    "sim",
+    router.resolve("exclua o evento Banho na abordagem em 13/04, e se for recorrente apague a recorrência"),
+  );
+  results.push({
+    name: "calendar_delete_execution_prompt_stays_explicit",
+    passed: Boolean(
+      looksLikeCalendarDeletePrompt("exclua o evento Banho na abordagem em 13/04, e se for recorrente apague a recorrência")
+      && deleteExecutionPrompt
+      && deleteExecutionPrompt.includes("exclua o evento Banho")
+      && !deleteExecutionPrompt.includes("Pedido original do usuário"),
+    ),
+    detail: deleteExecutionPrompt ?? "(vazio)",
   });
 
   const failures = results.filter((item) => !item.passed);

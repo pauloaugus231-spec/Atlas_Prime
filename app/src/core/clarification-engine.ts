@@ -6,6 +6,7 @@ import { ClarificationInboxStore } from "./clarification-inbox.js";
 import {
   buildClarificationRuleProposal,
   buildClarifiedExecutionPrompt,
+  looksLikeCalendarDeletePrompt,
 } from "./clarification-rules.js";
 import {
   buildEventDraftFromPrompt,
@@ -101,6 +102,10 @@ export class ClarificationEngine {
       if (draftResult.draft) {
         return null;
       }
+    }
+
+    if (looksLikeCalendarDeletePrompt(input.prompt)) {
+      return null;
     }
 
     const heuristic = this.buildHeuristicProposal(input.prompt, input.intent);
