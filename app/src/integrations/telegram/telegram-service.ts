@@ -720,6 +720,47 @@ function isExplicitSendConfirmation(text: string): boolean {
   ].some((pattern) => pattern.test(normalized));
 }
 
+function isExplicitDeleteConfirmation(text: string): boolean {
+  const normalized = normalizeIntentText(text);
+  if (!normalized) {
+    return false;
+  }
+
+  if (/(^|\s)nao(\s|$)/.test(normalized) || /^cancelar\b/.test(normalized)) {
+    return false;
+  }
+
+  return [
+    /^confirmar excluir\b/,
+    /^excluir serie\b/,
+    /^excluir série\b/,
+    /^confirmar apagar\b/,
+    /^confirmar remover\b/,
+  ].some((pattern) => pattern.test(normalized));
+}
+
+function extractDeleteDraftFromAssistantText(text: string, defaultTimezone: string): PendingGoogleEventDeleteDraft | undefined {
+  const eventId = text.match(/(?:^|\n)-?\s*ID(?: do evento)?\s*:\s*([^\n]+)/i)?.[1]?.trim();
+  const summary = text.match(/(?:^|\n)-?\s*T[íi]tulo\s*:\s*([^\n]+)/i)?.[1]?.trim();
+  const account = text.match(/(?:^|\n)-?\s*Conta(?:\/Calend[áa]rio)?\s*:\s*([^\n]+)/i)?.[1]?.trim();
+  if (!eventId || !summary) {
+    return undefined;
+  }
+
+  const startLine = text.match(/(?:^|\n)-?\s*(?:Data\s*\/\s*hor[áa]rio|In[íi]cio)\s*:\s*([^\n]+)/i)?.[1]?.trim();
+  const endLine = text.match(/(?:^|\n)-?\s*Fim\s*:\s*([^\n]+)/i)?.[1]?.trim();
+
+  return {
+    kind: "google_event_delete",
+    eventId,
+    summary,
+    account: account || undefined,
+    start: startLine || undefined,
+    end: endLine || undefined,
+    timezone: defaultTimezone,
+  };
+}
+
 function isDraftDiscardRequest(text: string): boolean {
   const normalized = normalizeIntentText(text);
   return [
@@ -2235,7 +2276,14 @@ export class TelegramService {
       return;
     }
 
-    if (isExplicitSendConfirmation(normalizedText)) {
+    if (isExplicitDeleteConfirmation(normalizedText)) {
+      const pendingDraft = this.tryHydratePendingDraftForConfirmation(message.chat.id)
+        ?? this.tryHydrateDeleteDraftFromRecentAssistantTurn(message.chat.id);
+      if (pendingDraft) {
+        await this.handlePendingActionConfirmation(message, normalizedText, pendingDraft);
+        return;
+      }
+    } else if (isExplicitSendConfirmation(normalizedText)) {
       const pendingDraft = this.tryHydratePendingDraftForConfirmation(message.chat.id);
       if (pendingDraft) {
         await this.handlePendingActionConfirmation(message, normalizedText, pendingDraft);
@@ -4004,6 +4052,27 @@ export class TelegramService {
       kind: hydratedDraft.kind,
     });
     return hydratedDraft;
+  }
+
+  private tryHydrateDeleteDraftFromRecentAssistantTurn(chatId: number): PendingGoogleEventDeleteDraft | undefined {
+    const history = this.getChatHistory(chatId);
+    const lastAssistantTurn = [...history].reverse().find((turn) => turn.role === "assistant");
+    if (!lastAssistantTurn?.text) {
+      return undefined;
+    }
+
+    const draft = extractDeleteDraftFromAssistantText(lastAssistantTurn.text, this.config.google.defaultTimezone);
+    if (!draft) {
+      return undefined;
+    }
+
+    this.pendingActionDrafts.set(chatId, draft);
+    this.logger.info("Hydrated calendar delete draft from recent assistant turn", {
+      chatId,
+      eventId: draft.eventId,
+      account: draft.account,
+    });
+    return draft;
   }
 
   private persistPendingApproval(chatId: number, draft: PendingActionDraft) {
