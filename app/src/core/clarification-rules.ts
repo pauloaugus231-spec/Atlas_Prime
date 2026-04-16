@@ -24,6 +24,113 @@ function isSupportPrompt(normalized: string): boolean {
   return includesAny(normalized, ["suporte", "ticket", "tickets", "cliente", "clientes", "atendimento"]);
 }
 
+function hasCalendarTimeScope(normalized: string): boolean {
+  return /\b\d{1,2}\/\d{1,2}(?:\/\d{2,4})?\b/.test(normalized)
+    || includesAny(normalized, [
+      "hoje",
+      "amanha",
+      "amanhã",
+      "esta semana",
+      "essa semana",
+      "proxima semana",
+      "próxima semana",
+      "semana que vem",
+      "proximos 7 dias",
+      "próximos 7 dias",
+      "segunda",
+      "terca",
+      "terça",
+      "quarta",
+      "quinta",
+      "sexta",
+      "sabado",
+      "sábado",
+      "domingo",
+    ]);
+}
+
+function hasWriteIntent(normalized: string): boolean {
+  return includesAny(normalized, [
+    "agende",
+    "crie",
+    "mova",
+    "reagende",
+    "delete",
+    "apague",
+    "cancele",
+    "exclua",
+    "remova",
+    "altere",
+    "atualize",
+    "envie",
+    "publique",
+  ]);
+}
+
+export function looksLikeLowFrictionReadPrompt(
+  prompt: string,
+  intent?: IntentResolution,
+): boolean {
+  const normalized = normalize(prompt);
+  if (!normalized || hasWriteIntent(normalized)) {
+    return false;
+  }
+
+  if (includesAny(normalized, [
+    "aprova",
+    "approval",
+    "organize",
+    "organiza",
+    "priorize",
+    "prioriza",
+    "planeje",
+    "planeja",
+    "revise",
+    "revisar",
+    "prepar",
+    "suporte",
+    "ticket",
+  ])) {
+    return false;
+  }
+
+  const hasCalendarSignal = includesAny(normalized, ["agenda", "calendario", "calendário", "compromisso", "compromissos", "evento", "eventos"]);
+  const hasNextCommitmentSignal = includesAny(normalized, [
+    "proximos compromissos",
+    "próximos compromissos",
+    "proximo compromisso",
+    "próximo compromisso",
+  ]);
+  const hasBriefSignal = includesAny(normalized, [
+    "brief diario",
+    "brief diário",
+    "briefing da manha",
+    "briefing da manhã",
+    "resumo do dia",
+    "resumo da manha",
+    "resumo da manhã",
+  ]);
+  const hasWeatherSignal = includesAny(normalized, [
+    "clima",
+    "previsao do tempo",
+    "previsão do tempo",
+    "tempo hoje",
+    "tempo amanha",
+    "tempo amanhã",
+  ]);
+
+  if ((hasCalendarSignal && hasCalendarTimeScope(normalized)) || hasNextCommitmentSignal || hasBriefSignal || hasWeatherSignal) {
+    return true;
+  }
+
+  if (!intent) {
+    return false;
+  }
+
+  return intent.orchestration.route.primaryDomain === "secretario_operacional"
+    && (hasCalendarSignal || hasBriefSignal || hasWeatherSignal);
+}
+
 export function looksLikeCalendarDeletePrompt(prompt: string): boolean {
   const normalized = normalize(prompt);
   const hasDeleteVerb = includesAny(normalized, [
@@ -188,6 +295,10 @@ export function buildClarifiedExecutionPrompt(
   const normalizedAnswer = normalizeAnswer(answerText);
 
   if (looksLikeCalendarDeletePrompt(originalPrompt)) {
+    return [originalPrompt.trim(), answerText.trim()].filter(Boolean).join(" ");
+  }
+
+  if (looksLikeLowFrictionReadPrompt(originalPrompt, intent)) {
     return [originalPrompt.trim(), answerText.trim()].filter(Boolean).join(" ");
   }
 

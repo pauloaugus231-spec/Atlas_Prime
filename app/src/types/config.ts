@@ -42,6 +42,14 @@ export interface BriefingConfig {
   weatherDays: number;
 }
 
+export interface ExternalReasoningConfig {
+  enabled: boolean;
+  baseUrl?: string;
+  apiKey?: string;
+  timeoutMs: number;
+  routeSimpleReads: boolean;
+}
+
 export interface EmailConfig {
   enabled: boolean;
   host?: string;
@@ -171,6 +179,7 @@ export interface AppConfig {
   llm: LlmConfig;
   telegram: TelegramConfig;
   briefing: BriefingConfig;
+  externalReasoning: ExternalReasoningConfig;
   email: EmailConfig;
   emailAccounts: Record<string, EmailConfig>;
   google: GoogleWorkspaceConfig;

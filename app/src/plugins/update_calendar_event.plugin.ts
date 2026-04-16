@@ -56,7 +56,21 @@ export default defineToolPlugin<UpdateCalendarEventParameters>({
     const workspace = context.googleWorkspaces.getWorkspace(account);
     const status = workspace.getStatus();
     if (!status.ready) {
-      return { ok: false, account, status };
+      return {
+        ok: false,
+        account,
+        status,
+        error: "Google workspace is not ready.",
+      };
+    }
+
+    if (!status.writeReady) {
+      return {
+        ok: false,
+        account,
+        status,
+        error: "Google workspace is authenticated but missing write scopes.",
+      };
     }
 
     const event = await workspace.updateCalendarEvent({

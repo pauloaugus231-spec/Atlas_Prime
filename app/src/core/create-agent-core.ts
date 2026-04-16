@@ -1,5 +1,6 @@
 import { loadConfig } from "../config/load-config.js";
 import { EmailAccountsService } from "../integrations/email/email-accounts.js";
+import { ExternalReasoningClient } from "../integrations/external-reasoning/external-reasoning-client.js";
 import { GoogleMapsService } from "../integrations/google/google-maps.js";
 import { GoogleWorkspaceAuthService } from "../integrations/google/google-auth.js";
 import { GoogleWorkspaceAccountsService } from "../integrations/google/google-workspace-accounts.js";
@@ -129,6 +130,10 @@ export async function createAgentCore() {
     config.googleMaps,
     logger.child({ scope: "google-maps" }),
   );
+  const externalReasoning = new ExternalReasoningClient(
+    config.externalReasoning,
+    logger.child({ scope: "external-reasoning" }),
+  );
   const founderOps = new FounderOpsService(
     config.altiva,
     logger.child({ scope: "founder-ops" }),
@@ -246,6 +251,7 @@ export async function createAgentCore() {
     responseOs,
     contextPacks,
     planBuilder,
+    externalReasoning,
     pexelsMedia,
     projectOps,
     safeExec,
@@ -283,6 +289,7 @@ export async function createAgentCore() {
     googleWorkspace,
     googleWorkspaces,
     googleMaps,
+    externalReasoning,
     founderOps,
     personalOs,
     intentRouter,

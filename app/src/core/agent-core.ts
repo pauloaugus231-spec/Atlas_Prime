@@ -66,6 +66,7 @@ import { CommunicationRouter, ContactIntelligenceStore } from "./contact-intelli
 import { isPersonallyRelevantCalendarEvent, matchPersonalCalendarTerms } from "./calendar-relevance.js";
 import type { EmailMessageSummary, EmailReader } from "../integrations/email/email-reader.js";
 import { EmailAccountsService } from "../integrations/email/email-accounts.js";
+import { ExternalReasoningClient } from "../integrations/external-reasoning/external-reasoning-client.js";
 import type { EmailWriter } from "../integrations/email/email-writer.js";
 import {
   normalizeEmailAnalysisText,
@@ -92,6 +93,8 @@ import type {
 } from "../types/workflow.js";
 import { WebResearchService, type WebResearchMode } from "./web-research.js";
 import { GoogleTrendsIntakeService, type GoogleTrendItem } from "./trend-intake.js";
+import type { ExternalReasoningRequest } from "../types/external-reasoning.js";
+import { looksLikeLowFrictionReadPrompt } from "./clarification-rules.js";
 
 function stripCodeFences(value: string): string {
   const trimmed = value.trim();
@@ -8088,6 +8091,10 @@ export interface AgentRunResult {
   }>;
 }
 
+export interface AgentRunOptions {
+  chatId?: string | number;
+}
+
 export class AgentCore {
   constructor(
     private readonly config: AppConfig,
@@ -8120,6 +8127,7 @@ export class AgentCore {
     private readonly responseOs: ResponseOS,
     private readonly contextPacks: ContextPackService,
     private readonly planBuilder: WorkflowPlanBuilderService,
+    private readonly externalReasoning: ExternalReasoningClient,
     private readonly pexelsMedia: PexelsMediaService,
     private readonly projectOps: ProjectOpsService,
     private readonly safeExec: SafeExecService,
@@ -8511,7 +8519,7 @@ export class AgentCore {
     };
   }
 
-  async runUserPrompt(userPrompt: string): Promise<AgentRunResult> {
+  async runUserPrompt(userPrompt: string, options?: AgentRunOptions): Promise<AgentRunResult> {
     const requestId = randomUUID();
     const requestLogger = this.logger.child({ requestId });
     const intent = this.intentRouter.resolve(userPrompt);
@@ -9084,6 +9092,19 @@ export class AgentCore {
     if (directEmailLookupResult) {
       return directEmailLookupResult;
     }
+
+    const externalReasoningResult = await this.tryRunExternalReasoning(
+      activeUserPrompt,
+      requestId,
+      requestLogger,
+      intent,
+      preferences,
+      options,
+    );
+    if (externalReasoningResult) {
+      return externalReasoningResult;
+    }
+
     const memorySummary = this.memory.getContextSummary();
 
     const messages: ConversationMessage[] = [
@@ -9263,6 +9284,150 @@ export class AgentCore {
       requestId,
       content: execution.content,
       rawResult: execution.rawResult,
+    };
+  }
+
+  private shouldUseExternalReasoning(
+    prompt: string,
+    intent: IntentResolution,
+  ): boolean {
+    if (!this.externalReasoning.isEnabled()) {
+      return false;
+    }
+
+    const isLowFrictionRead = looksLikeLowFrictionReadPrompt(prompt, intent);
+    if (isLowFrictionRead && !this.config.externalReasoning.routeSimpleReads) {
+      return false;
+    }
+
+    if (intent.compoundIntent) {
+      return true;
+    }
+
+    if (intent.orchestration.route.confidence < 0.7) {
+      return true;
+    }
+
+    if (includesAny(normalizeEmailAnalysisText(prompt), ["estrateg", "estratég", "planej", "prioriz", "analise", "análise"])) {
+      return true;
+    }
+
+    return ["plan", "analyze", "communicate"].includes(intent.orchestration.route.actionMode);
+  }
+
+  private async tryRunExternalReasoning(
+    userPrompt: string,
+    requestId: string,
+    requestLogger: Logger,
+    intent: IntentResolution,
+    preferences: UserPreferences,
+    options?: AgentRunOptions,
+  ): Promise<AgentRunResult | null> {
+    if (!this.shouldUseExternalReasoning(userPrompt, intent)) {
+      return null;
+    }
+
+    requestLogger.info("Trying external reasoning provider", {
+      primaryDomain: intent.orchestration.route.primaryDomain,
+      actionMode: intent.orchestration.route.actionMode,
+      compoundIntent: intent.compoundIntent,
+    });
+
+    try {
+      const contextPack = await this.contextPacks.buildForPrompt(userPrompt, intent);
+      const request = this.buildExternalReasoningRequest(
+        userPrompt,
+        intent,
+        preferences,
+        contextPack,
+        options,
+      );
+      const response = await this.externalReasoning.reason(request);
+      requestLogger.info("External reasoning completed", {
+        responseKind: response.kind,
+      });
+
+      return {
+        requestId,
+        reply: response.content,
+        messages: buildBaseMessages(userPrompt, intent.orchestration, preferences),
+        toolExecutions: [
+          {
+            toolName: "external_reasoning",
+            resultPreview: JSON.stringify(
+              {
+                kind: response.kind,
+                primaryDomain: intent.orchestration.route.primaryDomain,
+                actionMode: intent.orchestration.route.actionMode,
+              },
+              null,
+              2,
+            ),
+          },
+        ],
+      };
+    } catch (error) {
+      requestLogger.warn("External reasoning failed; falling back to local flow", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    }
+  }
+
+  private buildExternalReasoningRequest(
+    userPrompt: string,
+    intent: IntentResolution,
+    preferences: UserPreferences,
+    contextPack: Awaited<ReturnType<ContextPackService["buildForPrompt"]>>,
+    options?: AgentRunOptions,
+  ): ExternalReasoningRequest {
+    const briefEvents = (contextPack?.brief?.events ?? [])
+      .slice(0, 6)
+      .flatMap((event) => {
+        if (!event.start) {
+          return [];
+        }
+        return [{
+          summary: event.summary,
+          start: event.start,
+          ...(event.location ? { location: event.location } : {}),
+          ...(event.account ? { account: event.account } : {}),
+        }];
+      });
+
+    const memorySignals = contextPack?.signals.filter((signal) =>
+      includesAny(signal.toLowerCase(), ["approval", "workflow", "memoria", "memória", "email", "tarefa", "clima"])
+    ) ?? [];
+
+    return {
+      user_message: userPrompt,
+      ...(options?.chatId !== undefined ? { chat_id: String(options.chatId) } : {}),
+      intent: {
+        primary_domain: intent.orchestration.route.primaryDomain,
+        secondary_domains: intent.orchestration.route.secondaryDomains,
+        mentioned_domains: intent.mentionedDomains,
+        action_mode: intent.orchestration.route.actionMode,
+        confidence: intent.orchestration.route.confidence,
+        compound: intent.compoundIntent,
+      },
+      context: {
+        signals: contextPack?.signals ?? [],
+        ...(briefEvents.length > 0
+          ? {
+              calendar: {
+                timezone: this.config.google.defaultTimezone,
+                events: briefEvents,
+              },
+            }
+          : {}),
+        ...(memorySignals.length > 0 ? { memory: memorySignals } : {}),
+        preferences: {
+          response_style: preferences.responseStyle,
+          response_length: preferences.responseLength,
+          proactive_next_step: preferences.proactiveNextStep,
+        },
+        recent_messages: intent.historyUserTurns.slice(-6),
+      },
     };
   }
 

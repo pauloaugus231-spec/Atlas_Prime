@@ -21,6 +21,7 @@ import {
   isGoogleTaskCreatePrompt,
 } from "../../core/google-draft-utils.js";
 import { extractLatestShortPackage, type ParsedShortPackage } from "../../core/short-video-package.js";
+import { parseAssistantDecisionReply } from "../../core/assistant-decision.js";
 import type { AppConfig } from "../../types/config.js";
 import type { ApprovalInboxItemRecord } from "../../types/approval-inbox.js";
 import type { ContentItemRecord } from "../../types/content-ops.js";
@@ -2447,7 +2448,30 @@ export class TelegramService {
       if (pendingDraft && pendingDraft.kind !== "email_reply") {
         this.clearPendingActionDraft(message.chat.id);
       }
-      const result = await this.core.runUserPrompt(buildAgentPrompt(message, effectiveText, history));
+      const result = await this.core.runUserPrompt(
+        buildAgentPrompt(message, effectiveText, history),
+        { chatId: message.chat.id },
+      );
+      const structuredDecisionReply = await this.resolveStructuredAssistantDecisionReply(result.reply);
+      if (structuredDecisionReply.handled) {
+        this.appendChatTurn(message.chat.id, {
+          role: "user",
+          text: pendingEmailDraft
+            ? `${normalizedText} [ajuste de rascunho pendente]`
+            : audioAttachment
+              ? `[áudio] ${normalizedText}`
+              : normalizedText,
+        });
+        this.appendChatTurn(message.chat.id, {
+          role: "assistant",
+          text: structuredDecisionReply.visibleReply,
+        });
+        await this.sendText(message.chat.id, structuredDecisionReply.visibleReply, {
+          reply_to_message_id: message.message_id,
+          disable_web_page_preview: true,
+        });
+        return;
+      }
       const nextPendingDraft = extractPendingActionDraft(result.reply);
       const baseVisibleReply = sanitizeToolPayloadLeak(stripPendingDraftMarkers(result.reply) || result.reply);
       const visibleReply =
@@ -2563,6 +2587,16 @@ export class TelegramService {
         }
       }
 
+      if (this.clarificationEngine.shouldAutoExecuteAfterAnswer(updated)) {
+        this.clarificationEngine.confirm(updated.id);
+        await this.executeClarifiedPrompt(message, {
+          effectiveText: updated.executionPrompt?.trim() || updated.originalPrompt,
+          replyToMessageId: message.message_id,
+          userHistoryText: normalizedText,
+        });
+        return true;
+      }
+
       const reply = this.clarificationEngine.buildConfirmationMessage(updated);
       this.appendChatTurn(message.chat.id, {
         role: "user",
@@ -2582,32 +2616,10 @@ export class TelegramService {
     if (pending.status === "pending_confirmation") {
       if (isExplicitSendConfirmation(normalizedText)) {
         this.clarificationEngine.confirm(pending.id);
-        const history = this.getChatHistory(message.chat.id);
-        const effectiveText = pending.executionPrompt?.trim() || pending.originalPrompt;
-        const result = await this.core.runUserPrompt(buildAgentPrompt(message, effectiveText, history));
-        const nextPendingDraft = extractPendingActionDraft(result.reply);
-        const baseVisibleReply = sanitizeToolPayloadLeak(stripPendingDraftMarkers(result.reply) || result.reply);
-        const visibleReply = baseVisibleReply;
-        const approval = nextPendingDraft
-          ? this.persistPendingApproval(message.chat.id, nextPendingDraft)
-          : undefined;
-        if (nextPendingDraft) {
-          this.pendingActionDrafts.set(message.chat.id, nextPendingDraft);
-        } else {
-          this.clearPendingActionDraft(message.chat.id);
-        }
-        this.appendChatTurn(message.chat.id, {
-          role: "user",
-          text: `${normalizedText} [confirmacao de contexto]`,
-        });
-        this.appendChatTurn(message.chat.id, {
-          role: "assistant",
-          text: visibleReply,
-        });
-        await this.sendText(message.chat.id, visibleReply, {
-          reply_to_message_id: message.message_id,
-          disable_web_page_preview: false,
-          reply_markup: approval ? buildApprovalInlineKeyboard(approval.id) : undefined,
+        await this.executeClarifiedPrompt(message, {
+          effectiveText: pending.executionPrompt?.trim() || pending.originalPrompt,
+          replyToMessageId: message.message_id,
+          userHistoryText: `${normalizedText} [confirmacao de contexto]`,
         });
         return true;
       }
@@ -2630,6 +2642,61 @@ export class TelegramService {
     }
 
     return false;
+  }
+
+  private async executeClarifiedPrompt(
+    message: TelegramMessage,
+    input: {
+      effectiveText: string;
+      replyToMessageId: number;
+      userHistoryText: string;
+    },
+  ): Promise<void> {
+    const history = this.getChatHistory(message.chat.id);
+    const result = await this.core.runUserPrompt(
+      buildAgentPrompt(message, input.effectiveText, history),
+      { chatId: message.chat.id },
+    );
+    const structuredDecisionReply = await this.resolveStructuredAssistantDecisionReply(result.reply);
+    if (structuredDecisionReply.handled) {
+      this.appendChatTurn(message.chat.id, {
+        role: "user",
+        text: input.userHistoryText,
+      });
+      this.appendChatTurn(message.chat.id, {
+        role: "assistant",
+        text: structuredDecisionReply.visibleReply,
+      });
+      await this.sendText(message.chat.id, structuredDecisionReply.visibleReply, {
+        reply_to_message_id: input.replyToMessageId,
+        disable_web_page_preview: true,
+      });
+      return;
+    }
+
+    const nextPendingDraft = extractPendingActionDraft(result.reply);
+    const visibleReply = sanitizeToolPayloadLeak(stripPendingDraftMarkers(result.reply) || result.reply);
+    const approval = nextPendingDraft
+      ? this.persistPendingApproval(message.chat.id, nextPendingDraft)
+      : undefined;
+    if (nextPendingDraft) {
+      this.pendingActionDrafts.set(message.chat.id, nextPendingDraft);
+    } else {
+      this.clearPendingActionDraft(message.chat.id);
+    }
+    this.appendChatTurn(message.chat.id, {
+      role: "user",
+      text: input.userHistoryText,
+    });
+    this.appendChatTurn(message.chat.id, {
+      role: "assistant",
+      text: visibleReply,
+    });
+    await this.sendText(message.chat.id, visibleReply, {
+      reply_to_message_id: input.replyToMessageId,
+      disable_web_page_preview: false,
+      reply_markup: approval ? buildApprovalInlineKeyboard(approval.id) : undefined,
+    });
   }
 
   private resolveScheduleImportAccountAlias(contextText?: string): string {
@@ -4073,6 +4140,75 @@ export class TelegramService {
       account: draft.account,
     });
     return draft;
+  }
+
+  private async resolveStructuredAssistantDecisionReply(rawReply: string): Promise<{
+    handled: boolean;
+    visibleReply: string;
+  }> {
+    const parsed = parseAssistantDecisionReply(rawReply);
+    if (parsed.kind === "absent") {
+      return {
+        handled: false,
+        visibleReply: "",
+      };
+    }
+
+    if (parsed.kind === "invalid") {
+      this.logger.warn("Rejected invalid structured assistant decision", {
+        error: parsed.error,
+      });
+      return {
+        handled: true,
+        visibleReply: [
+          "Recebi uma decisão estruturada inválida para execução local.",
+          "Nada foi executado.",
+          `Detalhe: ${parsed.error}`,
+        ].join("\n"),
+      };
+    }
+
+    if (!parsed.decision.should_execute || !parsed.decision.execution) {
+      return {
+        handled: true,
+        visibleReply: parsed.decision.assistant_reply,
+      };
+    }
+
+    try {
+      const execution = await this.core.executeToolDirect(
+        parsed.decision.execution.tool,
+        parsed.decision.execution.payload,
+      );
+      const rawResult = execution.rawResult && typeof execution.rawResult === "object"
+        ? execution.rawResult as Record<string, unknown>
+        : undefined;
+      if (rawResult?.ok === false) {
+        return {
+          handled: true,
+          visibleReply: [
+            "Não consegui executar a decisão estruturada de calendário.",
+            `Detalhe: ${typeof rawResult.error === "string" ? rawResult.error : "Falha na execução local."}`,
+          ].join("\n"),
+        };
+      }
+
+      return {
+        handled: true,
+        visibleReply: parsed.decision.assistant_reply,
+      };
+    } catch (error) {
+      this.logger.error("Structured assistant decision execution failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return {
+        handled: true,
+        visibleReply: [
+          "Não consegui executar a decisão estruturada de calendário.",
+          `Detalhe: ${error instanceof Error ? error.message : String(error)}`,
+        ].join("\n"),
+      };
+    }
   }
 
   private persistPendingApproval(chatId: number, draft: PendingActionDraft) {

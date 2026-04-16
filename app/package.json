@@ -14,6 +14,7 @@
     "eval:clarification": "tsx scripts/eval-clarification.ts",
     "eval:agenda-drafts": "tsx scripts/eval-agenda-drafts.ts",
     "eval:responses": "tsx scripts/eval-response-os.ts",
+    "eval:assistant-decision": "tsx scripts/eval-assistant-decision.ts",
     "dev": "tsx src/index.ts",
     "core:doctor": "tsx src/index.ts doctor",
     "core:plugins": "tsx src/index.ts plugins:list",

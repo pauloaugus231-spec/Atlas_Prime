@@ -1,0 +1,212 @@
+[
+  {
+    "name": "assistant_decision_no_execution",
+    "rawReply": {
+      "type": "assistant_decision",
+      "intent": "planning",
+      "should_execute": false,
+      "assistant_reply": "Vou só te devolver o plano, sem executar nada."
+    },
+    "expect": {
+      "handled": true,
+      "executionCalls": 0,
+      "visibleReplyIncludes": "Vou só te devolver o plano"
+    }
+  },
+  {
+    "name": "assistant_decision_create_executes_locally",
+    "rawReply": {
+      "type": "assistant_decision",
+      "intent": "calendar_create",
+      "should_execute": true,
+      "assistant_reply": "Evento criado.",
+      "execution": {
+        "tool": "execute_calendar_operation",
+        "payload": {
+          "action": "create",
+          "summary": "Reunião de teste",
+          "start": "2026-04-20T14:00:00-03:00",
+          "end": "2026-04-20T15:00:00-03:00",
+          "account": "primary"
+        }
+      }
+    },
+    "expect": {
+      "handled": true,
+      "executionCalls": 1,
+      "tool": "execute_calendar_operation",
+      "action": "create",
+      "visibleReplyIncludes": "Evento criado."
+    }
+  },
+  {
+    "name": "assistant_decision_update_executes_locally",
+    "rawReply": {
+      "type": "assistant_decision",
+      "intent": "calendar_update",
+      "should_execute": true,
+      "assistant_reply": "Evento atualizado.",
+      "execution": {
+        "tool": "execute_calendar_operation",
+        "payload": {
+          "action": "update",
+          "event_id": "evt_123",
+          "summary": "Reunião ajustada"
+        }
+      }
+    },
+    "expect": {
+      "handled": true,
+      "executionCalls": 1,
+      "tool": "execute_calendar_operation",
+      "action": "update",
+      "visibleReplyIncludes": "Evento atualizado."
+    }
+  },
+  {
+    "name": "assistant_decision_delete_executes_locally",
+    "rawReply": {
+      "type": "assistant_decision",
+      "intent": "calendar_delete",
+      "should_execute": true,
+      "assistant_reply": "Evento removido.",
+      "execution": {
+        "tool": "execute_calendar_operation",
+        "payload": {
+          "action": "delete",
+          "event_id": "evt_456"
+        }
+      }
+    },
+    "expect": {
+      "handled": true,
+      "executionCalls": 1,
+      "tool": "execute_calendar_operation",
+      "action": "delete",
+      "visibleReplyIncludes": "Evento removido."
+    }
+  },
+  {
+    "name": "assistant_decision_rejects_invalid_tool",
+    "rawReply": {
+      "type": "assistant_decision",
+      "intent": "calendar_create",
+      "should_execute": true,
+      "assistant_reply": "Tentando usar ferramenta errada.",
+      "execution": {
+        "tool": "delete_everything",
+        "payload": {
+          "action": "create",
+          "summary": "Reunião",
+          "start": "2026-04-20T14:00:00-03:00",
+          "end": "2026-04-20T15:00:00-03:00"
+        }
+      }
+    },
+    "expect": {
+      "handled": true,
+      "executionCalls": 0,
+      "visibleReplyIncludes": "decisão estruturada inválida"
+    }
+  },
+  {
+    "name": "assistant_decision_rejects_missing_payload",
+    "rawReply": {
+      "type": "assistant_decision",
+      "intent": "calendar_create",
+      "should_execute": true,
+      "assistant_reply": "Payload ausente.",
+      "execution": {
+        "tool": "execute_calendar_operation"
+      }
+    },
+    "expect": {
+      "handled": true,
+      "executionCalls": 0,
+      "visibleReplyIncludes": "decisão estruturada inválida"
+    }
+  },
+  {
+    "name": "assistant_decision_rejects_empty_assistant_reply",
+    "rawReply": {
+      "type": "assistant_decision",
+      "intent": "calendar_delete",
+      "should_execute": true,
+      "assistant_reply": "   ",
+      "execution": {
+        "tool": "execute_calendar_operation",
+        "payload": {
+          "action": "delete",
+          "event_id": "evt_789"
+        }
+      }
+    },
+    "expect": {
+      "handled": true,
+      "executionCalls": 0,
+      "visibleReplyIncludes": "assistant_reply must be a non-empty string"
+    }
+  },
+  {
+    "name": "assistant_decision_rejects_invalid_create_semantics",
+    "rawReply": {
+      "type": "assistant_decision",
+      "intent": "calendar_create",
+      "should_execute": true,
+      "assistant_reply": "Criar sem campos mínimos.",
+      "execution": {
+        "tool": "execute_calendar_operation",
+        "payload": {
+          "action": "create",
+          "summary": "Reunião sem datas"
+        }
+      }
+    },
+    "expect": {
+      "handled": true,
+      "executionCalls": 0,
+      "visibleReplyIncludes": "Create operations require summary, start and end"
+    }
+  },
+  {
+    "name": "assistant_decision_rejects_invalid_update_semantics",
+    "rawReply": {
+      "type": "assistant_decision",
+      "intent": "calendar_update",
+      "should_execute": true,
+      "assistant_reply": "Atualizar sem event_id.",
+      "execution": {
+        "tool": "execute_calendar_operation",
+        "payload": {
+          "action": "update",
+          "summary": "Novo título"
+        }
+      }
+    },
+    "expect": {
+      "handled": true,
+      "executionCalls": 0,
+      "visibleReplyIncludes": "Update operations require event_id"
+    }
+  },
+  {
+    "name": "assistant_decision_rejects_invalid_delete_semantics",
+    "rawReply": {
+      "type": "assistant_decision",
+      "intent": "calendar_delete",
+      "should_execute": true,
+      "assistant_reply": "Excluir sem event_id.",
+      "execution": {
+        "tool": "execute_calendar_operation",
+        "payload": {
+          "action": "delete"
+        }
+      }
+    },
+    "expect": {
+      "handled": true,
+      "executionCalls": 0,
+      "visibleReplyIncludes": "Delete operations require event_id"
+    }
+  }
+]

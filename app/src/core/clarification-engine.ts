@@ -7,6 +7,7 @@ import {
   buildClarificationRuleProposal,
   buildClarifiedExecutionPrompt,
   looksLikeCalendarDeletePrompt,
+  looksLikeLowFrictionReadPrompt,
 } from "./clarification-rules.js";
 import {
   buildEventDraftFromPrompt,
@@ -22,16 +23,6 @@ function normalize(value: string): string {
     .toLowerCase()
     .replace(/\s+/g, " ")
     .trim();
-}
-
-function looksLikeReadOnlyCalendarReviewPrompt(prompt: string): boolean {
-  const normalized = normalize(prompt);
-  const hasCalendarSignal = ["agenda", "calendario", "compromisso", "evento"].some((token) => normalized.includes(token));
-  const hasTimeSignal = /\b\d{1,2}\/\d{1,2}(?:\/\d{2,4})?\b/.test(normalized)
-    || ["hoje", "amanha", "esta semana", "essa semana", "proxima semana", "semana que vem", "proximos 7 dias", "proximos sete dias", "segunda", "terca", "quarta", "quinta", "sexta", "sabado", "domingo"].some((token) => normalized.includes(token));
-  const hasReadIntent = ["veja", "mostre", "mostrar", "quais", "tenho", "olhe", "verifique", "analise"].some((token) => normalized.includes(token));
-  const hasWriteIntent = ["agende", "crie", "mova", "reagende", "delete", "apague", "cancele"].some((token) => normalized.includes(token));
-  return hasCalendarSignal && hasTimeSignal && hasReadIntent && !hasWriteIntent;
 }
 
 function stripCodeFences(value: string): string {
@@ -86,7 +77,7 @@ export class ClarificationEngine {
     prompt: string;
     intent: IntentResolution;
   }): Promise<ClarificationInboxItemRecord | null> {
-    if (looksLikeReadOnlyCalendarReviewPrompt(input.prompt)) {
+    if (looksLikeLowFrictionReadPrompt(input.prompt, input.intent)) {
       return null;
     }
 
@@ -174,6 +165,10 @@ export class ClarificationEngine {
 
   private buildHeuristicProposal(prompt: string, intent: IntentResolution): ClarificationProposal | null {
     const normalized = normalize(prompt);
+    if (looksLikeLowFrictionReadPrompt(prompt, intent)) {
+      return null;
+    }
+
     if (isGoogleEventCreatePrompt(prompt)) {
       const draftResult = buildEventDraftFromPrompt(prompt, this.defaultTimezone);
       if (draftResult.draft) {
@@ -258,6 +253,11 @@ export class ClarificationEngine {
     }
 
     return null;
+  }
+
+  shouldAutoExecuteAfterAnswer(item: ClarificationInboxItemRecord): boolean {
+    const intent = this.intentRouter.resolve(item.originalPrompt);
+    return looksLikeLowFrictionReadPrompt(item.originalPrompt, intent);
   }
 
   private async buildLlmProposal(prompt: string, intent: IntentResolution): Promise<ClarificationProposal | null> {

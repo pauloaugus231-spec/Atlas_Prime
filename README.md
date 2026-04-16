@@ -478,8 +478,11 @@ O pacote inicial de secretario operacional usa:
 Estado atual:
 
 - leitura e organizacao: implementadas
-- alteracao de agenda real: ainda nao ativada
-- escrita de tarefas ou contatos: ainda nao ativada
+- consultas simples de leitura usam defaults inteligentes e execucao direta quando o contexto ja basta; em agenda, o padrao e responder em modo resumo
+- escrita controlada de eventos no Google Calendar: implementada, dependendo de write scopes concedidos no OAuth
+- escrita de tarefas: implementada, dependendo de write scopes concedidos no OAuth
+- uso recomendado: consultas simples leem direto; criar, atualizar e excluir continuam com confirmacao explicita
+- provider externo opcional de raciocinio: pode devolver texto normal ou `assistant_decision`, mas o Atlas continua como executor local controlado e cai em fallback local se o provider falhar
 
 Plugins novos:
 
@@ -488,6 +491,10 @@ Plugins novos:
 - `list_google_tasks`
 - `search_google_contacts`
 - `daily_operational_brief`
+- `create_calendar_event`
+- `update_calendar_event`
+- `delete_calendar_event`
+- `execute_calendar_operation`
 
 Como configurar:
 
@@ -549,8 +556,11 @@ Procure o contato Maria Silva.
 Comportamento:
 
 - o `brief diário` cruza agenda, tarefas e foco salvo na memória operacional
-- a integração nasce em modo leitura
-- qualquer automação real de calendário ou tarefas entra depois, com confirmação explícita
+- a integração pode operar em modo leitura ou escrita, conforme os scopes concedidos no OAuth
+- no Telegram, uma camada externa de raciocínio pode devolver `assistant_decision` em JSON
+- o Atlas valida esse formato localmente e, por enquanto, só aceita execução estruturada com `execute_calendar_operation`
+- se `should_execute=false`, o Atlas responde apenas com `assistant_reply`
+- se `should_execute=true`, o Atlas executa localmente de forma controlada e só depois responde ao usuário
 
 ## CRM local e placar de receita
 

@@ -1,6 +1,15 @@
 import path from "node:path";
 import { existsSync, readFileSync } from "node:fs";
-import type { AltivaConfig, AppConfig, BriefingConfig, EmailConfig, GoogleMapsConfig, GoogleWorkspaceConfig, MediaConfig } from "../types/config.js";
+import type {
+  AltivaConfig,
+  AppConfig,
+  BriefingConfig,
+  EmailConfig,
+  ExternalReasoningConfig,
+  GoogleMapsConfig,
+  GoogleWorkspaceConfig,
+  MediaConfig,
+} from "../types/config.js";
 import type { LogLevel } from "../types/logger.js";
 
 const DEFAULT_OLLAMA_BASE_URL = "http://host.docker.internal:11434";
@@ -405,6 +414,18 @@ function buildBriefingConfig(env: NodeJS.ProcessEnv): BriefingConfig {
   };
 }
 
+function buildExternalReasoningConfig(env: NodeJS.ProcessEnv): ExternalReasoningConfig {
+  const baseUrl = env.EXTERNAL_REASONING_BASE_URL?.trim() || undefined;
+  const apiKey = env.EXTERNAL_REASONING_API_KEY?.trim() || undefined;
+  return {
+    enabled: parseBoolean(env.EXTERNAL_REASONING_ENABLED, false) && Boolean(baseUrl),
+    baseUrl,
+    apiKey,
+    timeoutMs: parsePositiveInteger(env.EXTERNAL_REASONING_TIMEOUT_MS, 20_000),
+    routeSimpleReads: parseBoolean(env.EXTERNAL_REASONING_ROUTE_SIMPLE_READS, false),
+  };
+}
+
 function buildMediaConfig(env: NodeJS.ProcessEnv): MediaConfig {
   const pexelsApiKey = env.PEXELS_API_KEY?.trim() || undefined;
   const pexelsEnabled = parseBoolean(env.PEXELS_ENABLED, Boolean(pexelsApiKey));
@@ -590,6 +611,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       dailyEditorialAutomationEnabled: parseBoolean(env.TELEGRAM_DAILY_EDITORIAL_AUTOMATION_ENABLED, false),
     },
     briefing: buildBriefingConfig(env),
+    externalReasoning: buildExternalReasoningConfig(env),
     email: baseEmailConfig,
     emailAccounts,
     google: baseGoogleConfig,

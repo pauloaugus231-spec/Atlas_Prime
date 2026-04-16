@@ -17,7 +17,7 @@ interface CreateCalendarEventParameters {
 export default defineToolPlugin<CreateCalendarEventParameters>({
   name: "create_calendar_event",
   description:
-    "Creates a Google Calendar event only after explicit user confirmation. Hidden from the model by default.",
+    "Creates a Google Calendar event in the selected account and calendar when write scopes are enabled.",
   exposeToModel: false,
   parameters: {
     type: "object",
@@ -84,6 +84,16 @@ export default defineToolPlugin<CreateCalendarEventParameters>({
         ok: false,
         account,
         status,
+        error: "Google workspace is not ready.",
+      };
+    }
+
+    if (!status.writeReady) {
+      return {
+        ok: false,
+        account,
+        status,
+        error: "Google workspace is authenticated but missing write scopes.",
       };
     }
 
