@@ -25,6 +25,7 @@
     "eval:calendar-context": "tsx scripts/eval-calendar-context.ts",
     "eval:voice-telegram": "tsx scripts/eval-voice-telegram.ts",
     "eval:whatsapp-conversation": "tsx scripts/eval-whatsapp-conversation.ts",
+    "eval:monitored-whatsapp": "tsx scripts/eval-monitored-whatsapp.ts",
     "eval:morning-brief": "tsx scripts/eval-morning-brief-format.ts",
     "eval:personal-memory": "tsx scripts/eval-personal-memory.ts",
     "dev": "tsx src/index.ts",

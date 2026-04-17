@@ -10,6 +10,8 @@ import type {
   GoogleMapsConfig,
   GoogleWorkspaceConfig,
   MediaConfig,
+  OperatorChannelBinding,
+  OperatorChannelMode,
   WhatsAppUnauthorizedMode,
   VoiceConfig,
   VoiceSttProvider,
@@ -123,6 +125,13 @@ function parseWhatsAppUnauthorizedMode(value: string | undefined): WhatsAppUnaut
   return value === "monitor" ? "monitor" : "ignore";
 }
 
+function parseOperatorChannelMode(value: string | undefined, fallback: OperatorChannelMode): OperatorChannelMode {
+  if (value === "direct_operator" || value === "backup_operator" || value === "monitored") {
+    return value;
+  }
+  return fallback;
+}
+
 function parseAllowedUserIds(value: string | undefined): number[] {
   if (!value?.trim()) {
     return [];
@@ -145,6 +154,11 @@ function parseStringList(value: string | undefined): string[] {
     .split(",")
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function normalizeDigits(value: string | undefined): string | undefined {
+  const normalized = (value ?? "").replace(/\D+/g, "");
+  return normalized || undefined;
 }
 
 function parseCommandMatrix(value: string | undefined, fallback: string[][]): string[][] {
@@ -600,6 +614,64 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       alias,
     });
   }
+  const telegramAllowedUserIds = parseAllowedUserIds(env.TELEGRAM_ALLOWED_USER_IDS);
+  const telegramOperatorChatIdRaw = env.TELEGRAM_OPERATOR_CHAT_ID?.trim();
+  const telegramOperatorChatId = telegramOperatorChatIdRaw
+    ? Number.parseInt(telegramOperatorChatIdRaw, 10)
+    : telegramAllowedUserIds[0];
+  const operatorId = normalizeAccountAlias(env.OPERATOR_ID ?? "operator") || "operator";
+  const operatorName = env.OPERATOR_NAME?.trim() || "Operator";
+  const operatorChannels: OperatorChannelBinding[] = [];
+
+  if (Number.isFinite(telegramOperatorChatId)) {
+    operatorChannels.push({
+      channelId: "telegram_operator",
+      operatorId,
+      provider: "telegram",
+      externalId: String(telegramOperatorChatId),
+      mode: parseOperatorChannelMode(env.TELEGRAM_OPERATOR_MODE, "backup_operator"),
+      enabled: true,
+      displayName: env.TELEGRAM_OPERATOR_DISPLAY_NAME?.trim() || "Telegram operador",
+    });
+  }
+
+  const whatsappOperatorNumber = normalizeDigits(env.WHATSAPP_OPERATOR_NUMBER);
+  if (whatsappOperatorNumber) {
+    operatorChannels.push({
+      channelId: "whatsapp_operator",
+      operatorId,
+      provider: "whatsapp",
+      externalId: whatsappOperatorNumber,
+      mode: parseOperatorChannelMode(env.WHATSAPP_OPERATOR_MODE, "direct_operator"),
+      enabled: true,
+      displayName: env.WHATSAPP_OPERATOR_DISPLAY_NAME?.trim() || "WhatsApp operador",
+    });
+  }
+
+  const monitoredInstances = parseStringList(
+    env.WHATSAPP_MONITORED_INSTANCES?.trim()
+      || env.EVOLUTION_INSTANCE_NAME?.trim()
+      || undefined,
+  );
+  for (const instanceName of monitoredInstances) {
+    operatorChannels.push({
+      channelId: `whatsapp_monitored_${instanceName}`,
+      operatorId,
+      provider: "whatsapp",
+      externalId: instanceName,
+      mode: "monitored",
+      enabled: true,
+      displayName: `WhatsApp monitorado ${instanceName}`,
+      metadata: {
+        instanceName,
+      },
+    });
+  }
+
+  const preferredAlertChannelId = env.OPERATOR_ALERT_CHANNEL?.trim()
+    || operatorChannels.find((item) => item.provider === "telegram")?.channelId
+    || operatorChannels.find((item) => item.mode === "direct_operator")?.channelId
+    || undefined;
 
   return {
     paths: {
@@ -639,7 +711,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     },
     telegram: {
       botToken: env.TELEGRAM_BOT_TOKEN?.trim() || undefined,
-      allowedUserIds: parseAllowedUserIds(env.TELEGRAM_ALLOWED_USER_IDS),
+      allowedUserIds: telegramAllowedUserIds,
       pollTimeoutSeconds: parsePositiveInteger(env.TELEGRAM_POLL_TIMEOUT_SECONDS, 30),
       morningBriefEnabled: parseBoolean(env.TELEGRAM_MORNING_BRIEF_ENABLED, true),
       dailyEditorialAutomationEnabled: parseBoolean(env.TELEGRAM_DAILY_EDITORIAL_AUTOMATION_ENABLED, false),
@@ -672,6 +744,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       maxExecutionSeconds: parsePositiveInteger(env.SUPABASE_MAC_MAX_EXEC_SECONDS, 300),
       allowedCommands: parseCommandMatrix(env.SUPABASE_MAC_ALLOWED_COMMANDS, defaultMacWorkerCommands),
       allowedCwds: parseStringList(env.SUPABASE_MAC_ALLOWED_CWDS ?? `${workspaceDir},${appHome}`),
+    },
+    operator: {
+      operatorId,
+      name: operatorName,
+      preferredAlertChannelId,
+      channels: operatorChannels,
     },
     whatsapp: {
       enabled: parseBoolean(env.WHATSAPP_ENABLED, true)

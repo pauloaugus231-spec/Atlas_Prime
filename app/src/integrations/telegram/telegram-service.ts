@@ -20,6 +20,12 @@ import {
   isGoogleEventCreatePrompt,
   isGoogleTaskCreatePrompt,
 } from "../../core/google-draft-utils.js";
+import {
+  buildMonitoredChannelAlertReply,
+  resolveMonitoredAlertReplyAction,
+  type MonitoredWhatsAppReplyDraft,
+  type PendingMonitoredChannelAlertDraft,
+} from "../../core/monitored-channel-alerts.js";
 import { extractLatestShortPackage, type ParsedShortPackage } from "../../core/short-video-package.js";
 import { parseAssistantDecisionReply } from "../../core/assistant-decision.js";
 import type { AppConfig } from "../../types/config.js";
@@ -104,6 +110,7 @@ interface PendingYouTubePublishDraft {
 type PendingActionDraft =
   | PendingEmailDraft
   | PendingWhatsAppReplyDraft
+  | PendingMonitoredChannelAlertDraft
   | PendingYouTubePublishDraft
   | PendingGoogleTaskDraft
   | PendingGoogleEventDraft
@@ -1069,6 +1076,22 @@ function parsePendingActionDraftPayload(payload: string): PendingActionDraft | u
     }
 
     if (
+      parsed.kind === "monitored_channel_alert" &&
+      parsed.sourceProvider === "whatsapp" &&
+      typeof parsed.sourceChannelId === "string" &&
+      typeof parsed.sourceDisplayName === "string" &&
+      typeof parsed.sourceRemoteJid === "string" &&
+      typeof parsed.sourceNumber === "string" &&
+      typeof parsed.sourceText === "string" &&
+      typeof parsed.classification === "string" &&
+      typeof parsed.summary === "string" &&
+      Array.isArray(parsed.reasons) &&
+      typeof parsed.suggestedAction === "string"
+    ) {
+      return parsed as unknown as PendingMonitoredChannelAlertDraft;
+    }
+
+    if (
       parsed.kind === "youtube_publish" &&
       typeof parsed.contentItemId === "number" &&
       typeof parsed.filePath === "string" &&
@@ -1310,6 +1333,10 @@ function buildCompactPendingActionReply(draft: PendingActionDraft): string | und
     ].join("\n");
   }
 
+  if (draft.kind === "monitored_channel_alert") {
+    return buildMonitoredChannelAlertReply(draft);
+  }
+
   if (draft.kind === "google_event") {
     return [
       `Evento pronto: ${draft.summary}.`,
@@ -1369,6 +1396,9 @@ function buildPendingActionSubject(draft: PendingActionDraft): string {
   }
   if (draft.kind === "whatsapp_reply") {
     return `WhatsApp${draft.account ? ` ${draft.account}` : ""}: ${draft.pushName ?? draft.number}`;
+  }
+  if (draft.kind === "monitored_channel_alert") {
+    return `Alerta monitorado${draft.sourceAccount ? ` ${draft.sourceAccount}` : ""}: ${draft.sourcePushName ?? draft.sourceNumber}`;
   }
   if (draft.kind === "google_task") {
     return `Tarefa Google: ${draft.title}`;
@@ -2465,7 +2495,8 @@ export class TelegramService {
       this.clearPendingActionDraft(message.chat.id);
     }
 
-    const pendingDraft = this.pendingActionDrafts.get(message.chat.id);
+    const pendingDraft = this.pendingActionDrafts.get(message.chat.id)
+      ?? this.tryHydrateContinuablePendingDraft(message.chat.id);
     if (pendingDraft && isDraftDiscardRequest(normalizedText)) {
       this.clearPendingActionDraft(message.chat.id, "discarded");
       await this.sendText(message.chat.id, "Rascunho pendente descartado. Nenhuma ação foi executada.", {
@@ -2473,6 +2504,13 @@ export class TelegramService {
         disable_web_page_preview: true,
       });
       return;
+    }
+
+    if (pendingDraft?.kind === "monitored_channel_alert") {
+      const handled = await this.handleMonitoredChannelAlert(message, normalizedText, pendingDraft);
+      if (handled) {
+        return;
+      }
     }
 
     if (pendingDraft?.kind === "google_event" || pendingDraft?.kind === "google_event_update") {
@@ -3888,6 +3926,10 @@ export class TelegramService {
   private async executePendingActionDraft(
     pendingDraft: PendingActionDraft,
   ): Promise<{ ok: boolean; reply: string; rawResult: unknown }> {
+    if (pendingDraft.kind === "monitored_channel_alert") {
+      throw new Error("Alerta monitorado precisa ser convertido em evento, tarefa, resposta ou registro antes da execução.");
+    }
+
     const execution =
       pendingDraft.kind === "email_reply"
         ? await this.core.executeToolDirect("send_email_reply", {
@@ -4110,6 +4152,127 @@ export class TelegramService {
       reply,
       rawResult: execution.rawResult,
     };
+  }
+
+  private async handleMonitoredChannelAlert(
+    message: TelegramMessage,
+    normalizedText: string,
+    pendingDraft: PendingMonitoredChannelAlertDraft,
+  ): Promise<boolean> {
+    if (isClearlyNewTopLevelIntent(normalizedText)) {
+      this.clearPendingActionDraft(message.chat.id, "superseded");
+      return false;
+    }
+
+    const resolution = resolveMonitoredAlertReplyAction(pendingDraft, normalizedText);
+    if (resolution.kind === "clarify") {
+      await this.sendText(
+        message.chat.id,
+        resolution.message ?? "Responda com `agenda`, `cria tarefa`, `responda`, `resumo`, `registrar`, `ignora` ou `sim`.",
+        {
+          reply_to_message_id: message.message_id,
+          disable_web_page_preview: true,
+        },
+      );
+      return true;
+    }
+
+    if (resolution.kind === "ignore") {
+      this.clearPendingActionDraft(message.chat.id, "discarded");
+      await this.sendText(
+        message.chat.id,
+        "Alerta monitorado ignorado. Nenhuma ação foi executada.",
+        {
+          reply_to_message_id: message.message_id,
+          disable_web_page_preview: true,
+        },
+      );
+      return true;
+    }
+
+    if (resolution.kind === "summary") {
+      await this.sendText(
+        message.chat.id,
+        [
+          "Resumo do alerta monitorado:",
+          `- Canal: ${pendingDraft.sourceDisplayName}`,
+          `- Contato: ${pendingDraft.sourcePushName ?? pendingDraft.sourceNumber}`,
+          `- Classificação: ${pendingDraft.classification}`,
+          ...(pendingDraft.reasons.length > 0 ? [`- Sinais: ${pendingDraft.reasons.join(" | ")}`] : []),
+          "",
+          pendingDraft.sourceText,
+          "",
+          "Se quiser agir, responda com `agenda`, `cria tarefa`, `responda`, `registrar` ou `ignora`.",
+        ].join("\n"),
+        {
+          reply_to_message_id: message.message_id,
+          disable_web_page_preview: true,
+        },
+      );
+      return true;
+    }
+
+    if (resolution.kind === "register") {
+      this.clearPendingActionDraft(message.chat.id, "executed");
+      await this.sendText(
+        message.chat.id,
+        "Registrado no histórico operacional. Nenhuma ação externa foi executada.",
+        {
+          reply_to_message_id: message.message_id,
+          disable_web_page_preview: true,
+        },
+      );
+      return true;
+    }
+
+    const nextDraft =
+      resolution.kind === "event"
+        ? pendingDraft.eventDraft
+        : resolution.kind === "task"
+          ? pendingDraft.taskDraft
+          : resolution.kind === "reply"
+            ? pendingDraft.replyDraft && ({
+                kind: "whatsapp_reply",
+                instanceName: pendingDraft.replyDraft.instanceName,
+                account: pendingDraft.replyDraft.account,
+                remoteJid: pendingDraft.replyDraft.remoteJid,
+                number: pendingDraft.replyDraft.number,
+                pushName: pendingDraft.replyDraft.pushName,
+                inboundText: pendingDraft.replyDraft.inboundText,
+                replyText: pendingDraft.replyDraft.replyText,
+                relationship: pendingDraft.replyDraft.relationship,
+                persona: pendingDraft.replyDraft.persona,
+              } satisfies PendingWhatsAppReplyDraft)
+            : undefined;
+
+    if (!nextDraft) {
+      await this.sendText(
+        message.chat.id,
+        "Ainda não tenho base suficiente para montar esse rascunho com segurança.",
+        {
+          reply_to_message_id: message.message_id,
+          disable_web_page_preview: true,
+        },
+      );
+      return true;
+    }
+
+    this.clearPendingActionDraft(message.chat.id, "executed");
+    this.pendingActionDrafts.set(message.chat.id, nextDraft);
+    const approval = this.persistPendingApproval(message.chat.id, nextDraft);
+    await this.sendText(
+      message.chat.id,
+      buildCompactPendingActionReply(nextDraft)
+        ?? (resolution.kind === "reply" && "replyText" in nextDraft
+          ? `Rascunho de resposta pronto: ${nextDraft.replyText}`
+          : "Rascunho pronto."),
+      {
+        reply_to_message_id: message.message_id,
+        disable_web_page_preview: true,
+        reply_markup: buildApprovalInlineKeyboard(approval.id),
+      },
+    );
+    return true;
   }
 
   private async handlePendingActionConfirmation(
@@ -4484,6 +4647,9 @@ export class TelegramService {
     if (!hydratedDraft) {
       return undefined;
     }
+    if (hydratedDraft.kind === "monitored_channel_alert") {
+      return undefined;
+    }
 
     this.pendingActionDrafts.set(chatId, hydratedDraft);
     this.logger.info("Hydrated pending action draft from approval inbox for explicit confirmation", {
@@ -4513,6 +4679,35 @@ export class TelegramService {
       account: draft.account,
     });
     return draft;
+  }
+
+  private tryHydrateContinuablePendingDraft(chatId: number): PendingActionDraft | undefined {
+    const pendingDraft = this.pendingActionDrafts.get(chatId);
+    if (pendingDraft) {
+      return pendingDraft;
+    }
+
+    const latestApproval = this.approvalEngine.getLatestPending(chatId);
+    if (!latestApproval) {
+      return undefined;
+    }
+
+    const approvalUpdatedAt = Date.parse(latestApproval.updatedAt || latestApproval.createdAt);
+    if (Number.isFinite(approvalUpdatedAt) && Date.now() - approvalUpdatedAt > RECENT_PENDING_CONFIRMATION_WINDOW_MS) {
+      return undefined;
+    }
+
+    const hydratedDraft = parsePendingActionDraftPayload(latestApproval.draftPayload);
+    if (!hydratedDraft || hydratedDraft.kind !== "monitored_channel_alert") {
+      return undefined;
+    }
+
+    this.pendingActionDrafts.set(chatId, hydratedDraft);
+    this.logger.info("Hydrated continuable monitored alert draft from approval inbox", {
+      chatId,
+      subject: latestApproval.subject,
+    });
+    return hydratedDraft;
   }
 
   private async resolveStructuredAssistantDecisionReply(rawReply: string, chatId?: number): Promise<{

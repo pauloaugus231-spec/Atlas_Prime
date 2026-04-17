@@ -499,7 +499,7 @@ Estado atual:
 - existe politica explicita de autonomia por intencao: leituras simples rodam direto; escrita e acoes destrutivas continuam confirmadas
 - o Telegram suporta modo operacional de rua/plantao por chat, e esse modo agora afeta briefing, agenda do dia/amanha, conflitos e proximas acoes com respostas mais compactas
 - o Telegram aceita voz assincrona quando `VOICE_ENABLED=true`: o Atlas baixa o audio, transcreve para texto, processa pelo fluxo normal e responde em texto; resposta em audio/TTS fica para uma etapa futura
-- o WhatsApp via Evolution API pode operar como canal principal 1:1 quando `WHATSAPP_SIDECAR_ENABLED=true` e `WHATSAPP_CONVERSATION_ENABLED=true`; nesse modo, mensagens de texto entram no mesmo core do Atlas, com memoria curta por chat, confirmacoes locais e execucao controlada de agenda/tasks; se `WHATSAPP_ALLOWED_NUMBERS` estiver preenchido e `WHATSAPP_UNAUTHORIZED_MODE=monitor`, esses numeros viram operadores diretos e os demais contatos da mesma instância seguem para monitoramento/triagem
+- o Atlas agora distingue canais diretos do operador e canais monitorados: Telegram continua como operador/admin maduro, e o WhatsApp institucional pode operar como canal monitorado que gera alertas curtos no canal pessoal do operador antes de qualquer ação
 - o Atlas consegue revisar conflitos, duplicidades e nomes inconsistentes na agenda sem alterar nada sozinho
 - a memoria pessoal operacional agora fica separada da memoria operacional geral para guardar foco salvo, rotina e regras praticas; alem dos itens livres, existe um perfil operacional base editavel explicitamente pelo Telegram
 - provider externo opcional de raciocinio: suporta `EXTERNAL_REASONING_MODE=off|smart|always`; em `off` fica desligado, em `smart` segue a politica por intencao e em `always` tenta o provider em toda mensagem antes do fluxo local; ele pode devolver texto normal ou `assistant_decision`, e o Atlas continua como executor local controlado de operacoes estruturadas sob whitelist; se o provider falhar, expirar ou devolver resposta invalida, cai em fallback local automaticamente
@@ -610,37 +610,53 @@ VOICE_OPENAI_MODEL=gpt-4o-mini-transcribe
 
 Para um caminho local/open, use `VOICE_STT_PROVIDER=command` com `VOICE_STT_COMMAND` e `VOICE_STT_ARGS`; o comando deve devolver texto no stdout ou JSON simples com `{ "text": "..." }`. Em falha de download, limite ou transcricao, o Atlas responde com erro curto e nao quebra o fluxo normal do Telegram.
 
-## WhatsApp como canal principal
+## Canais diretos e monitorados
 
-O sidecar de WhatsApp usa Evolution API e pode operar em dois modos:
+O Atlas agora suporta uma camada simples de operador unico com registry local de canais:
 
-- conversa 1:1: `WHATSAPP_CONVERSATION_ENABLED=true`
-- triagem com aprovacao no Telegram: `WHATSAPP_CONVERSATION_ENABLED=false`
+- `direct_operator`: canal direto de conversa do operador
+- `backup_operator`: canal secundario/admin do operador
+- `monitored`: canal observado pelo Atlas, sem resposta automatica por padrao
 
-No modo de conversa, o Atlas recebe texto do WhatsApp, normaliza canal/chat/usuario, passa pelo mesmo `AgentCore` usado no Telegram e responde de volta pelo Evolution. Agenda, Tasks, memoria pessoal, briefing, modo rua/plantao e `assistant_decision` continuam executados localmente pelo Atlas, sem execucao arbitraria fora da whitelist.
+No uso atual recomendado:
 
-Tambem existe o modo hibrido para usar o WhatsApp institucional como inbox monitorado e o seu numero pessoal como operador direto:
+- Telegram: `backup_operator` ou operador principal
+- WhatsApp institucional via Evolution: `monitored`
+- WhatsApp pessoal do operador pode virar `direct_operator` depois, quando fizer sentido
 
-- `WHATSAPP_ALLOWED_NUMBERS` define quais numeros podem conversar direto com o Atlas
-- `WHATSAPP_UNAUTHORIZED_MODE=monitor` faz os demais contatos da mesma instância entrarem em monitoramento/triagem, em vez de serem ignorados
-- isso permite conectar uma unica instância institucional na Evolution e falar com o Atlas a partir do seu WhatsApp pessoal, enquanto o restante da caixa institucional continua monitorada
-- nesta etapa, a triagem/monitoramento continua chegando no fluxo operacional existente do Telegram, entao `WHATSAPP_NOTIFY_TELEGRAM_CHAT_ID` ou um `TELEGRAM_ALLOWED_USER_IDS` valido ainda e necessario quando o modo `monitor` estiver ativo
+Quando uma mensagem entra em um canal monitorado, o Atlas:
+
+- ingere e registra a mensagem
+- classifica o sinal operacional (`ignore`, `attention`, `action_needed`, `possible_event`, `possible_task`, `possible_reply`)
+- nao responde automaticamente no canal monitorado
+- envia um alerta curto ao canal pessoal configurado do operador
+- espera sua continuação com comandos curtos como `agenda`, `cria tarefa`, `responda`, `resumo`, `registrar`, `ignora` ou `sim`
+
+Isso deixa o institucional como inbox observado e o Telegram como canal maduro de operador, mantendo execucao local controlada de agenda, tasks e respostas.
 
 Config minima:
 
 ```env
+OPERATOR_ID=paulo
+OPERATOR_NAME=Paulo
+OPERATOR_ALERT_CHANNEL=telegram_operator
+TELEGRAM_OPERATOR_CHAT_ID=123456789
+TELEGRAM_OPERATOR_MODE=backup_operator
+
 WHATSAPP_ENABLED=true
 WHATSAPP_SIDECAR_ENABLED=true
-WHATSAPP_CONVERSATION_ENABLED=true
-WHATSAPP_ALLOWED_NUMBERS=5551999999999
-WHATSAPP_UNAUTHORIZED_MODE=monitor
+WHATSAPP_CONVERSATION_ENABLED=false
+WHATSAPP_MONITORED_INSTANCES=atlas_institucional
 WHATSAPP_IGNORE_GROUPS=true
+WHATSAPP_DEFAULT_ACCOUNT=abordagem
+WHATSAPP_INSTANCE_ACCOUNTS=atlas_institucional:abordagem
+
 EVOLUTION_API_URL=http://evolution-api:8080
 EVOLUTION_API_KEY=
-EVOLUTION_INSTANCE_NAME=atlas_prime
+EVOLUTION_INSTANCE_NAME=atlas_institucional
 ```
 
-Em producao na EC2, se `WHATSAPP_ENABLED=true` e `WHATSAPP_SIDECAR_ENABLED=true`, o deploy ativa automaticamente o profile `whatsapp`. Grupos sao ignorados por padrao nesta etapa. Para liberar apenas numeros especificos, preencha `WHATSAPP_ALLOWED_NUMBERS` com numeros em formato internacional, separados por virgula. Se quiser que numeros nao listados virem fila monitorada da instância institucional, use `WHATSAPP_UNAUTHORIZED_MODE=monitor`; para seguir ignorando esses contatos, mantenha `ignore`.
+Em producao na EC2, se `WHATSAPP_ENABLED=true` e `WHATSAPP_SIDECAR_ENABLED=true`, o deploy ativa automaticamente o profile `whatsapp`. Grupos continuam ignorados por padrao nesta etapa. O fluxo monitorado foi pensado para evitar automacao agressiva: o Atlas alerta o operador no canal pessoal e so executa algo depois da sua continuação/confirmacao.
 
 ## CRM local e placar de receita
 

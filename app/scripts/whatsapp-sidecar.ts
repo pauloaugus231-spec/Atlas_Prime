@@ -1,12 +1,8 @@
 import http from "node:http";
 import { createAgentCore } from "../src/core/create-agent-core.js";
-import {
-  buildEventDraftFromPrompt,
-  formatDraftDateTime,
-  type PendingGoogleEventDraft,
-} from "../src/core/google-draft-utils.js";
-import { matchPersonalCalendarTerms } from "../src/core/calendar-relevance.js";
+import { resolveIncomingWhatsAppChannel } from "../src/core/operator-profile.js";
 import { describeWhatsAppRoute, resolveWhatsAppInboundMode } from "../src/core/whatsapp-routing.js";
+import { OperatorAlertDispatcher } from "../src/integrations/operator/operator-alert-dispatcher.js";
 import { TelegramApi } from "../src/integrations/telegram/telegram-api.js";
 import {
   EvolutionApiClient,
@@ -15,137 +11,9 @@ import {
   type EvolutionWebhookPayload,
 } from "../src/integrations/whatsapp/evolution-api.js";
 import { WhatsAppConversationService } from "../src/integrations/whatsapp/whatsapp-conversation-service.js";
+import { WhatsAppMonitorService } from "../src/integrations/whatsapp/whatsapp-monitor-service.js";
 import type { AppConfig } from "../src/types/config.js";
 import type { Logger } from "../src/types/logger.js";
-
-type PendingWhatsAppReplyDraft = {
-  kind: "whatsapp_reply";
-  instanceName?: string;
-  account?: string;
-  remoteJid: string;
-  number: string;
-  pushName?: string;
-  inboundText: string;
-  replyText: string;
-  relationship?: string;
-  persona?: string;
-};
-
-function buildApprovalInlineKeyboard(id: number) {
-  return {
-    inline_keyboard: [[
-      { text: "Enviar", callback_data: `approval:send:${id}` },
-      { text: "Editar", callback_data: `approval:edit:${id}` },
-      { text: "Ignorar", callback_data: `approval:discard:${id}` },
-    ]],
-  };
-}
-
-function normalizeDraftText(value: string): string {
-  return value
-    .replace(/^["'`]+|["'`]+$/g, "")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
-}
-
-function extractReplyCandidate(text: string): string {
-  const trimmed = text.trim();
-  const match = trimmed.match(/rascunho(?: de resposta)?:\s*([\s\S]*)$/i);
-  if (match?.[1]?.trim()) {
-    return normalizeDraftText(match[1]);
-  }
-  return normalizeDraftText(trimmed);
-}
-
-function buildWhatsAppDraftPrompt(input: {
-  pushName?: string;
-  number: string;
-  text: string;
-  relationship: string;
-  persona: string;
-  actionPolicy: string;
-}): string {
-  return [
-    "Você está preparando um rascunho curto de resposta para WhatsApp.",
-    "Não explique seu raciocínio. Não use markdown. Não diga que vai enviar.",
-    "Adapte o tom à persona e à relação.",
-    `Relação: ${input.relationship}`,
-    `Persona: ${input.persona}`,
-    `Política: ${input.actionPolicy}`,
-    `Contato: ${input.pushName ?? input.number}`,
-    `Mensagem recebida: ${input.text}`,
-    "Responda apenas com o texto final sugerido para envio.",
-  ].join("\n");
-}
-
-function getGoogleAccountConfig(config: AppConfig, accountAlias: string) {
-  return accountAlias === "primary"
-    ? config.google
-    : (config.googleAccounts[accountAlias] ?? config.google);
-}
-
-function parseEventTime(value: string | null | undefined): number | null {
-  if (!value) {
-    return null;
-  }
-  const timestamp = new Date(value).getTime();
-  return Number.isNaN(timestamp) ? null : timestamp;
-}
-
-function findCalendarConflicts(
-  events: Array<{ summary: string; start: string | null; end: string | null }>,
-  draft: PendingGoogleEventDraft,
-): Array<{ summary: string; start: string | null; end: string | null }> {
-  const draftStart = parseEventTime(draft.start);
-  const draftEnd = parseEventTime(draft.end);
-  if (draftStart == null || draftEnd == null) {
-    return [];
-  }
-
-  return events.filter((event) => {
-    const eventStart = parseEventTime(event.start);
-    const eventEnd = parseEventTime(event.end);
-    if (eventStart == null || eventEnd == null) {
-      return false;
-    }
-    return draftStart < eventEnd && draftEnd > eventStart;
-  });
-}
-
-function buildCalendarSuggestionMessage(input: {
-  draft: PendingGoogleEventDraft;
-  accountAlias: string;
-  instanceName?: string;
-  pushName?: string;
-  number: string;
-  inboundText: string;
-  conflicts: Array<{ summary: string; start: string | null; end: string | null }>;
-  personallyRelevant: boolean;
-}): string {
-  return [
-    "Possível compromisso detectado no WhatsApp.",
-    `- Contato: ${input.pushName ?? input.number}`,
-    `- Conta operacional: ${input.accountAlias}`,
-    ...(input.instanceName ? [`- Instância: ${input.instanceName}`] : []),
-    `- Título: ${input.draft.summary}`,
-    `- Início: ${formatDraftDateTime(input.draft.start, input.draft.timezone) ?? input.draft.start}`,
-    `- Fim: ${formatDraftDateTime(input.draft.end, input.draft.timezone) ?? input.draft.end}`,
-    ...(input.draft.location ? [`- Local: ${input.draft.location}`] : []),
-    `- Relevante para você: ${input.personallyRelevant ? "sim" : "não"}`,
-    ...(input.conflicts.length
-      ? [
-          `- Conflitos detectados: ${input.conflicts.length}`,
-          ...input.conflicts.slice(0, 3).map((event) =>
-            `  - ${event.summary} | ${formatDraftDateTime(event.start ?? undefined, input.draft.timezone) ?? event.start ?? "sem horário"}`
-          ),
-        ]
-      : ["- Conflitos detectados: 0"]),
-    "",
-    `Mensagem recebida: ${input.inboundText}`,
-    "",
-    "Se fizer sentido, confirme com `Agendar` ou ajuste antes de aprovar.",
-  ].join("\n");
-}
 
 async function readJsonBody(request: http.IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
@@ -215,7 +83,6 @@ async function main(): Promise<void> {
     communicationRouter,
     contacts,
     whatsappMessages,
-    googleWorkspaces,
   } = await createAgentCore();
 
   const evolution = new EvolutionApiClient(
@@ -252,6 +119,22 @@ async function main(): Promise<void> {
     core,
     evolution,
     whatsappMessages,
+  );
+  const alertDispatcher = new OperatorAlertDispatcher(
+    config,
+    logger.child({ scope: "operator-alerts" }),
+    telegramApi,
+    evolution,
+  );
+  const monitor = new WhatsAppMonitorService(
+    config,
+    logger.child({ scope: "whatsapp-monitor" }),
+    approvals,
+    contacts,
+    communicationRouter,
+    whatsappMessages,
+    client,
+    alertDispatcher,
   );
 
   const server = http.createServer(async (request, response) => {
@@ -299,12 +182,21 @@ async function main(): Promise<void> {
         instanceName: payload.instance ?? config.whatsapp.defaultInstanceName,
         text: inboundText,
       });
-      const inboundMode = resolveWhatsAppInboundMode(config.whatsapp, { number });
+      const operatorChannel = resolveIncomingWhatsAppChannel(config.operator, {
+        instanceName: route.instanceName,
+        senderNumber: number,
+      });
+      const inboundMode = operatorChannel?.mode === "monitored"
+        ? "monitor"
+        : operatorChannel && (operatorChannel.mode === "direct_operator" || operatorChannel.mode === "backup_operator")
+          ? "conversation"
+          : resolveWhatsAppInboundMode(config.whatsapp, { number });
       logger.info("WhatsApp inbound routed", {
         instanceName: route.instanceName,
         account: route.accountAlias,
         number,
         inboundMode,
+        operatorChannelId: operatorChannel?.channelId,
       });
 
       if (inboundMode === "conversation") {
@@ -332,180 +224,17 @@ async function main(): Promise<void> {
         response.end(JSON.stringify({ ok: false, message: "telegram approval chat not configured" }));
         return;
       }
-
-      whatsappMessages.saveMessage({
+      const monitored = await monitor.handleInboundText({
         instanceName: route.instanceName,
+        accountAlias: route.accountAlias,
         remoteJid: message.remoteJid,
         number,
         pushName: message.pushName,
-        direction: "inbound",
         text: inboundText,
         createdAt: payload.date_time,
       });
-      logger.info("WhatsApp webhook ingested inbound message", {
-        instanceName: route.instanceName,
-        account: route.accountAlias,
-        number,
-        pushName: message.pushName,
-        event: payload.event,
-      });
-
-      const classification = communicationRouter.classify({
-        channel: "whatsapp",
-        identifier: number,
-        displayName: message.pushName,
-        text: inboundText,
-      });
-
-      contacts.upsertContact({
-        channel: "whatsapp",
-        identifier: number,
-        displayName: message.pushName ?? number,
-        relationship: classification.relationship,
-        persona: classification.persona,
-        priority: classification.priority,
-        tags: [
-          `account:${route.accountAlias}`,
-          ...(route.instanceName ? [`instance:${route.instanceName}`] : []),
-        ],
-        source: "whatsapp_sidecar",
-      });
-
-      if (classification.actionPolicy === "ignore") {
-        response.writeHead(202, { "Content-Type": "application/json" });
-        response.end(JSON.stringify({ ok: true, ignored: true, reason: "router_ignore" }));
-        return;
-      }
-
-      const llm = await client.chat({
-        messages: [
-          {
-            role: "system",
-            content: "Você é o roteador de respostas do Atlas para WhatsApp. Gere somente o texto final sugerido.",
-          },
-          {
-            role: "user",
-            content: buildWhatsAppDraftPrompt({
-              pushName: message.pushName,
-              number,
-              text: inboundText,
-              relationship: classification.relationship,
-              persona: classification.persona,
-              actionPolicy: classification.actionPolicy,
-            }),
-          },
-        ],
-      });
-
-      const draft: PendingWhatsAppReplyDraft = {
-        kind: "whatsapp_reply",
-        instanceName: route.instanceName,
-        account: route.accountAlias,
-        remoteJid: message.remoteJid,
-        number,
-        pushName: message.pushName,
-        inboundText,
-        replyText: extractReplyCandidate(llm.message.content),
-        relationship: classification.relationship,
-        persona: classification.persona,
-      };
-
-      const approval = approvals.createPending({
-        chatId: telegramChatId,
-        channel: "whatsapp",
-        actionKind: draft.kind,
-        subject: `WhatsApp ${route.accountAlias}: ${message.pushName ?? number}`,
-        draftPayload: JSON.stringify(draft),
-      });
-
-      if (telegramApi) {
-        await telegramApi.sendMessage(
-          telegramChatId,
-          [
-            "Nova triagem WhatsApp.",
-            `- Contato: ${message.pushName ?? number}`,
-            `- Número: ${number}`,
-            `- Conta operacional: ${route.accountAlias}`,
-            ...(route.instanceName ? [`- Instância: ${route.instanceName}`] : []),
-            `- Relação: ${classification.relationship}`,
-            `- Persona: ${classification.persona}`,
-            `- Política: ${classification.actionPolicy}`,
-            `- Mensagem recebida: ${inboundText}`,
-            "",
-            "Rascunho sugerido:",
-            draft.replyText,
-          ].join("\n"),
-          {
-            disable_web_page_preview: true,
-            reply_markup: buildApprovalInlineKeyboard(approval.id),
-          },
-        );
-      }
-
-      try {
-        const googleAccountConfig = getGoogleAccountConfig(config, route.accountAlias);
-        const eventDraftResult = buildEventDraftFromPrompt(inboundText, googleAccountConfig.defaultTimezone);
-        if (eventDraftResult.draft) {
-          const calendarDraft: PendingGoogleEventDraft = {
-            ...eventDraftResult.draft,
-            account: route.accountAlias,
-            calendarId: googleAccountConfig.calendarId,
-          };
-          const conflicts = findCalendarConflicts(
-            await googleWorkspaces.getWorkspace(route.accountAlias).listEventsInWindow({
-              timeMin: calendarDraft.start,
-              timeMax: calendarDraft.end,
-              maxResults: 5,
-              calendarId: googleAccountConfig.calendarId,
-            }),
-            calendarDraft,
-          );
-          const personallyRelevant = matchPersonalCalendarTerms({
-            account: route.accountAlias,
-            summary: calendarDraft.summary,
-            description: calendarDraft.description,
-            location: calendarDraft.location,
-          }).length > 0;
-
-          const eventApproval = approvals.createPending({
-            chatId: telegramChatId,
-            channel: "whatsapp",
-            actionKind: calendarDraft.kind,
-            subject: `Agenda ${route.accountAlias}: ${calendarDraft.summary}`,
-            draftPayload: JSON.stringify(calendarDraft),
-          });
-
-          if (telegramApi) {
-            await telegramApi.sendMessage(
-              telegramChatId,
-              buildCalendarSuggestionMessage({
-                draft: calendarDraft,
-                accountAlias: route.accountAlias,
-                instanceName: route.instanceName,
-                pushName: message.pushName,
-                number,
-                inboundText,
-                conflicts,
-                personallyRelevant,
-              }),
-              {
-                disable_web_page_preview: true,
-                reply_markup: buildApprovalInlineKeyboard(eventApproval.id),
-              },
-            );
-          }
-        }
-      } catch (error) {
-        logger.warn("WhatsApp sidecar could not prepare calendar suggestion", {
-          account: route.accountAlias,
-          instanceName: route.instanceName,
-          number,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-
-      response.writeHead(200, { "Content-Type": "application/json" });
-      response.end(JSON.stringify({ ok: true, approvalId: approval.id }));
+      response.writeHead(monitored.ignored ? 202 : 200, { "Content-Type": "application/json" });
+      response.end(JSON.stringify(monitored));
     } catch (error) {
       logger.error("WhatsApp sidecar webhook failed", {
         error: error instanceof Error ? error.message : String(error),

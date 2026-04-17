@@ -59,6 +59,26 @@ export interface BriefingConfig {
 
 export type ExternalReasoningMode = "off" | "smart" | "always";
 export type WhatsAppUnauthorizedMode = "ignore" | "monitor";
+export type OperatorChannelProvider = "telegram" | "whatsapp";
+export type OperatorChannelMode = "direct_operator" | "backup_operator" | "monitored";
+
+export interface OperatorChannelBinding {
+  channelId: string;
+  operatorId: string;
+  provider: OperatorChannelProvider;
+  externalId: string;
+  mode: OperatorChannelMode;
+  enabled: boolean;
+  displayName: string;
+  metadata?: Record<string, string>;
+}
+
+export interface OperatorConfig {
+  operatorId: string;
+  name: string;
+  preferredAlertChannelId?: string;
+  channels: OperatorChannelBinding[];
+}
 
 export interface ExternalReasoningConfig {
   mode: ExternalReasoningMode;
@@ -213,6 +233,7 @@ export interface AppConfig {
   media: MediaConfig;
   safeExec: SafeExecConfig;
   supabaseMacQueue: SupabaseMacQueueConfig;
+  operator: OperatorConfig;
   whatsapp: WhatsAppConfig;
   runtime: RuntimeConfig;
 }

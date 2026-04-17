@@ -19,6 +19,8 @@ function hoursSince(value: string): number {
 
 function baseActionScore(actionKind: string): number {
   switch (actionKind) {
+    case "monitored_channel_alert":
+      return 88;
     case "whatsapp_reply":
       return 92;
     case "google_event":
@@ -47,6 +49,9 @@ function subjectBoost(subject: string): number {
   }
   if (/(cliente|whatsapp|resposta|responder|suporte|ticket|atendimento)/.test(normalized)) {
     score += 12;
+  }
+  if (/(monitorado|monitorada|monitoramento|institucional)/.test(normalized)) {
+    score += 10;
   }
   if (/(importacao de agenda|importação de agenda|23 evento|lote|batch)/.test(normalized)) {
     score += 10;
@@ -78,6 +83,9 @@ function buildReason(item: ApprovalInboxItemRecord): string {
   const normalized = normalize(item.subject);
   if (item.actionKind === "whatsapp_reply") {
     return "destrava resposta pendente";
+  }
+  if (item.actionKind === "monitored_channel_alert") {
+    return "sinal relevante em canal monitorado";
   }
   if (item.actionKind === "google_event_import_batch") {
     return "altera vários eventos de uma vez";
