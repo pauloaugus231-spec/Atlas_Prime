@@ -24,6 +24,14 @@ fail() {
   exit 1
 }
 
+docker_compose() {
+  if [[ -n "${COMPOSE_PROFILES:-}" ]]; then
+    sudo env "COMPOSE_PROFILES=$COMPOSE_PROFILES" docker compose -f "$COMPOSE_FILE" "$@"
+    return
+  fi
+  sudo docker compose -f "$COMPOSE_FILE" "$@"
+}
+
 command -v sudo >/dev/null 2>&1 || fail "sudo nao encontrado"
 command -v docker >/dev/null 2>&1 || fail "docker nao encontrado"
 command -v flock >/dev/null 2>&1 || fail "flock nao encontrado"
@@ -144,7 +152,7 @@ else
 fi
 
 log "Subindo stack de producao com lock exclusivo"
-sudo docker compose -f "$COMPOSE_FILE" up -d --build --remove-orphans
+docker_compose up -d --build --remove-orphans
 stop_inactive_profile_containers
 
 deadline=$((SECONDS + HEALTH_TIMEOUT_SECONDS))
@@ -157,16 +165,16 @@ while (( SECONDS < deadline )); do
   case "$last_status" in
     healthy|running)
       log "Container $CONTAINER_NAME pronto com status=$last_status"
-      sudo docker compose -f "$COMPOSE_FILE" ps
+      docker_compose ps
       exit 0
       ;;
     unhealthy)
       log "Container $CONTAINER_NAME ainda unhealthy; aguardando ate o timeout"
-      sudo docker compose -f "$COMPOSE_FILE" logs --tail=60 "$SERVICE_NAME" || true
+      docker_compose logs --tail=60 "$SERVICE_NAME" || true
       ;;
     exited|dead)
       log "Container $CONTAINER_NAME falhou com status=$last_status"
-      sudo docker compose -f "$COMPOSE_FILE" logs --tail=120 "$SERVICE_NAME" || true
+      docker_compose logs --tail=120 "$SERVICE_NAME" || true
       exit 1
       ;;
   esac
@@ -175,6 +183,6 @@ while (( SECONDS < deadline )); do
 done
 
 log "Timeout aguardando healthcheck do container $CONTAINER_NAME (ultimo status=$last_status)"
-sudo docker compose -f "$COMPOSE_FILE" ps || true
-sudo docker compose -f "$COMPOSE_FILE" logs --tail=120 "$SERVICE_NAME" || true
+docker_compose ps || true
+docker_compose logs --tail=120 "$SERVICE_NAME" || true
 exit 1
