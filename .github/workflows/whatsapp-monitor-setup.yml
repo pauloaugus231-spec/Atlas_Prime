@@ -274,12 +274,15 @@ jobs:
               if connect_response is None and last_error is not None:
                   raise last_error
               pairing_code = connect_response.get("pairingCode") if isinstance(connect_response, dict) else None
+              qr_payload = connect_response.get("code") if isinstance(connect_response, dict) else None
               summary.append(f"- Pairing code: `{pairing_code or 'not returned'}`")
+              summary.append(f"- QR payload available: `{'yes' if qr_payload else 'no'}`")
               print(json.dumps({
                   "instance": instance,
                   "state": state or "unknown",
                   "created": created,
                   "pairingCode": pairing_code,
+                  "qrPayload": qr_payload,
               }, ensure_ascii=False))
           else:
               summary.append("- Pairing code: `already connected`")
@@ -288,6 +291,7 @@ jobs:
                   "state": state,
                   "created": created,
                   "pairingCode": None,
+                  "qrPayload": None,
               }, ensure_ascii=False))
 
           write_summary(summary)
