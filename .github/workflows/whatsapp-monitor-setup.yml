@@ -1,6 +1,11 @@
 name: Configure WhatsApp Monitor
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/whatsapp-monitor-setup.yml
   workflow_dispatch:
     inputs:
       operator_id:
