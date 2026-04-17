@@ -167,7 +167,7 @@ function buildLocalIso(
 function parseDateReference(normalizedPrompt: string, timeZone: string): { year: number; month: number; day: number } | null {
   const now = getNowParts(timeZone);
 
-  if (normalizedPrompt.includes("amanha")) {
+  if (normalizedPrompt.includes("amanha") || /\ba\s+manha\b/.test(normalizedPrompt)) {
     return shiftDate(now, 1);
   }
   if (normalizedPrompt.includes("hoje")) {
@@ -271,10 +271,14 @@ function parseTimeRange(normalizedPrompt: string): { startHour: number; startMin
 }
 
 function parseSingleTime(normalizedPrompt: string): { hour: number; minute: number } | null {
+  const hourWord = "(uma|um|duas|dois|tres|quatro|cinco|seis|sete|oito|nove|dez|onze|doze)";
   const patterns = [
-    /\bas\s+(\d{1,2})(?::(\d{2}))?\s*(?:h)?\b/,
-    /\ba\s+(\d{1,2})(?::(\d{2}))?\s*(?:h)?\b/,
+    /\bas\s+(\d{1,2})(?::(\d{2}))?\s*(?:h|horas?)?\b/,
+    /\ba\s+(\d{1,2})(?::(\d{2}))?\s*(?:h|horas?)?\b/,
     /\b(\d{1,2})h(\d{2})?\b/,
+    new RegExp(`\\bas\\s+${hourWord}(?:\\s+horas?)?\\b`),
+    new RegExp(`\\ba\\s+${hourWord}(?:\\s+horas?)?\\b`),
+    new RegExp(`\\b${hourWord}(?:\\s+horas?)?\\s+(?:da|de|pela)\\s+(?:manha|tarde|noite)\\b`),
   ];
 
   for (const pattern of patterns) {
@@ -283,7 +287,10 @@ function parseSingleTime(normalizedPrompt: string): { hour: number; minute: numb
       continue;
     }
 
-    const rawHour = Number.parseInt(match[1], 10);
+    const rawHour = parseHourToken(match[1]);
+    if (typeof rawHour !== "number") {
+      continue;
+    }
     return {
       hour: adjustHourForDayPeriod(rawHour, normalizedPrompt),
       minute: Number.parseInt(match[2] ?? "0", 10),
@@ -291,6 +298,30 @@ function parseSingleTime(normalizedPrompt: string): { hour: number; minute: numb
   }
 
   return null;
+}
+
+function parseHourToken(value: string): number | null {
+  const parsed = Number.parseInt(value, 10);
+  if (Number.isFinite(parsed)) {
+    return parsed;
+  }
+  const hourWords = new Map([
+    ["uma", 1],
+    ["um", 1],
+    ["duas", 2],
+    ["dois", 2],
+    ["tres", 3],
+    ["quatro", 4],
+    ["cinco", 5],
+    ["seis", 6],
+    ["sete", 7],
+    ["oito", 8],
+    ["nove", 9],
+    ["dez", 10],
+    ["onze", 11],
+    ["doze", 12],
+  ]);
+  return hourWords.get(value) ?? null;
 }
 
 function adjustHourForDayPeriod(hour: number, normalizedPrompt: string): number {
@@ -343,9 +374,10 @@ function extractLocation(value: string): string | undefined {
     .replace(/\b(?:agenda|calend[aá]rio)(?:\s+(?:da|de))?\s+(?:abordagem|principal|pessoal|trabalho)\b/gi, " ")
     .replace(/\b(?:na|no|em|para)\s+(?:abordagem|principal|primary|pessoal)\b/gi, " ")
     .replace(/\b(?:proxima|próxima|proximo|próximo)\s+(?:segunda(?:-feira)?|terca(?:-feira)?|terça(?:-feira)?|quarta(?:-feira)?|quinta(?:-feira)?|sexta(?:-feira)?|sabado|sábado|domingo)\b/gi, " ")
-    .replace(/\b(?:amanha|amanhã|hoje)\b/gi, " ")
+    .replace(/\b(?:amanha|amanhã|a\s+manhã|hoje)\b/gi, " ")
     .replace(/\bdas?\s+\d{1,2}(?::\d{2})?\s*(?:h)?\s+(?:as|a|ate)\s+\d{1,2}(?::\d{2})?\s*(?:h)?\b/gi, " ")
-    .replace(/\b(?:as|às|a)\s+\d{1,2}(?::\d{2})?\s*(?:h)?\b/gi, " ")
+    .replace(/\b(?:as|às|a)\s+\d{1,2}(?::\d{2})?\s*(?:h|horas?)?\b/gi, " ")
+    .replace(/\b(?:as|às|a)\s+(?:uma|um|duas|dois|tres|três|quatro|cinco|seis|sete|oito|nove|dez|onze|doze)(?:\s+horas?)?\b/gi, " ")
     .replace(/\b\d{1,2}h(?:\d{2})?\b/gi, " ")
     .replace(/\b(?:da|de|pela)\s+(?:manh[aã]|tarde|noite)\b/gi, " ")
     .replace(/\b(?:principal|primary|abordagem)\b/gi, " ")
@@ -358,11 +390,6 @@ function extractLocation(value: string): string | undefined {
   );
   if (venueMatch?.[1]?.trim()) {
     return venueMatch[1].trim();
-  }
-
-  const tailMatch = sanitized.match(/(?:,\s*|\s+)(?:na|no|em)\s+([^,.;\n]{3,})$/i);
-  if (tailMatch?.[1]?.trim()) {
-    return tailMatch[1].trim();
   }
 
   return undefined;
@@ -431,8 +458,6 @@ function cleanupEventTitle(value: string): string {
     .replace(/\b(?:chamado|chamada|com\s+o\s+titulo|com\s+título|com\s+titulo|titulo|título|nomeado|nomeada)\b/g, " ")
     .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, " ")
     .replace(/\blocal\s*[:=]\s*[^,.;\n]+/gi, " ")
-    .replace(/(?:,\s*|\s+)(?:na|no|em)\s+([^,.;\n]{3,})$/gi, " ")
-    .replace(/(?:,\s*|\s+)(?:na|no|em)\s+(?:quadra|arena|campo|ginasio|ginásio|clube|audit[oó]rio|sala)\b[^,.;\n]*/gi, " ")
     .replace(
       /,\s*(?:coloque|coloca|adicione|adiciona|agende|agenda|agendar|marque|marca|marcar|registre|salve)\b[\s\S]*$/g,
       " ",
@@ -454,10 +479,12 @@ function cleanupEventTitle(value: string): string {
     .replace(/\b(?:na\s+minha\s+agenda|na\s+agenda|no\s+meu\s+calendario|no\s+calendario|ao\s+calendario)\b/g, " ")
     .replace(/\b(?:dia\s+)?\d{1,2}\s+(?:de\s+)?(?:janeiro|fevereiro|marco|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro)(?:\s+(?:de\s+)?\d{2,4})?\b/g, " ")
     .replace(/\bdia\s+\d{1,2}\b/g, " ")
-    .replace(/\b(?:com prazo|prazo|no dia|dia|amanha|hoje|proxima|proximo|segunda(?:-feira)?|terca(?:-feira)?|quarta(?:-feira)?|quinta(?:-feira)?|sexta(?:-feira)?|sabado|domingo)\b/g, " ")
+    .replace(/\b(?:com prazo|prazo|no dia|dia|amanha|a\s+manha|hoje|proxima|proximo|segunda(?:-feira)?|terca(?:-feira)?|quarta(?:-feira)?|quinta(?:-feira)?|sexta(?:-feira)?|sabado|domingo)\b/g, " ")
     .replace(/\b\d{1,2}\/\d{1,2}(?:\/\d{2,4})?\b/g, " ")
     .replace(/\bdas?\s+\d{1,2}(?::\d{2})?\s*(?:h)?\s+(?:as|a|ate)\s+\d{1,2}(?::\d{2})?\s*(?:h)?\b/g, " ")
-    .replace(/\bas?\s+\d{1,2}(?::\d{2})?\s*(?:h)?\b/g, " ")
+    .replace(/\bas?\s+\d{1,2}(?::\d{2})?\s*(?:h|horas?)?\b/g, " ")
+    .replace(/\bas?\s+(?:uma|um|duas|dois|tres|quatro|cinco|seis|sete|oito|nove|dez|onze|doze)(?:\s+horas?)?\b/g, " ")
+    .replace(/\b(?:uma|um|duas|dois|tres|quatro|cinco|seis|sete|oito|nove|dez|onze|doze)(?:\s+horas?)?\s+(?:da|de|pela)\s+(?:manha|tarde|noite)\b/g, " ")
     .replace(/\b\d{1,2}h(?:\d{2})?\b/g, " ")
     .replace(/\b(?:da|de|pela)\s+(?:manha|tarde|noite)\b/g, " ")
     .replace(/\bduracao\b/g, " ")
@@ -632,9 +659,9 @@ export function buildTaskDraftFromPrompt(prompt: string, timeZone: string): { dr
 export function buildEventDraftFromPrompt(prompt: string, timeZone: string): { draft?: PendingGoogleEventDraft; reason?: string } {
   const normalizedPrompt = normalize(prompt);
   const patterns = [
-    /(?:crie|cria|criar|agende|agenda|agendar|marque|marca|marcar|coloque|coloca|adicione|adiciona)\s+(?:um|uma|o|a)?\s*(?:evento|compromisso|reuni[aã]o|lembrete)(?:\s+chamad[oa])?(?:\s+no\s+google calendar|\s+na\s+agenda|\s+na\s+minha\s+agenda|\s+no\s+calendario|\s+no\s+meu\s+calendario)?(?:(?:\s+para|\s*:)\s*)?([\s\S]+)/i,
-    /(?:crie|cria|criar|agende|agenda|agendar|marque|marca|marcar|coloque|coloca|adicione|adiciona)\s+(?:na\s+minha\s+agenda|na\s+agenda|no\s+meu\s+calendario|no\s+calendario|ao\s+calendario)\s+(?:um|uma|o|a)?\s*(?:evento|compromisso|reuni[aã]o|lembrete)?(?:\s+chamad[oa])?(?:(?:\s+para|\s*:)\s*)?([\s\S]+)/i,
-    /(?:na\s+minha\s+agenda|na\s+agenda|no\s+meu\s+calendario|no\s+calendario|ao\s+calendario)\s*,?\s*(?:coloque|coloca|adicione|adiciona|agende|agenda|agendar|marque|marca|marcar|crie|cria|criar)\s+(?:um|uma|o|a)?\s*(?:evento|compromisso|reuni[aã]o|lembrete)?(?:\s+chamad[oa])?(?:(?:\s+para|\s*:)\s*)?([\s\S]+)/i,
+    /(?:crie|cria|criar|agende|agenda|agendar|marque|marca|marcar|coloque|coloca|adicione|adiciona)\s+(?:(?:um|uma|o|a)\s+(?!(?:manhã|manha)(?:\s|$)))?(?:evento|compromisso|reuni[aã]o|lembrete)(?:\s+chamad[oa])?(?:\s+no\s+google calendar|\s+na\s+agenda|\s+na\s+minha\s+agenda|\s+no\s+calendario|\s+no\s+meu\s+calendario)?(?:(?:\s+para|\s*:)\s*)?([\s\S]+)/i,
+    /(?:crie|cria|criar|agende|agenda|agendar|marque|marca|marcar|coloque|coloca|adicione|adiciona)\s+(?:na\s+minha\s+agenda|na\s+agenda|no\s+meu\s+calendario|no\s+calendario|ao\s+calendario)\s*,?\s+(?:(?:um|uma|o|a)\s+(?!(?:manhã|manha)(?:\s|$)))?(?:evento|compromisso|reuni[aã]o|lembrete)?(?:\s+chamad[oa])?(?:(?:\s+para|\s*:)\s*)?([\s\S]+)/i,
+    /(?:na\s+minha\s+agenda|na\s+agenda|no\s+meu\s+calendario|no\s+calendario|ao\s+calendario)\s*,?\s*(?:coloque|coloca|adicione|adiciona|agende|agenda|agendar|marque|marca|marcar|crie|cria|criar)\s+(?:(?:um|uma|o|a)\s+(?!(?:manhã|manha)(?:\s|$)))?(?:evento|compromisso|reuni[aã]o|lembrete)?(?:\s+chamad[oa])?(?:(?:\s+para|\s*:)\s*)?([\s\S]+)/i,
     /^(?:por favor\s+)?(?:agende|agenda|agendar|marque|marca|marcar)\s+([\s\S]+)/i,
   ];
   const match = patterns.map((pattern) => prompt.match(pattern)).find(Boolean);
@@ -645,10 +672,16 @@ export function buildEventDraftFromPrompt(prompt: string, timeZone: string): { d
     if (location) {
       const locationLabel = prettifyLocationLabel(location);
       summary = `${defaultEventSummary(normalizedPrompt)} no ${locationLabel}`;
-    } else if (normalize(summary) === "teste" && normalizedPrompt.includes("reuniao")) {
-      summary = "Reunião de teste";
     } else {
-      summary = defaultEventSummary(normalizedPrompt);
+      const weakLocationMatch = normalize(summary).match(/^(?:teste|de teste)\s+(no|na)\s+(.+)$/);
+      if (weakLocationMatch?.[2]?.trim()) {
+        const preposition = weakLocationMatch[1] === "na" ? "na" : "no";
+        summary = `${defaultEventSummary(normalizedPrompt)} ${preposition} ${prettifyLocationLabel(weakLocationMatch[2])}`;
+      } else if (normalize(summary) === "teste" && normalizedPrompt.includes("reuniao")) {
+        summary = "Reunião de teste";
+      } else {
+        summary = defaultEventSummary(normalizedPrompt);
+      }
     }
   }
   if (!summary) {

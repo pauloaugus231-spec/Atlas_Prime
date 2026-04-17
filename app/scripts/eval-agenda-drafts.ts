@@ -166,6 +166,53 @@ function run() {
     detail: JSON.stringify(acronymDraft, null, 2),
   });
 
+  const naturalAgendaDraft = buildEventDraftFromPrompt(
+    "coloque na minha agenda, amanha reuniao no caps as 8h da manha",
+    timezone,
+  );
+  results.push({
+    name: "natural_self_agenda_prompt_builds_clean_caps_meeting",
+    passed: Boolean(
+      naturalAgendaDraft.draft &&
+      naturalAgendaDraft.draft.summary === "Reunião no CAPS" &&
+      naturalAgendaDraft.draft.start.includes("T08:00") &&
+      naturalAgendaDraft.draft.end.includes("T09:00") &&
+      !naturalAgendaDraft.draft.location,
+    ),
+    detail: JSON.stringify(naturalAgendaDraft, null, 2),
+  });
+
+  const spokenHourDraft = buildEventDraftFromPrompt(
+    "coloque na minha agenda amanhã reunião no caps às oito da manhã",
+    timezone,
+  );
+  results.push({
+    name: "spoken_hour_audio_transcription_builds_event_draft",
+    passed: Boolean(
+      spokenHourDraft.draft &&
+      spokenHourDraft.draft.summary === "Reunião no CAPS" &&
+      spokenHourDraft.draft.start.includes("T08:00") &&
+      spokenHourDraft.draft.end.includes("T09:00") &&
+      !spokenHourDraft.draft.location,
+    ),
+    detail: JSON.stringify(spokenHourDraft, null, 2),
+  });
+
+  const spokenTomorrowDraft = buildEventDraftFromPrompt(
+    "coloque na minha agenda a manhã reunião no caps às oito da manhã",
+    timezone,
+  );
+  results.push({
+    name: "split_amanha_audio_transcription_is_treated_as_tomorrow",
+    passed: Boolean(
+      spokenTomorrowDraft.draft &&
+      spokenTomorrowDraft.draft.summary === "Reunião no CAPS" &&
+      spokenTomorrowDraft.draft.start.includes("T08:00") &&
+      spokenTomorrowDraft.draft.end.includes("T09:00"),
+    ),
+    detail: JSON.stringify(spokenTomorrowDraft, null, 2),
+  });
+
   const failures = results.filter((item) => !item.passed);
   for (const item of results.filter((entry) => entry.passed)) {
     console.log(`PASS ${item.name}`);
