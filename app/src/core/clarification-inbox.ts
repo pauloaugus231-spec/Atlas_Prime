@@ -38,7 +38,7 @@ export class ClarificationInboxStore {
     this.db.exec(`
       PRAGMA journal_mode = WAL;
       PRAGMA synchronous = NORMAL;
-      PRAGMA busy_timeout = 5000;
+      PRAGMA busy_timeout = 30000;
     `);
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS clarification_inbox (

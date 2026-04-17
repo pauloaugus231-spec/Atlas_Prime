@@ -228,6 +228,18 @@ O repositorio ja inclui um workflow de deploy automatico da branch `main` para E
 
 Esse fluxo usa um `self-hosted runner` na propria EC2 e faz deploy do `atlas-core` a cada push na `main`.
 
+### Operacao cloud-only na EC2
+
+O compose de producao sobe apenas o core do Atlas por padrao:
+
+- Telegram, Google, memoria, tasks, voz e provider externo rodam na EC2.
+- Estado persistente fica em `/srv/atlas/state/workspace`.
+- Plugins persistentes ficam em `/srv/atlas/state/plugins`.
+- Logs ficam em `/srv/atlas/logs`.
+- O deploy cria backup local de `/srv/atlas/state/workspace/.agent-state` em `/srv/atlas/backups` antes de recriar containers.
+
+WhatsApp/Evolution ficam fora do boot padrao para reduzir consumo e evitar concorrencia desnecessaria nos bancos locais. Para ativar esse bloco na nuvem, defina `ATLAS_COMPOSE_PROFILES=whatsapp` ou `COMPOSE_PROFILES=whatsapp` no ambiente de deploy/`.env.production` e rode o deploy novamente.
+
 Se alterar `.env`, recrie o container:
 
 ```bash

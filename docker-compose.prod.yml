@@ -34,6 +34,8 @@ services:
       - /srv/atlas/state/authorized-projects:/authorized-projects:ro
 
   whatsapp-sidecar:
+    profiles:
+      - whatsapp
     container_name: atlas-whatsapp-sidecar
     build:
       context: .
@@ -70,6 +72,8 @@ services:
       - /srv/atlas/state/authorized-projects:/authorized-projects:ro
 
   evolution-postgres:
+    profiles:
+      - whatsapp
     image: postgres:15
     container_name: atlas-evolution-postgres
     restart: unless-stopped
@@ -81,6 +85,8 @@ services:
       - evolution_postgres_data:/var/lib/postgresql/data
 
   evolution-redis:
+    profiles:
+      - whatsapp
     image: redis:7-alpine
     container_name: atlas-evolution-redis
     restart: unless-stopped
@@ -89,6 +95,8 @@ services:
       - evolution_redis_data:/data
 
   evolution-api:
+    profiles:
+      - whatsapp
     image: ${EVOLUTION_IMAGE:-evoapicloud/evolution-api:v2.3.7}
     container_name: atlas-evolution-api
     restart: unless-stopped

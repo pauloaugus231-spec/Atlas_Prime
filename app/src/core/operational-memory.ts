@@ -263,6 +263,7 @@ export class OperationalMemoryStore {
     this.db = new DatabaseSync(dbPath);
     this.db.exec("PRAGMA journal_mode = WAL;");
     this.db.exec("PRAGMA synchronous = NORMAL;");
+    this.db.exec("PRAGMA busy_timeout = 30000;");
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS memory_items (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
