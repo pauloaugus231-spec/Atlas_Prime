@@ -219,6 +219,7 @@ async function runProviderCases(): Promise<EvalResult[]> {
     },
     async (baseUrl) => {
       const client = new ExternalReasoningClient({
+        mode: "smart",
         enabled: true,
         baseUrl,
         timeoutMs: 1000,
@@ -240,6 +241,7 @@ async function runProviderCases(): Promise<EvalResult[]> {
     },
     async (baseUrl) => {
       const client = new ExternalReasoningClient({
+        mode: "smart",
         enabled: true,
         baseUrl,
         timeoutMs: 50,
@@ -267,6 +269,7 @@ async function runProviderCases(): Promise<EvalResult[]> {
     },
     async (baseUrl) => {
       const client = new ExternalReasoningClient({
+        mode: "smart",
         enabled: true,
         baseUrl,
         timeoutMs: 1000,
@@ -290,6 +293,7 @@ async function runProviderCases(): Promise<EvalResult[]> {
 
   {
     const client = new ExternalReasoningClient({
+      mode: "off",
       enabled: false,
       baseUrl: undefined,
       timeoutMs: 1000,
@@ -309,6 +313,49 @@ async function runProviderCases(): Promise<EvalResult[]> {
       detail: fellBack ? undefined : "Disabled provider did not short-circuit safely.",
     });
   }
+
+  results.push(await withServer(
+    async (_body, respond) => {
+      respond(200, JSON.stringify({
+        type: "assistant_decision",
+        intent: "calendar_create",
+        should_execute: true,
+        assistant_reply: "Evento criado pelo provider.",
+        execution: {
+          tool: "execute_calendar_operation",
+          payload: {
+            action: "create",
+            summary: "Reunião externa",
+            start: "2026-04-20T14:00:00-03:00",
+            end: "2026-04-20T15:00:00-03:00",
+          },
+        },
+      }));
+    },
+    async (baseUrl) => {
+      const client = new ExternalReasoningClient({
+        mode: "always",
+        enabled: true,
+        baseUrl,
+        timeoutMs: 1000,
+        routeSimpleReads: true,
+      } satisfies ExternalReasoningConfig, logger);
+      const response = await client.reason(buildRequest());
+      const resolved = await resolveStructuredDecisionForEval(
+        response.content,
+        async () => ({ rawResult: { ok: true } }),
+      );
+      const passed = response.kind === "assistant_decision"
+        && resolved.handled
+        && resolved.executionCalls === 1
+        && resolved.visibleReply.includes("Evento criado pelo provider");
+      return {
+        name: "provider_assistant_decision_is_accepted_and_executes_locally",
+        passed,
+        detail: passed ? undefined : JSON.stringify({ response, resolved }, null, 2),
+      };
+    },
+  ));
 
   return results;
 }

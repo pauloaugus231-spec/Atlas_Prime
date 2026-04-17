@@ -19,6 +19,12 @@ const OPTIONS_TEXT = [
   "4) Não fazer nada agora - encerrar aqui.",
 ].join("\n");
 
+const RECOMMENDED_OPTIONS_TEXT = [
+  "Escolha uma opção:",
+  "1) Revisar depois.",
+  "2) Seguir agora (Recomendada).",
+].join("\n");
+
 function runPendingChoiceHarness(input: {
   assistantText: string;
   userReply: string;
@@ -85,6 +91,46 @@ function run() {
     detail: JSON.stringify(choiceThree, null, 2),
   });
 
+  const firstNatural = runPendingChoiceHarness({
+    assistantText: OPTIONS_TEXT,
+    userReply: "a primeira",
+  });
+  results.push({
+    name: "natural_first_choice_continues_pending_flow",
+    passed: firstNatural.kind === "select" && firstNatural.selectedIndex === 1,
+    detail: JSON.stringify(firstNatural, null, 2),
+  });
+
+  const secondNatural = runPendingChoiceHarness({
+    assistantText: OPTIONS_TEXT,
+    userReply: "segue com a 2",
+  });
+  results.push({
+    name: "natural_numeric_phrase_continues_pending_flow",
+    passed: secondNatural.kind === "select" && secondNatural.selectedIndex === 2,
+    detail: JSON.stringify(secondNatural, null, 2),
+  });
+
+  const lastNatural = runPendingChoiceHarness({
+    assistantText: OPTIONS_TEXT,
+    userReply: "a última",
+  });
+  results.push({
+    name: "natural_last_choice_continues_pending_flow",
+    passed: lastNatural.kind === "select" && lastNatural.selectedIndex === 4,
+    detail: JSON.stringify(lastNatural, null, 2),
+  });
+
+  const referentialChoice = runPendingChoiceHarness({
+    assistantText: RECOMMENDED_OPTIONS_TEXT,
+    userReply: "essa mesmo",
+  });
+  results.push({
+    name: "referential_choice_uses_recommended_option_when_available",
+    passed: referentialChoice.kind === "select" && referentialChoice.selectedIndex === 2,
+    detail: JSON.stringify(referentialChoice, null, 2),
+  });
+
   const cancel = runPendingChoiceHarness({
     assistantText: OPTIONS_TEXT,
     userReply: "cancelar",
@@ -131,6 +177,16 @@ function run() {
     name: "short_ok_with_multiple_options_stays_in_choice_context",
     passed: okAmbiguous.kind === "clarify" && okAmbiguous.reply?.includes("1, 2, 3, 4") === true,
     detail: JSON.stringify(okAmbiguous, null, 2),
+  });
+
+  const ambiguousReferential = runPendingChoiceHarness({
+    assistantText: OPTIONS_TEXT,
+    userReply: "essa",
+  });
+  results.push({
+    name: "referential_choice_without_recommended_option_requests_short_clarification",
+    passed: ambiguousReferential.kind === "clarify" && ambiguousReferential.reply?.includes("1, 2, 3, 4") === true,
+    detail: JSON.stringify(ambiguousReferential, null, 2),
   });
 
   const failures = results.filter((item) => !item.passed);

@@ -44,6 +44,18 @@ export interface ExternalReasoningRequest {
     };
     memory?: string[];
     personal?: string[];
+    personal_profile?: {
+      response_style: string;
+      briefing_preference: string;
+      detail_level: string;
+      tone_preference: string;
+      default_operational_mode: string;
+      default_agenda_scope: string;
+      mobility_preferences: string[];
+      autonomy_preferences: string[];
+      carry_items: string[];
+    };
+    operational_mode?: "field";
     preferences: {
       response_style: ResponseStyle;
       response_length: ResponseLengthPreference;

@@ -17,7 +17,7 @@ export class ExternalReasoningClient {
   ) {}
 
   isEnabled(): boolean {
-    return this.config.enabled && Boolean(this.config.baseUrl);
+    return this.config.enabled && this.config.mode !== "off" && Boolean(this.config.baseUrl);
   }
 
   async reason(input: ExternalReasoningRequest): Promise<ExternalReasoningResponse> {
@@ -74,6 +74,9 @@ export class ExternalReasoningClient {
       }
       const parsedDecision = parseAssistantDecisionReply(trimmed);
       if (parsedDecision.kind === "invalid") {
+        this.logger.warn("External reasoning returned invalid assistant_decision", {
+          error: parsedDecision.error,
+        });
         throw new Error(`External reasoning returned an invalid assistant_decision: ${parsedDecision.error}`);
       }
       return {
@@ -108,6 +111,9 @@ export class ExternalReasoningClient {
     }
 
     if (parsedDecision.kind === "invalid") {
+      this.logger.warn("External reasoning returned invalid assistant_decision", {
+        error: parsedDecision.error,
+      });
       throw new Error(`External reasoning returned an invalid assistant_decision: ${parsedDecision.error}`);
     }
 

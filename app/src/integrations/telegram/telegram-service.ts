@@ -1669,6 +1669,73 @@ function buildPendingDraftAdjustmentPrompt(pendingDraft: PendingEmailDraft, user
   ].join("\n");
 }
 
+function extractLatestUserTurn(history: ChatTurn[]): string | undefined {
+  for (let index = history.length - 1; index >= 0; index -= 1) {
+    const turn = history[index];
+    if (turn?.role === "user" && turn.text.trim()) {
+      return turn.text.trim();
+    }
+  }
+  return undefined;
+}
+
+function extractDateReference(text: string): string | undefined {
+  return text.match(/\b\d{1,2}\/\d{1,2}(?:\/\d{2,4})?\b/)?.[0];
+}
+
+function extractCalendarChoiceOption(optionLabel: string): { summary: string; account?: string; date?: string } | null {
+  const account = optionLabel.match(/\|\s*conta:\s*([^|]+)$/i)?.[1]?.trim();
+  const withoutAccount = optionLabel.replace(/\|\s*conta:\s*([^|]+)$/i, "").trim();
+  const [summaryPart] = withoutAccount.split(/\s+—\s+/);
+  const summary = summaryPart?.trim();
+  const date = extractDateReference(withoutAccount);
+  if (!summary) {
+    return null;
+  }
+  return {
+    summary,
+    account,
+    date,
+  };
+}
+
+function buildConcretePromptFromPendingChoice(history: ChatTurn[], optionLabel: string): string | null {
+  const latestUserTurn = extractLatestUserTurn(history);
+  const selected = extractCalendarChoiceOption(optionLabel);
+  if (!latestUserTurn || !selected) {
+    return null;
+  }
+
+  const normalized = normalizeIntentText(latestUserTurn);
+  const dateReference = extractDateReference(latestUserTurn) ?? selected.date;
+  const dateSegment = dateReference ? ` em ${dateReference}` : "";
+  const accountSegment = selected.account ? ` na conta ${selected.account}` : "";
+
+  if (includesAny(normalized, [
+    "cancele",
+    "cancela",
+    "cancelar",
+    "exclua",
+    "excluir",
+    "delete",
+    "apague",
+    "apagar",
+    "remova",
+    "remover",
+  ])) {
+    return `cancele o evento ${selected.summary}${dateSegment}${accountSegment}`;
+  }
+
+  const updateMatch = latestUserTurn.match(
+    /\b(mova|mover|reagende|reagendar|mude|mudar|altere|alterar|atualize|atualizar|ajuste|ajustar|edite|editar|renomeie|renomear)\s+o?\s*evento\s+(.+?)\s+(para|com)\s+([\s\S]+)/i,
+  );
+  if (!updateMatch?.[1] || !updateMatch[3] || !updateMatch[4]?.trim()) {
+    return null;
+  }
+
+  return `${updateMatch[1]} o evento ${selected.summary}${dateSegment}${accountSegment} ${updateMatch[3]} ${updateMatch[4].trim()}`;
+}
+
 export class TelegramService {
   private readonly hasAllowlist: boolean;
   private readonly chatHistory = new Map<number, ChatTurn[]>();
@@ -2823,8 +2890,10 @@ export class TelegramService {
     }
 
     this.clearPendingChoiceState(message.chat.id);
+    const history = this.getChatHistory(message.chat.id);
+    const concretePrompt = buildConcretePromptFromPendingChoice(history, resolution.option.label);
     await this.executeClarifiedPrompt(message, {
-      effectiveText: buildPendingChoiceContinuationPrompt({
+      effectiveText: concretePrompt ?? buildPendingChoiceContinuationPrompt({
         state: pending,
         option: resolution.option,
         userReply: normalizedText,

@@ -28,27 +28,28 @@ function includesAny(source: string, tokens: string[]): boolean {
 
 function isSimpleAgendaRead(normalized: string): boolean {
   const hasAgenda = includesAny(normalized, ["agenda", "calendario", "calendário", "compromiss", "eventos"]);
-  const hasScope = includesAny(normalized, [
-    "hoje",
-    "amanha",
-    "amanhã",
-    "esta semana",
-    "essa semana",
-    "proxima semana",
-    "próxima semana",
-    "semana que vem",
-    "proximos compromissos",
-    "próximos compromissos",
-    "segunda",
-    "terca",
-    "terça",
-    "quarta",
-    "quinta",
-    "sexta",
-    "sabado",
-    "sábado",
-    "domingo",
-  ]);
+  const hasScope = /\b\d{1,2}\/\d{1,2}(?:\/\d{2,4})?\b/.test(normalized)
+    || includesAny(normalized, [
+      "hoje",
+      "amanha",
+      "amanhã",
+      "esta semana",
+      "essa semana",
+      "proxima semana",
+      "próxima semana",
+      "semana que vem",
+      "proximos compromissos",
+      "próximos compromissos",
+      "segunda",
+      "terca",
+      "terça",
+      "quarta",
+      "quinta",
+      "sexta",
+      "sabado",
+      "sábado",
+      "domingo",
+    ]);
   return hasAgenda && hasScope;
 }
 

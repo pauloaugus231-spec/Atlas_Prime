@@ -36,6 +36,12 @@ const AFFIRMATIVE_REPLIES = [
   "seguir",
 ];
 
+const REFERENTIAL_REPLIES = [
+  "essa",
+  "essa mesmo",
+  "pode seguir com essa",
+];
+
 const CANCEL_REPLIES = [
   "cancelar",
   "cancelar isso",
@@ -64,6 +70,7 @@ export interface PendingChoiceState {
   createdAt: number;
   assistantText: string;
   options: PendingChoiceOption[];
+  recommendedOptionIndex?: number;
 }
 
 export type PendingChoiceReplyResolution =
@@ -82,11 +89,24 @@ function buildInvalidChoiceMessage(options: PendingChoiceOption[]): string {
   return `Escolha uma opção válida: ${valid.join(", ")} ou \`cancelar\`.`;
 }
 
-function parseNumericChoice(text: string): number | undefined {
+function parseNumericChoice(text: string, state: PendingChoiceState): number | undefined {
   const normalized = normalize(text);
-  const exactMatch = normalized.match(/^(?:opcao|opção)?\s*(\d{1,2})$/);
+  const exactMatch = normalized.match(/^(?:quero\s+)?(?:(?:seguir|segue|siga)\s+com\s+)?(?:(?:a\s+opcao|a\s+opção|opcao|opção|a)\s+)?(\d{1,2})$/);
   if (exactMatch?.[1]) {
     return Number.parseInt(exactMatch[1], 10);
+  }
+
+  const ordinalMatch = normalized.match(/^(?:a\s+)?(primeira|primeiro|segunda|segundo|terceira|terceiro|quarta|quarto|quinta|quinto)$/);
+  if (ordinalMatch?.[1]) {
+    return ORDINAL_TO_INDEX.get(ordinalMatch[1]);
+  }
+
+  if (normalized === "a ultima" || normalized === "a última" || normalized === "ultima" || normalized === "última") {
+    return state.options[state.options.length - 1]?.index;
+  }
+
+  if (REFERENTIAL_REPLIES.includes(normalized)) {
+    return state.recommendedOptionIndex ?? (state.options.length === 1 ? state.options[0]?.index : undefined);
   }
 
   return ORDINAL_TO_INDEX.get(normalized);
@@ -128,10 +148,15 @@ export function extractPendingChoiceState(text: string, createdAt = Date.now()):
     return null;
   }
 
+  const recommendedOptionIndex = options.find((option) =>
+    normalize(option.label).includes("recomendad")
+  )?.index;
+
   return {
     createdAt,
     assistantText: text.trim(),
     options,
+    recommendedOptionIndex,
   };
 }
 
@@ -155,7 +180,7 @@ export function resolvePendingChoiceReply(
     };
   }
 
-  const numericChoice = parseNumericChoice(replyText);
+  const numericChoice = parseNumericChoice(replyText, state);
   if (typeof numericChoice === "number") {
     const option = state.options.find((item) => item.index === numericChoice);
     if (option) {
@@ -172,10 +197,15 @@ export function resolvePendingChoiceReply(
   }
 
   if (AFFIRMATIVE_REPLIES.includes(normalized)) {
-    if (state.options.length === 1) {
+    const preferredOption = state.recommendedOptionIndex
+      ? state.options.find((item) => item.index === state.recommendedOptionIndex)
+      : state.options.length === 1
+        ? state.options[0]
+        : undefined;
+    if (preferredOption) {
       return {
         kind: "select",
-        option: state.options[0]!,
+        option: preferredOption,
       };
     }
 

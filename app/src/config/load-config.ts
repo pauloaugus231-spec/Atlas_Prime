@@ -6,6 +6,7 @@ import type {
   BriefingConfig,
   EmailConfig,
   ExternalReasoningConfig,
+  ExternalReasoningMode,
   GoogleMapsConfig,
   GoogleWorkspaceConfig,
   MediaConfig,
@@ -417,8 +418,16 @@ function buildBriefingConfig(env: NodeJS.ProcessEnv): BriefingConfig {
 function buildExternalReasoningConfig(env: NodeJS.ProcessEnv): ExternalReasoningConfig {
   const baseUrl = env.EXTERNAL_REASONING_BASE_URL?.trim() || undefined;
   const apiKey = env.EXTERNAL_REASONING_API_KEY?.trim() || undefined;
+  const rawMode = env.EXTERNAL_REASONING_MODE?.trim().toLowerCase();
+  const mode: ExternalReasoningMode =
+    rawMode === "off" || rawMode === "smart" || rawMode === "always"
+      ? rawMode
+      : parseBoolean(env.EXTERNAL_REASONING_ENABLED, false)
+        ? "smart"
+        : "off";
   return {
-    enabled: parseBoolean(env.EXTERNAL_REASONING_ENABLED, false) && Boolean(baseUrl),
+    mode,
+    enabled: mode !== "off" && Boolean(baseUrl),
     baseUrl,
     apiKey,
     timeoutMs: parsePositiveInteger(env.EXTERNAL_REASONING_TIMEOUT_MS, 20_000),

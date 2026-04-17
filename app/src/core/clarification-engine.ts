@@ -7,6 +7,7 @@ import {
   buildClarificationRuleProposal,
   buildClarifiedExecutionPrompt,
   looksLikeCalendarDeletePrompt,
+  looksLikeCalendarUpdatePrompt,
   looksLikeLowFrictionReadPrompt,
 } from "./clarification-rules.js";
 import {
@@ -99,6 +100,10 @@ export class ClarificationEngine {
       return null;
     }
 
+    if (looksLikeCalendarUpdatePrompt(input.prompt)) {
+      return null;
+    }
+
     const heuristic = this.buildHeuristicProposal(input.prompt, input.intent);
     const llmProposal = heuristic
       ? null
@@ -166,6 +171,10 @@ export class ClarificationEngine {
   private buildHeuristicProposal(prompt: string, intent: IntentResolution): ClarificationProposal | null {
     const normalized = normalize(prompt);
     if (looksLikeLowFrictionReadPrompt(prompt, intent)) {
+      return null;
+    }
+
+    if (looksLikeCalendarUpdatePrompt(prompt)) {
       return null;
     }
 

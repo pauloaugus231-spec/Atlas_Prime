@@ -14,6 +14,19 @@ import type {
 const DEFAULT_PROFILE: PersonalOperationalProfile = {
   defaultAgendaScope: "both",
   workCalendarAliases: ["abordagem"],
+  responseStyle: "direto e objetivo",
+  briefingPreference: "executivo",
+  detailLevel: "resumo",
+  tonePreference: "executivo",
+  defaultOperationalMode: "normal",
+  mobilityPreferences: [
+    "priorizar deslocamento e contexto externo quando houver rua",
+  ],
+  autonomyPreferences: [
+    "leituras simples executam direto",
+    "confirmação curta para escrita comum",
+    "confirmação forte para exclusões e ações destrutivas",
+  ],
   savedFocus: [],
   routineAnchors: [
     "agenda simples deve vir em modo resumo por padrão",
@@ -60,6 +73,52 @@ function normalizeOptionalString(value: string | undefined): string | undefined 
   }
   const normalized = value.trim();
   return normalized.length > 0 ? normalized : undefined;
+}
+
+function normalizeResponseStyle(value: string | undefined, fallback: string): string {
+  return normalizeOptionalString(value) ?? fallback;
+}
+
+function normalizeBriefingPreference(
+  value: PersonalOperationalProfile["briefingPreference"] | undefined,
+  fallback: PersonalOperationalProfile["briefingPreference"],
+): PersonalOperationalProfile["briefingPreference"] {
+  return value === "curto" || value === "detalhado"
+    ? value
+    : value === "executivo"
+      ? value
+      : fallback;
+}
+
+function normalizeDetailLevel(
+  value: PersonalOperationalProfile["detailLevel"] | undefined,
+  fallback: PersonalOperationalProfile["detailLevel"],
+): PersonalOperationalProfile["detailLevel"] {
+  return value === "resumo" || value === "detalhado"
+    ? value
+    : value === "equilibrado"
+      ? value
+      : fallback;
+}
+
+function normalizeTonePreference(
+  value: PersonalOperationalProfile["tonePreference"] | undefined,
+  fallback: PersonalOperationalProfile["tonePreference"],
+): PersonalOperationalProfile["tonePreference"] {
+  return value === "objetivo"
+    || value === "humano"
+    || value === "firme"
+    || value === "acolhedor"
+    || value === "executivo"
+    ? value
+    : fallback;
+}
+
+function normalizeOperationalMode(
+  value: PersonalOperationalProfile["defaultOperationalMode"] | undefined,
+  fallback: PersonalOperationalProfile["defaultOperationalMode"],
+): PersonalOperationalProfile["defaultOperationalMode"] {
+  return value === "field" || value === "normal" ? value : fallback;
 }
 
 function mapItemRow(row: {
@@ -150,6 +209,13 @@ function mergeProfileWithItems(
 
   return {
     ...profile,
+    responseStyle: normalizeResponseStyle(profile.responseStyle, DEFAULT_PROFILE.responseStyle),
+    briefingPreference: normalizeBriefingPreference(profile.briefingPreference, DEFAULT_PROFILE.briefingPreference),
+    detailLevel: normalizeDetailLevel(profile.detailLevel, DEFAULT_PROFILE.detailLevel),
+    tonePreference: normalizeTonePreference(profile.tonePreference, DEFAULT_PROFILE.tonePreference),
+    defaultOperationalMode: normalizeOperationalMode(profile.defaultOperationalMode, DEFAULT_PROFILE.defaultOperationalMode),
+    mobilityPreferences: normalizeStringList(profile.mobilityPreferences, DEFAULT_PROFILE.mobilityPreferences),
+    autonomyPreferences: normalizeStringList(profile.autonomyPreferences, DEFAULT_PROFILE.autonomyPreferences),
     savedFocus: normalizeStringList(savedFocus, profile.savedFocus),
     routineAnchors: normalizeStringList(routineAnchors, profile.routineAnchors),
     operationalRules: normalizeStringList(operationalRules, profile.operationalRules),
@@ -207,6 +273,13 @@ export class PersonalOperationalMemoryStore {
     const next: PersonalOperationalProfile = {
       defaultAgendaScope: input.defaultAgendaScope ?? current.defaultAgendaScope,
       workCalendarAliases: normalizeStringList(input.workCalendarAliases, current.workCalendarAliases),
+      responseStyle: normalizeResponseStyle(input.responseStyle, current.responseStyle),
+      briefingPreference: normalizeBriefingPreference(input.briefingPreference, current.briefingPreference),
+      detailLevel: normalizeDetailLevel(input.detailLevel, current.detailLevel),
+      tonePreference: normalizeTonePreference(input.tonePreference, current.tonePreference),
+      defaultOperationalMode: normalizeOperationalMode(input.defaultOperationalMode, current.defaultOperationalMode),
+      mobilityPreferences: normalizeStringList(input.mobilityPreferences, current.mobilityPreferences),
+      autonomyPreferences: normalizeStringList(input.autonomyPreferences, current.autonomyPreferences),
       savedFocus: normalizeStringList(input.savedFocus, current.savedFocus),
       routineAnchors: normalizeStringList(input.routineAnchors, current.routineAnchors),
       operationalRules: normalizeStringList(input.operationalRules, current.operationalRules),
@@ -388,6 +461,16 @@ export class PersonalOperationalMemoryStore {
             ? parsed.defaultAgendaScope
             : "both",
         workCalendarAliases: normalizeStringList(parsed.workCalendarAliases, DEFAULT_PROFILE.workCalendarAliases),
+        responseStyle: normalizeResponseStyle(parsed.responseStyle, DEFAULT_PROFILE.responseStyle),
+        briefingPreference: normalizeBriefingPreference(parsed.briefingPreference, DEFAULT_PROFILE.briefingPreference),
+        detailLevel: normalizeDetailLevel(parsed.detailLevel, DEFAULT_PROFILE.detailLevel),
+        tonePreference: normalizeTonePreference(parsed.tonePreference, DEFAULT_PROFILE.tonePreference),
+        defaultOperationalMode: normalizeOperationalMode(
+          parsed.defaultOperationalMode,
+          DEFAULT_PROFILE.defaultOperationalMode,
+        ),
+        mobilityPreferences: normalizeStringList(parsed.mobilityPreferences, DEFAULT_PROFILE.mobilityPreferences),
+        autonomyPreferences: normalizeStringList(parsed.autonomyPreferences, DEFAULT_PROFILE.autonomyPreferences),
         savedFocus: normalizeStringList(parsed.savedFocus, DEFAULT_PROFILE.savedFocus),
         routineAnchors: normalizeStringList(parsed.routineAnchors, DEFAULT_PROFILE.routineAnchors),
         operationalRules: normalizeStringList(parsed.operationalRules, DEFAULT_PROFILE.operationalRules),

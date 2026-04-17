@@ -129,6 +129,38 @@ export function looksLikeCalendarDeletePrompt(prompt: string): boolean {
   return hasDeleteVerb && hasCalendarObject;
 }
 
+export function looksLikeCalendarUpdatePrompt(prompt: string): boolean {
+  const normalized = normalize(prompt);
+  const hasUpdateVerb = includesAny(normalized, [
+    "mova",
+    "mover",
+    "reagende",
+    "reagendar",
+    "mude",
+    "mudar",
+    "altere",
+    "alterar",
+    "atualize",
+    "atualizar",
+    "ajuste",
+    "ajustar",
+    "edite",
+    "editar",
+    "renomeie",
+    "renomear",
+  ]);
+  const hasCalendarObject = includesAny(normalized, [
+    "evento",
+    "compromisso",
+    "agenda",
+    "calendario",
+    "calendário",
+    "reuniao",
+    "reunião",
+  ]);
+  return hasUpdateVerb && hasCalendarObject;
+}
+
 function normalizeAnswer(answerText: string): string {
   return answerText
     .trim()

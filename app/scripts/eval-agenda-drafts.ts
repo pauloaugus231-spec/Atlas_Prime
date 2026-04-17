@@ -51,6 +51,24 @@ function run() {
     detail: JSON.stringify(adjustedDraft, null, 2),
   });
 
+  const renamedDraft = simpleDraft.draft
+    ? adjustEventDraftFromInstruction(simpleDraft.draft, "titulo: Reunião teste CAPS")
+    : null;
+  results.push({
+    name: "draft_adjustment_changes_title",
+    passed: Boolean(renamedDraft && renamedDraft.summary === "Reunião teste CAPS"),
+    detail: JSON.stringify(renamedDraft, null, 2),
+  });
+
+  const relocatedDraft = simpleDraft.draft
+    ? adjustEventDraftFromInstruction(simpleDraft.draft, "local: Sala 5")
+    : null;
+  results.push({
+    name: "draft_adjustment_changes_location",
+    passed: Boolean(relocatedDraft && relocatedDraft.location === "Sala 5"),
+    detail: JSON.stringify(relocatedDraft, null, 2),
+  });
+
   const failures = results.filter((item) => !item.passed);
   for (const item of results.filter((entry) => entry.passed)) {
     console.log(`PASS ${item.name}`);

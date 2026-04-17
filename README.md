@@ -479,16 +479,16 @@ Estado atual:
 
 - leitura e organizacao: implementadas
 - consultas simples de leitura usam defaults inteligentes e execucao direta quando o contexto ja basta; em agenda, o padrao e responder em modo resumo
-- quando o Atlas apresenta opcoes numeradas no Telegram, respostas curtas como `1`, `3`, `ok` ou `cancelar` continuam o fluxo pendente em vez de reiniciar uma clarificacao generica
+- quando o Atlas apresenta opcoes numeradas no Telegram, respostas curtas como `1`, `3`, `a primeira`, `segue com a 2`, `ok` ou `cancelar` continuam o fluxo pendente em vez de reiniciar uma clarificacao generica
 - escrita controlada de eventos no Google Calendar: implementada, dependendo de write scopes concedidos no OAuth
 - escrita controlada de tarefas Google: implementada com executor unificado, dependendo de write scopes concedidos no OAuth
 - uso recomendado: consultas simples leem direto; criar e atualizar usam confirmacao curta; excluir continua com confirmacao forte
-- o brief diario agora combina agenda, tarefas, foco salvo, clima, deslocamento, recomendacao pratica e sinal de sobrecarga
+- o brief diario agora segue um formato operacional mais consistente: visao do dia, atencao principal, rua/clima/deslocamento, agenda limpa, prioridade do dia e mensagem final
 - existe politica explicita de autonomia por intencao: leituras simples rodam direto; escrita e acoes destrutivas continuam confirmadas
-- o Telegram suporta modo operacional de rua/plantao por chat, para respostas mais objetivas e orientadas a deslocamento
+- o Telegram suporta modo operacional de rua/plantao por chat, e esse modo agora afeta briefing, agenda do dia/amanha, conflitos e proximas acoes com respostas mais compactas
 - o Atlas consegue revisar conflitos, duplicidades e nomes inconsistentes na agenda sem alterar nada sozinho
-- a memoria pessoal operacional agora fica separada da memoria operacional geral para guardar foco salvo, rotina e regras praticas; ela tambem pode ser gerida explicitamente pelo Telegram
-- provider externo opcional de raciocinio: pode devolver texto normal ou `assistant_decision`, e o Atlas executa localmente operacoes estruturadas de calendario e tasks sob whitelist controlada; para Tasks, ele tambem completa referencias locais com alta confianca e pede clarificacao curta quando houver ambiguidade; se o provider falhar, cai em fallback local
+- a memoria pessoal operacional agora fica separada da memoria operacional geral para guardar foco salvo, rotina e regras praticas; alem dos itens livres, existe um perfil operacional base editavel explicitamente pelo Telegram
+- provider externo opcional de raciocinio: suporta `EXTERNAL_REASONING_MODE=off|smart|always`; em `off` fica desligado, em `smart` segue a politica por intencao e em `always` tenta o provider em toda mensagem antes do fluxo local; ele pode devolver texto normal ou `assistant_decision`, e o Atlas continua como executor local controlado de operacoes estruturadas sob whitelist; se o provider falhar, expirar ou devolver resposta invalida, cai em fallback local automaticamente
 
 Plugins novos:
 
@@ -505,6 +505,8 @@ Plugins novos:
 - `update_google_task`
 - `delete_google_task`
 - `execute_task_operation`
+- `get_personal_operational_profile`
+- `update_personal_operational_profile`
 
 Como configurar:
 

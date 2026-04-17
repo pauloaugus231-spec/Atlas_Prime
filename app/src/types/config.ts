@@ -43,7 +43,10 @@ export interface BriefingConfig {
   weatherDays: number;
 }
 
+export type ExternalReasoningMode = "off" | "smart" | "always";
+
 export interface ExternalReasoningConfig {
+  mode: ExternalReasoningMode;
   enabled: boolean;
   baseUrl?: string;
   apiKey?: string;

@@ -675,6 +675,10 @@ function buildMobilityAlerts(input: {
     alerts.push(`itens base: ${input.profile.attire.carryItems.slice(0, 3).join(", ")}`);
   }
 
+  for (const preference of input.profile.mobilityPreferences.slice(0, 2)) {
+    alerts.push(`preferência de rua: ${preference}`);
+  }
+
   return alerts.slice(0, 4);
 }
 
@@ -709,6 +713,9 @@ function chooseDayRecommendation(input: {
   }
   if (input.mobilityAlerts[0]) {
     return `prepare a rua cedo: ${input.mobilityAlerts[0]}`;
+  }
+  if (input.overloadLevel === "moderado" && input.mobilityAlerts[1]) {
+    return `deixe o básico pronto cedo: ${input.mobilityAlerts[1]}`;
   }
   if (input.overloadLevel === "pesado") {
     return "mantenha resposta curta, preserve deslocamento e evite abrir novas pendências";

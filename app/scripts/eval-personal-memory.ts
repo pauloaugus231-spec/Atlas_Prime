@@ -6,6 +6,8 @@ import listPersonalMemoryItemsPlugin from "../src/plugins/list_personal_memory_i
 import savePersonalMemoryItemPlugin from "../src/plugins/save_personal_memory_item.plugin.js";
 import updatePersonalMemoryItemPlugin from "../src/plugins/update_personal_memory_item.plugin.js";
 import deletePersonalMemoryItemPlugin from "../src/plugins/delete_personal_memory_item.plugin.js";
+import getPersonalOperationalProfilePlugin from "../src/plugins/get_personal_operational_profile.plugin.js";
+import updatePersonalOperationalProfilePlugin from "../src/plugins/update_personal_operational_profile.plugin.js";
 import { PersonalOperationalMemoryStore } from "../src/core/personal-operational-memory.js";
 import type { Logger } from "../src/types/logger.js";
 import type { ToolExecutionContext } from "../src/types/plugin.js";
@@ -89,6 +91,39 @@ async function run() {
       name: "personal_memory_profile_merges_items",
       passed: profile.routineAnchors.some((item) => item.includes("foco em deslocamento")),
       detail: JSON.stringify(profile, null, 2),
+    });
+
+    const baseProfile = await getPersonalOperationalProfilePlugin.execute(
+      {},
+      context,
+    ) as Record<string, unknown>;
+    const rawBaseProfile = baseProfile.profile as Record<string, unknown> | undefined;
+    results.push({
+      name: "personal_profile_get_ok",
+      passed: baseProfile.ok === true && rawBaseProfile?.responseStyle === "direto e objetivo",
+      detail: JSON.stringify(baseProfile, null, 2),
+    });
+
+    const updatedProfile = await updatePersonalOperationalProfilePlugin.execute(
+      {
+        responseStyle: "direto e objetivo",
+        briefingPreference: "curto",
+        detailLevel: "resumo",
+        tonePreference: "objetivo",
+        defaultOperationalMode: "field",
+        mobilityPreferences: ["priorizar deslocamento cedo"],
+        carryItems: ["carregador", "casaco leve"],
+      },
+      context,
+    ) as Record<string, unknown>;
+    const rawUpdatedProfile = updatedProfile.profile as Record<string, unknown> | undefined;
+    results.push({
+      name: "personal_profile_update_ok",
+      passed:
+        updatedProfile.ok === true
+        && rawUpdatedProfile?.briefingPreference === "curto"
+        && rawUpdatedProfile?.defaultOperationalMode === "field",
+      detail: JSON.stringify(updatedProfile, null, 2),
     });
 
     const deleted = await deletePersonalMemoryItemPlugin.execute(

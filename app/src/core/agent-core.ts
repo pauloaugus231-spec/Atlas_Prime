@@ -94,12 +94,18 @@ import type {
 import { WebResearchService, type WebResearchMode } from "./web-research.js";
 import { GoogleTrendsIntakeService, type GoogleTrendItem } from "./trend-intake.js";
 import type { ExternalReasoningRequest } from "../types/external-reasoning.js";
-import { looksLikeLowFrictionReadPrompt } from "./clarification-rules.js";
 import { analyzeCalendarInsights } from "./calendar-insights.js";
+import { resolveCalendarEventReference } from "./calendar-event-resolution.js";
 import { resolveActionAutonomyRule } from "./action-autonomy-policy.js";
 import { PersonalOperationalMemoryStore } from "./personal-operational-memory.js";
-import type { PersonalOperationalMemoryItem, PersonalOperationalMemoryItemKind } from "../types/personal-operational-memory.js";
+import type {
+  PersonalOperationalMemoryItem,
+  PersonalOperationalMemoryItemKind,
+  PersonalOperationalProfile,
+  UpdatePersonalOperationalProfileInput,
+} from "../types/personal-operational-memory.js";
 import { resolveStructuredTaskOperationPayload } from "./task-operation-resolution.js";
+import { shouldAttemptExternalReasoning, type ExternalReasoningStage } from "./external-reasoning-policy.js";
 
 function stripCodeFences(value: string): string {
   const trimmed = value.trim();
@@ -468,6 +474,17 @@ function extractOperationalMode(prompt: string): "field" | null {
     return "field";
   }
   return null;
+}
+
+function resolveEffectiveOperationalMode(
+  prompt: string,
+  profile?: PersonalOperationalProfile,
+): "field" | null {
+  const explicit = extractOperationalMode(prompt);
+  if (explicit) {
+    return explicit;
+  }
+  return profile?.defaultOperationalMode === "field" ? "field" : null;
 }
 
 function isMacQueueStatusPrompt(prompt: string): boolean {
@@ -1159,6 +1176,350 @@ function buildPersonalMemoryTitle(statement: string, kind: PersonalOperationalMe
     default:
       return "Nota operacional";
   }
+}
+
+function isPersonalOperationalProfileShowPrompt(prompt: string): boolean {
+  const normalized = normalizeEmailAnalysisText(prompt);
+  return includesAny(normalized, [
+    "mostre meu perfil operacional",
+    "mostrar meu perfil operacional",
+    "mostre meu perfil base",
+    "mostrar meu perfil base",
+    "mostre meu perfil pessoal operacional",
+    "mostrar meu perfil pessoal operacional",
+    "mostre meu perfil",
+    "mostrar meu perfil",
+    "liste meu perfil operacional",
+  ]);
+}
+
+function isPersonalOperationalProfileUpdatePrompt(prompt: string): boolean {
+  const normalized = normalizeEmailAnalysisText(prompt);
+  return includesAny(normalized, [
+    "defina meu estilo de resposta",
+    "quero briefing mais",
+    "salve que em plantao",
+    "salve que em plantão",
+    "salve que quando eu",
+    "guarde que em plantao",
+    "guarde que em plantão",
+    "minha prioridade padrao",
+    "minha prioridade padrão",
+    "atualize meu perfil",
+    "atualizar meu perfil",
+    "ajuste meu perfil",
+    "ajustar meu perfil",
+    "modo mais executivo",
+    "modo mais humano",
+    "modo mais firme",
+    "modo mais acolhedor",
+    "quero respostas muito curtas",
+    "quero respostas curtas",
+    "quero respostas mais curtas",
+    "devo lembrar",
+  ]);
+}
+
+function isPersonalOperationalProfileDeletePrompt(prompt: string): boolean {
+  const normalized = normalizeEmailAnalysisText(prompt);
+  return includesAny(normalized, [
+    "remova do meu perfil",
+    "remove do meu perfil",
+    "remover do meu perfil",
+    "apague do meu perfil",
+    "tire do meu perfil",
+    "exclua do meu perfil",
+  ]);
+}
+
+function extractPersonalOperationalProfileRemoveQuery(prompt: string): string | undefined {
+  const cleaned = prompt
+    .replace(/^\s*(?:remova|remove|remover|apague|tire|exclua)\s+do\s+meu\s+perfil\s*(?:a|o)?\s*/i, "")
+    .replace(/[.;]+$/g, "")
+    .trim();
+  return cleaned || undefined;
+}
+
+function extractCarryItemsFromProfilePrompt(text: string): string[] {
+  if (!/\b(?:levar|leve|levo|devo lembrar)\b/i.test(text)) {
+    return [];
+  }
+  const normalized = text
+    .replace(/^.*?\b(?:levar|leve|levo|devo lembrar)\b\s*/i, "")
+    .replace(/[.;]+$/g, "")
+    .trim();
+  if (!normalized) {
+    return [];
+  }
+
+  return [...new Set(normalized
+    .split(/,|\se\s|\s\+\s/)
+    .map((item) => item.trim())
+    .filter((item) => item.length > 2))];
+}
+
+function uniqueAppend(values: string[], additions: string[]): string[] {
+  return [...new Set([...values, ...additions.map((item) => item.trim()).filter(Boolean)])];
+}
+
+function removeMatchingEntries(values: string[], query: string): string[] {
+  const normalizedQuery = normalizeEmailAnalysisText(query);
+  return values.filter((item) => {
+    const normalizedItem = normalizeEmailAnalysisText(item);
+    return !normalizedItem.includes(normalizedQuery) && !normalizedQuery.includes(normalizedItem);
+  });
+}
+
+function normalizeTonePreferenceFromText(value: string): PersonalOperationalProfile["tonePreference"] | undefined {
+  const normalized = normalizeEmailAnalysisText(value);
+  if (includesAny(normalized, ["objetivo", "direto"])) {
+    return "objetivo";
+  }
+  if (normalized.includes("humano")) {
+    return "humano";
+  }
+  if (normalized.includes("firme")) {
+    return "firme";
+  }
+  if (normalized.includes("acolhedor")) {
+    return "acolhedor";
+  }
+  if (normalized.includes("executivo")) {
+    return "executivo";
+  }
+  return undefined;
+}
+
+function inferProfileResponseLength(
+  briefingPreference: PersonalOperationalProfile["briefingPreference"] | undefined,
+  detailLevel: PersonalOperationalProfile["detailLevel"] | undefined,
+): import("../types/user-preferences.js").UpdateUserPreferencesInput["responseLength"] | undefined {
+  if (briefingPreference === "detalhado" || detailLevel === "detalhado") {
+    return "medium";
+  }
+  if (briefingPreference === "curto" || detailLevel === "resumo") {
+    return "short";
+  }
+  return undefined;
+}
+
+function extractPersonalOperationalProfileUpdate(
+  prompt: string,
+  current: PersonalOperationalProfile,
+): {
+  profile: UpdatePersonalOperationalProfileInput;
+  preferenceUpdate?: import("../types/user-preferences.js").UpdateUserPreferencesInput;
+  changeLabels: string[];
+} | null {
+  const normalized = normalizeEmailAnalysisText(prompt);
+  const profile: UpdatePersonalOperationalProfileInput = {};
+  const preferenceUpdate: import("../types/user-preferences.js").UpdateUserPreferencesInput = {};
+  const changeLabels: string[] = [];
+
+  const styleMatch = prompt.match(/(?:estilo de resposta|meu estilo(?: de resposta)?)\s+(?:como\s+)?["“]?(.+?)["”]?(?=(?:[?.!,;:]|$))/i);
+  if (styleMatch?.[1]?.trim()) {
+    profile.responseStyle = styleMatch[1].trim();
+    changeLabels.push(`estilo de resposta: ${profile.responseStyle}`);
+  } else if (includesAny(normalized, ["direto e objetivo", "direto", "objetivo"])) {
+    profile.responseStyle = "direto e objetivo";
+    changeLabels.push(`estilo de resposta: ${profile.responseStyle}`);
+  }
+
+  if (normalized.includes("briefing mais curto") || normalized.includes("briefing curto")) {
+    profile.briefingPreference = "curto";
+    profile.detailLevel = "resumo";
+    changeLabels.push("briefing da manhã: curto");
+  } else if (normalized.includes("briefing mais detalhado") || normalized.includes("briefing detalhado")) {
+    profile.briefingPreference = "detalhado";
+    profile.detailLevel = "detalhado";
+    changeLabels.push("briefing da manhã: detalhado");
+  } else if (normalized.includes("modo mais executivo") || normalized.includes("perfil mais executivo")) {
+    profile.briefingPreference = "executivo";
+    profile.tonePreference = "executivo";
+    if (!profile.responseStyle) {
+      profile.responseStyle = "executivo e direto";
+    }
+    changeLabels.push("perfil: executivo");
+  }
+
+  if (normalized.includes("mais detalhado") || normalized.includes("detalhado")) {
+    profile.detailLevel = profile.detailLevel ?? "detalhado";
+  }
+  if (normalized.includes("modo resumo") || normalized.includes("nivel de detalhe resumo") || normalized.includes("nível de detalhe resumo")) {
+    profile.detailLevel = "resumo";
+    changeLabels.push("nível de detalhe: resumo");
+  } else if (normalized.includes("nivel de detalhe equilibrado") || normalized.includes("nível de detalhe equilibrado")) {
+    profile.detailLevel = "equilibrado";
+    changeLabels.push("nível de detalhe: equilibrado");
+  } else if (normalized.includes("nivel de detalhe detalhado") || normalized.includes("nível de detalhe detalhado")) {
+    profile.detailLevel = "detalhado";
+    changeLabels.push("nível de detalhe: detalhado");
+  }
+
+  const tonePreference = normalizeTonePreferenceFromText(prompt);
+  if (tonePreference) {
+    profile.tonePreference = tonePreference;
+    changeLabels.push(`tom: ${tonePreference}`);
+  }
+
+  if (includesAny(normalized, [
+    "plantao",
+    "plantão",
+    "na rua",
+    "vou sair e so volto amanha",
+    "vou sair e só volto amanhã",
+  ])) {
+    if (includesAny(normalized, ["respostas muito curtas", "respostas curtas", "resposta curta"])) {
+      profile.defaultOperationalMode = "field";
+      profile.briefingPreference = profile.briefingPreference ?? "curto";
+      profile.detailLevel = "resumo";
+      changeLabels.push("modo plantão padrão: compacto");
+    }
+
+    if (normalized.includes("quando eu") || normalized.includes("vou sair") || normalized.includes("na rua")) {
+      profile.mobilityPreferences = uniqueAppend(current.mobilityPreferences, [extractPersonalMemoryStatement(prompt) ?? prompt.trim()]);
+      changeLabels.push("preferência de deslocamento atualizada");
+    }
+  }
+
+  const carryItems = extractCarryItemsFromProfilePrompt(prompt);
+  if (carryItems.length > 0) {
+    profile.attire = {
+      carryItems: uniqueAppend(current.attire.carryItems, carryItems),
+    };
+    changeLabels.push(`itens importantes: ${carryItems.join(", ")}`);
+  }
+
+  const priorityMatch = prompt.match(/minha prioridade padr[aã]o\s+[ée]\s+(.+?)(?=(?:[?.!,;:]|$))/i);
+  if (priorityMatch?.[1]?.trim()) {
+    profile.operationalRules = uniqueAppend(current.operationalRules, [priorityMatch[1].trim()]);
+    changeLabels.push(`regra fixa: ${priorityMatch[1].trim()}`);
+  }
+
+  if (normalized.includes("autonomia")) {
+    const statement = extractPersonalMemoryStatement(prompt) ?? prompt.trim();
+    profile.autonomyPreferences = uniqueAppend(current.autonomyPreferences, [statement]);
+    changeLabels.push("preferência de autonomia atualizada");
+  }
+
+  if (includesAny(normalized, ["agenda principal", "calendario principal", "calendário principal", "agenda pessoal"])) {
+    profile.defaultAgendaScope = "primary";
+    changeLabels.push("escopo padrão de agenda: principal");
+  } else if (includesAny(normalized, ["agenda trabalho", "agenda de trabalho", "calendario trabalho", "calendário trabalho"])) {
+    profile.defaultAgendaScope = "work";
+    changeLabels.push("escopo padrão de agenda: trabalho");
+  } else if (includesAny(normalized, ["agenda pessoal e trabalho", "ambos", "ambas"])) {
+    profile.defaultAgendaScope = "both";
+    changeLabels.push("escopo padrão de agenda: ambos");
+  }
+
+  if (profile.briefingPreference || profile.detailLevel) {
+    const responseLength = inferProfileResponseLength(profile.briefingPreference, profile.detailLevel);
+    if (responseLength) {
+      preferenceUpdate.responseLength = responseLength;
+    }
+  }
+
+  if (profile.tonePreference === "executivo" || profile.responseStyle?.includes("executivo")) {
+    preferenceUpdate.responseStyle = "executive";
+  } else if (profile.tonePreference === "objetivo" || profile.responseStyle?.includes("direto")) {
+    preferenceUpdate.responseStyle = "executive";
+  } else if (profile.tonePreference === "acolhedor") {
+    preferenceUpdate.responseStyle = "secretary";
+  } else if (profile.detailLevel === "detalhado") {
+    preferenceUpdate.responseStyle = "detailed";
+  }
+
+  if (Object.keys(profile).length === 0) {
+    return null;
+  }
+
+  return {
+    profile,
+    preferenceUpdate: Object.keys(preferenceUpdate).length > 0 ? preferenceUpdate : undefined,
+    changeLabels,
+  };
+}
+
+function removeFromPersonalOperationalProfile(
+  profile: PersonalOperationalProfile,
+  query: string,
+): {
+  profileUpdate: UpdatePersonalOperationalProfileInput;
+  removedLabels: string[];
+} | null {
+  const normalizedQuery = normalizeEmailAnalysisText(query);
+  const removedLabels: string[] = [];
+  const profileUpdate: UpdatePersonalOperationalProfileInput = {};
+
+  const resetStyle = normalizedQuery.includes("estilo")
+    || normalizeEmailAnalysisText(profile.responseStyle).includes(normalizedQuery);
+  if (resetStyle) {
+    profileUpdate.responseStyle = "direto e objetivo";
+    removedLabels.push("estilo de resposta personalizado");
+  }
+
+  const resetTone = normalizedQuery.includes("tom")
+    || normalizeEmailAnalysisText(profile.tonePreference).includes(normalizedQuery);
+  if (resetTone) {
+    profileUpdate.tonePreference = "executivo";
+    removedLabels.push("tom personalizado");
+  }
+
+  if (normalizedQuery.includes("briefing")) {
+    profileUpdate.briefingPreference = "executivo";
+    removedLabels.push("preferência de briefing");
+  }
+
+  if (normalizedQuery.includes("detalhe")) {
+    profileUpdate.detailLevel = "resumo";
+    removedLabels.push("nível de detalhe personalizado");
+  }
+
+  if (includesAny(normalizedQuery, ["plantao", "plantão", "modo rua"])) {
+    profileUpdate.defaultOperationalMode = "normal";
+    removedLabels.push("modo plantão padrão");
+  }
+
+  const nextMobility = removeMatchingEntries(profile.mobilityPreferences, query);
+  if (nextMobility.length !== profile.mobilityPreferences.length) {
+    profileUpdate.mobilityPreferences = nextMobility;
+    removedLabels.push("preferência(s) de deslocamento");
+  }
+
+  const nextAutonomy = removeMatchingEntries(profile.autonomyPreferences, query);
+  if (nextAutonomy.length !== profile.autonomyPreferences.length) {
+    profileUpdate.autonomyPreferences = nextAutonomy;
+    removedLabels.push("preferência(s) de autonomia");
+  }
+
+  const nextRules = removeMatchingEntries(profile.operationalRules, query);
+  if (nextRules.length !== profile.operationalRules.length) {
+    profileUpdate.operationalRules = nextRules;
+    removedLabels.push("regra(s) operacionais");
+  }
+
+  const nextRoutineAnchors = removeMatchingEntries(profile.routineAnchors, query);
+  if (nextRoutineAnchors.length !== profile.routineAnchors.length) {
+    profileUpdate.routineAnchors = nextRoutineAnchors;
+    removedLabels.push("âncora(s) de rotina");
+  }
+
+  const nextCarryItems = removeMatchingEntries(profile.attire.carryItems, query);
+  if (nextCarryItems.length !== profile.attire.carryItems.length) {
+    profileUpdate.attire = {
+      ...(profileUpdate.attire ?? {}),
+      carryItems: nextCarryItems,
+    };
+    removedLabels.push("item(ns) físicos");
+  }
+
+  return removedLabels.length > 0
+    ? {
+        profileUpdate,
+        removedLabels,
+      }
+    : null;
 }
 
 function extractPersonalMemoryId(prompt: string): number | undefined {
@@ -2715,6 +3076,15 @@ function isCalendarMovePrompt(prompt: string): boolean {
     "reagendar o evento",
     "mude o evento",
     "altere o evento",
+    "alterar o evento",
+    "atualize o evento",
+    "atualizar o evento",
+    "ajuste o evento",
+    "ajustar o evento",
+    "edite o evento",
+    "editar o evento",
+    "renomeie o evento",
+    "renomear o evento",
   ]);
 }
 
@@ -2729,17 +3099,66 @@ function isCalendarPeriodDeletePrompt(prompt: string): boolean {
   ]);
 }
 
-function extractCalendarMoveParts(prompt: string): { source: string; targetInstruction: string } | undefined {
+function extractCalendarMoveParts(prompt: string): { verb: string; source: string; targetInstruction: string } | undefined {
   const match = prompt.match(
-    /\b(?:mova|mover|reagende|reagendar|mude|altere)\s+o?\s*evento\s+(.+?)\s+para\s+([\s\S]+)/i,
+    /\b(mova|mover|reagende|reagendar|mude|mudar|altere|alterar|atualize|atualizar|ajuste|ajustar|edite|editar|renomeie|renomear)\s+o?\s*evento\s+(.+?)\s+(?:para|com)\s+([\s\S]+)/i,
   );
-  if (!match?.[1] || !match?.[2]) {
+  if (!match?.[1] || !match?.[2] || !match?.[3]) {
     return undefined;
   }
   return {
-    source: match[1].trim(),
-    targetInstruction: match[2].trim(),
+    verb: match[1].trim(),
+    source: match[2].trim(),
+    targetInstruction: match[3].trim(),
   };
+}
+
+function normalizeCalendarUpdateInstruction(input: {
+  verb: string;
+  targetInstruction: string;
+}): string {
+  const normalizedVerb = normalizeEmailAnalysisText(input.verb);
+  const normalizedTarget = normalizeEmailAnalysisText(input.targetInstruction);
+
+  if (includesAny(normalizedVerb, ["renomeie", "renomear"])) {
+    return `titulo: ${input.targetInstruction.trim()}`;
+  }
+
+  const looksStructured = includesAny(normalizedTarget, [
+    "titulo",
+    "título",
+    "nome",
+    "local",
+    "meet",
+    "lembrete",
+    "convid",
+    "particip",
+    "duracao",
+    "duração",
+    "sem local",
+    "sem meet",
+    "amanha",
+    "amanhã",
+    "hoje",
+    "segunda",
+    "terca",
+    "terça",
+    "quarta",
+    "quinta",
+    "sexta",
+    "sabado",
+    "sábado",
+    "domingo",
+  ]) || /\b\d{1,2}\/\d{1,2}(?:\/\d{2,4})?\b/.test(normalizedTarget)
+    || /\b\d{1,2}h\b/.test(normalizedTarget)
+    || /\bdas\s+\d{1,2}/.test(normalizedTarget)
+    || /@/.test(input.targetInstruction);
+
+  if (!looksStructured) {
+    return `titulo: ${input.targetInstruction.trim()}`;
+  }
+
+  return input.targetInstruction.trim();
 }
 
 function isCalendarDeletePrompt(prompt: string): boolean {
@@ -2854,17 +3273,33 @@ function refersToBothPersonalAndWork(prompt: string): boolean {
   ]);
 }
 
-function resolvePromptAccountAliases(prompt: string, aliases: string[]): string[] {
+function resolveWorkAlias(aliases: string[]): string | undefined {
+  return aliases.includes("abordagem")
+    ? "abordagem"
+    : aliases.find((alias) => alias !== "primary");
+}
+
+function resolvePromptAccountAliases(
+  prompt: string,
+  aliases: string[],
+  defaultScope: PersonalOperationalProfile["defaultAgendaScope"] = "both",
+): string[] {
   const explicit = extractExplicitAccountAlias(prompt, aliases);
   if (explicit) {
     return [explicit];
   }
 
   if (refersToBothPersonalAndWork(prompt)) {
-    const workAlias = aliases.includes("abordagem")
-      ? "abordagem"
-      : aliases.find((alias) => alias !== "primary");
+    const workAlias = resolveWorkAlias(aliases);
     return [...new Set(["primary", workAlias].filter((value): value is string => Boolean(value)))];
+  }
+
+  if (defaultScope === "primary") {
+    return aliases.includes("primary") ? ["primary"] : aliases.slice(0, 1);
+  }
+  if (defaultScope === "work") {
+    const workAlias = resolveWorkAlias(aliases);
+    return workAlias ? [workAlias] : aliases.slice(0, 1);
   }
 
   return aliases;
@@ -3899,165 +4334,119 @@ function classifyBriefPeriod(iso: string | null | undefined, timezone: string): 
   return "noite";
 }
 
-function buildMorningBriefReply(
+export function buildMorningBriefReply(
   input: ExecutiveMorningBrief,
   options?: {
     compact?: boolean;
+    profile?: PersonalOperationalProfile;
+    operationalMode?: "field" | null;
   },
 ): string {
-  const compact = options?.compact === true;
-  const attentionNow: string[] = [];
+  const compact = options?.compact === true || options?.operationalMode === "field";
   const highestEmail = input.emails.find((item) => item.priority === "alta") ?? input.emails[0];
   const nextEvent = input.events[0];
-  const nextTask = input.taskBuckets.today[0] ?? input.taskBuckets.overdue[0];
+  const nextTask = input.taskBuckets.overdue[0] ?? input.taskBuckets.today[0];
   const pauloConflicts = input.events.filter((event) => event.owner === "paulo" && event.hasConflict);
+  const groupedEvents = {
+    manha: input.events.filter((event) => classifyBriefPeriod(event.start, input.timezone) === "manha"),
+    tarde: input.events.filter((event) => classifyBriefPeriod(event.start, input.timezone) === "tarde"),
+    noite: input.events.filter((event) => classifyBriefPeriod(event.start, input.timezone) === "noite"),
+  };
 
-  if (highestEmail) {
-    attentionNow.push(
-      `${highestEmail.priority.toUpperCase()} email: ${truncateBriefText(highestEmail.subject || "(sem assunto)")} — ${summarizeEmailSender(highestEmail.from)} — ${highestEmail.account}`,
-    );
-  }
-
-  if (nextEvent) {
-    attentionNow.push(
-      `Próximo compromisso: ${formatBriefDateTime(nextEvent.start, input.timezone)} — ${truncateBriefText(nextEvent.summary)}${nextEvent.location ? ` — ${summarizeCalendarLocation(nextEvent.location)}` : ""} — ${nextEvent.prepHint}`,
-    );
-  }
-
-  if (pauloConflicts.length > 0) {
-    attentionNow.push(`${pauloConflicts.length} conflito(s) de agenda de Paulo exigem decisão.`);
-  }
-
-  if (input.taskBuckets.overdue.length > 0) {
-    attentionNow.push(`${input.taskBuckets.overdue.length} tarefa(s) atrasada(s) ainda exigem decisão.`);
-  } else if (nextTask) {
-    attentionNow.push(
-      `Tarefa mais próxima: ${truncateBriefText(nextTask.title)} — ${formatTaskDue(nextTask, input.timezone)} — ${nextTask.account}`,
-    );
-  }
+  const summarizeEventLine = (event: ExecutiveMorningBrief["events"][number]): string => {
+    const tags = [
+      event.hasConflict ? "conflito" : undefined,
+      compact ? undefined : event.owner !== "paulo" ? labelBriefOwner(event.owner) : undefined,
+      compact ? undefined : event.account,
+    ].filter(Boolean);
+    return `${formatBriefDateTime(event.start, input.timezone)} — ${truncateBriefText(event.summary)}${event.location ? ` — ${summarizeCalendarLocation(event.location)}` : ""}${tags.length > 0 ? ` | ${tags.join(" | ")}` : ""}`;
+  };
 
   const lines = [
     "Briefing da manhã",
     "",
-    "Resumo rápido:",
-    `- Hoje: ${input.events.length} compromisso(s) | ${input.taskBuckets.actionableCount} tarefa(s) acionáveis | ${input.emails.length} email(s)`,
-    `- Pendências: ${input.taskBuckets.overdue.length} tarefa(s) atrasada(s) | ${input.taskBuckets.stale.length} tarefa(s) no backlog antigo`,
+    "Visão do dia:",
+    `- Hoje: ${input.events.length} compromisso(s) | ${input.taskBuckets.actionableCount} tarefa(s) acionáveis | ${input.emails.length} email(s) relevantes`,
     `- Ritmo: ${input.overloadLevel}${input.conflictSummary.overlaps > 0 ? ` | ${input.conflictSummary.overlaps} conflito(s)` : ""}${input.conflictSummary.duplicates > 0 ? ` | ${input.conflictSummary.duplicates} duplicidade(s)` : ""}`,
   ];
 
-  if (attentionNow.length > 0) {
-    lines.push("", "Atenção agora:");
-    for (const item of attentionNow.slice(0, 3)) {
-      lines.push(`- ${item}`);
-    }
+  if (options?.profile?.savedFocus[0] || input.personalFocus[0]) {
+    lines.push(`- Foco salvo: ${truncateBriefText(options?.profile?.savedFocus[0] ?? input.personalFocus[0] ?? "", 110)}`);
   }
 
-  if (input.personalFocus.length > 0) {
-    lines.push("", "Foco salvo:");
-    for (const item of input.personalFocus.slice(0, compact ? 2 : 3)) {
-      lines.push(`- ${truncateBriefText(item, 110)}`);
-    }
+  lines.push("", "Atenção principal:");
+  if (nextEvent) {
+    lines.push(`- Próximo compromisso: ${summarizeEventLine(nextEvent)} — ${nextEvent.prepHint}`);
+  }
+  if (pauloConflicts.length > 0) {
+    lines.push(`- ${pauloConflicts.length} conflito(s) de agenda exigem decisão antes de abrir novas frentes.`);
+  }
+  if (nextTask) {
+    lines.push(`- Tarefa em foco: ${truncateBriefText(nextTask.title)} — ${formatTaskDue(nextTask, input.timezone)} — ${nextTask.account}`);
+  }
+  if (highestEmail) {
+    lines.push(`- Email prioritário: ${truncateBriefText(highestEmail.subject || "(sem assunto)")} — ${summarizeEmailSender(highestEmail.from)} — ${highestEmail.account}`);
+  }
+  if (!nextEvent && !nextTask && !highestEmail) {
+    lines.push("- Nada crítico pendente agora.");
   }
 
+  lines.push("", compact ? "Rua, clima e deslocamento:" : "Rua, clima e deslocamento:");
   if (input.mobilityAlerts.length > 0) {
-    lines.push("", compact ? "Modo rua:" : "Deslocamento e rua:");
     for (const item of input.mobilityAlerts.slice(0, compact ? 2 : 3)) {
       lines.push(`- ${truncateBriefText(item, 110)}`);
     }
   }
-
-  if (input.weather?.days.length) {
-    lines.push("", "Tempo:");
-    if (input.weather.current) {
-      lines.push("- Agora:");
-      lines.push(`  Local: ${input.weather.locationLabel}`);
-      lines.push(`  Condição: ${input.weather.current.description}`);
-      lines.push(`  Temperatura: ${formatBriefTemperature(input.weather.current.temperatureC)}`);
-    } else {
-      lines.push(`- Referência: ${input.weather.locationLabel}.`);
-    }
-    for (const day of input.weather.days) {
-      lines.push(`- ${day.label}:`);
-      lines.push(`  Condição: ${day.description}`);
-      lines.push(`  Temperatura: ${formatBriefTemperatureRange(day.minTempC, day.maxTempC)}`);
-      if (typeof day.precipitationProbabilityMax === "number") {
-        lines.push(`  Chuva: ${day.precipitationProbabilityMax}%`);
-      }
-      lines.push(`  Dica: ${day.tip}`);
-    }
+  if (input.weather?.current) {
+    lines.push(`- Agora em ${input.weather.locationLabel}: ${input.weather.current.description}, ${formatBriefTemperature(input.weather.current.temperatureC)}.`);
+  }
+  for (const day of (input.weather?.days ?? []).slice(0, 2)) {
+    const rain = typeof day.precipitationProbabilityMax === "number"
+      ? ` | chuva ${day.precipitationProbabilityMax}%`
+      : "";
+    lines.push(`- ${day.label}: ${day.description} | ${formatBriefTemperatureRange(day.minTempC, day.maxTempC)}${rain}`);
+    lines.push(`  Dica: ${day.tip}`);
+  }
+  if ((input.weather?.days.length ?? 0) === 0 && input.mobilityAlerts.length === 0) {
+    lines.push("- Sem alerta extra de clima ou deslocamento agora.");
   }
 
-  lines.push("", "Agenda de hoje:");
-  if (input.events.length > 0) {
-    const groupedEvents = {
-      manha: input.events.filter((event) => classifyBriefPeriod(event.start, input.timezone) === "manha"),
-      tarde: input.events.filter((event) => classifyBriefPeriod(event.start, input.timezone) === "tarde"),
-      noite: input.events.filter((event) => classifyBriefPeriod(event.start, input.timezone) === "noite"),
-    };
-
+  lines.push("", "Agenda limpa:");
+  if (input.events.length === 0) {
+    lines.push("- Nenhum compromisso pessoal hoje.");
+  } else {
     if (groupedEvents.manha.length > 0) {
       lines.push("- Manhã:");
       for (const event of groupedEvents.manha) {
-        lines.push(
-          `  - ${formatBriefDateTime(event.start, input.timezone)} — ${truncateBriefText(event.summary)}${event.location ? ` — ${summarizeCalendarLocation(event.location)}` : ""} — ${labelBriefOwner(event.owner)} | ${event.context}${event.hasConflict ? " | conflito" : ""} | ${event.account}`,
-        );
+        lines.push(`  - ${summarizeEventLine(event)}`);
       }
     }
     if (groupedEvents.tarde.length > 0) {
       lines.push("- Tarde:");
       for (const event of groupedEvents.tarde) {
-        lines.push(
-          `  - ${formatBriefDateTime(event.start, input.timezone)} — ${truncateBriefText(event.summary)}${event.location ? ` — ${summarizeCalendarLocation(event.location)}` : ""} — ${labelBriefOwner(event.owner)} | ${event.context}${event.hasConflict ? " | conflito" : ""} | ${event.account}`,
-        );
+        lines.push(`  - ${summarizeEventLine(event)}`);
       }
     }
     if (groupedEvents.noite.length > 0) {
       lines.push("- Noite:");
       for (const event of groupedEvents.noite) {
-        lines.push(
-          `  - ${formatBriefDateTime(event.start, input.timezone)} — ${truncateBriefText(event.summary)}${event.location ? ` — ${summarizeCalendarLocation(event.location)}` : ""} — ${labelBriefOwner(event.owner)} | ${event.context}${event.hasConflict ? " | conflito" : ""} | ${event.account}`,
-        );
+        lines.push(`  - ${summarizeEventLine(event)}`);
       }
     }
-  } else {
-    lines.push("- Nenhum compromisso pessoal hoje.");
   }
 
-  lines.push("", "Tarefas em foco:");
-  if (input.taskBuckets.today.length > 0 || input.taskBuckets.overdue.length > 0 || input.taskBuckets.stale.length > 0) {
-    for (const task of input.taskBuckets.today.slice(0, 2)) {
-      lines.push(`- Hoje: ${truncateBriefText(task.title)} — ${formatTaskDue(task, input.timezone)} — ${task.account}`);
-    }
-    for (const task of input.taskBuckets.overdue.slice(0, 2)) {
-      lines.push(`- Atrasada: ${truncateBriefText(task.title)} — ${formatTaskDue(task, input.timezone)} — ${task.account}`);
-    }
-    if (input.taskBuckets.stale.length > 0) {
-      lines.push(`- Backlog antigo: ${input.taskBuckets.stale.length} tarefa(s) fora do foco imediato.`);
-    }
-  } else {
-    lines.push("- Nenhuma tarefa aberta em foco.");
-  }
-
-  lines.push("", compact ? "Inbox essencial:" : "Inbox primeiro:");
-  if (input.emails.length > 0) {
-    for (const item of input.emails.slice(0, compact ? 2 : 3)) {
-      lines.push(
-        `- ${item.priority.toUpperCase()} — ${truncateBriefText(item.subject || "(sem assunto)")} — ${summarizeEmailSender(item.from)} — ${item.account}`,
-      );
-    }
-    if (input.emails.length > (compact ? 2 : 3)) {
-      lines.push(`- ... e mais ${input.emails.length - (compact ? 2 : 3)} email(s) prioritário(s).`);
-    }
-  } else {
-    lines.push("- Nenhum email prioritário agora.");
-  }
-
+  lines.push("", "Prioridade do dia:");
   if (input.dayRecommendation) {
-    lines.push("", `Recomendação prática: ${truncateBriefText(input.dayRecommendation, 110)}`);
+    lines.push(`- Recomendação prática: ${truncateBriefText(input.dayRecommendation, 120)}`);
   }
-
   if (input.nextAction) {
-    lines.push("", `Próxima ação: ${truncateBriefText(input.nextAction, 96)}`);
+    lines.push(`- Próxima ação: ${truncateBriefText(input.nextAction, 110)}`);
+  }
+  if (compact && options?.profile?.attire.carryItems.length) {
+    lines.push(`- Levar: ${options.profile.attire.carryItems.slice(0, 4).join(", ")}`);
+  }
+  if (!input.dayRecommendation && !input.nextAction) {
+    lines.push("- Seguir pelo próximo compromisso do dia.");
   }
 
   lines.push("", "Mensagem do dia:");
@@ -4173,6 +4562,76 @@ function buildGoogleCalendarsReply(input: {
   return lines.join("\n");
 }
 
+function labelAgendaScope(scope: PersonalOperationalProfile["defaultAgendaScope"]): string {
+  switch (scope) {
+    case "primary":
+      return "principal";
+    case "work":
+      return "trabalho";
+    case "both":
+    default:
+      return "ambos";
+  }
+}
+
+function buildEmptyCalendarPeriodReply(label: string): string {
+  const normalized = normalizeEmailAnalysisText(label);
+  if (normalized === "amanha" || normalized === "amanhã") {
+    return "Nenhum compromisso para amanhã.";
+  }
+  if (normalized === "hoje") {
+    return "Nenhum compromisso para hoje.";
+  }
+  return `Nenhum compromisso em ${label}.`;
+}
+
+function buildCalendarPeriodReply(input: {
+  label: string;
+  timezone: string;
+  compact?: boolean;
+  events: Array<{
+    account: string;
+    event: Awaited<ReturnType<GoogleWorkspaceService["listEventsInWindow"]>>[number];
+  }>;
+}): string {
+  if (input.events.length === 0) {
+    return buildEmptyCalendarPeriodReply(input.label);
+  }
+
+  const sortedEvents = [...input.events].sort((left, right) => {
+    const leftStart = left.event.start ? Date.parse(left.event.start) : Number.MAX_SAFE_INTEGER;
+    const rightStart = right.event.start ? Date.parse(right.event.start) : Number.MAX_SAFE_INTEGER;
+    if (leftStart !== rightStart) {
+      return leftStart - rightStart;
+    }
+    return left.event.summary.localeCompare(right.event.summary);
+  });
+
+  const lines = [
+    `${input.label[0]?.toUpperCase() ?? ""}${input.label.slice(1)}: ${sortedEvents.length} compromisso${sortedEvents.length > 1 ? "s" : ""}.`,
+  ];
+  let currentDayHeader: string | null = null;
+
+  for (const item of sortedEvents) {
+    const dayHeader = formatCalendarDayHeader(item.event.start, input.timezone);
+    if (dayHeader !== currentDayHeader) {
+      lines.push("", `${dayHeader}:`);
+      currentDayHeader = dayHeader;
+    }
+
+    const location = summarizeCalendarLocation(item.event.location);
+    const tags = input.compact
+      ? []
+      : [`conta: ${item.account}`];
+
+    lines.push(
+      `- ${formatCalendarTimeRange(item.event.start, item.event.end, input.timezone)} — ${item.event.summary}${location ? ` — ${location}` : ""}${tags.length > 0 ? ` | ${tags.join(" | ")}` : ""}`,
+    );
+  }
+
+  return lines.join("\n");
+}
+
 function summarizeCalendarLocation(value: string | undefined): string | undefined {
   const normalized = value
     ?.replace(/\s*\n+\s*/g, " | ")
@@ -4208,6 +4667,46 @@ function buildUserPreferencesReply(preferences: UserPreferences): string {
   ].join("\n");
 }
 
+function buildPersonalOperationalProfileReply(profile: PersonalOperationalProfile): string {
+  return [
+    "Perfil operacional base:",
+    `- Estilo de resposta: ${profile.responseStyle}`,
+    `- Briefing da manhã: ${profile.briefingPreference}`,
+    `- Nível de detalhe: ${profile.detailLevel}`,
+    `- Tom: ${profile.tonePreference}`,
+    `- Modo padrão: ${profile.defaultOperationalMode === "field" ? "plantão/rua" : "normal"}`,
+    `- Escopo padrão de agenda: ${labelAgendaScope(profile.defaultAgendaScope)}`,
+    `- Deslocamento: ${profile.mobilityPreferences.length > 0 ? profile.mobilityPreferences.slice(0, 3).join(" | ") : "nenhuma preferência extra"}`,
+    `- Itens físicos: ${profile.attire.carryItems.join(" | ")}`,
+    `- Regras fixas: ${profile.operationalRules.slice(0, 3).join(" | ")}`,
+    `- Autonomia: ${profile.autonomyPreferences.slice(0, 3).join(" | ")}`,
+  ].join("\n");
+}
+
+function buildPersonalOperationalProfileUpdatedReply(
+  profile: PersonalOperationalProfile,
+  changeLabels: string[],
+): string {
+  return [
+    "Perfil operacional atualizado.",
+    ...changeLabels.slice(0, 6).map((item) => `- ${item}`),
+    "",
+    buildPersonalOperationalProfileReply(profile),
+  ].join("\n");
+}
+
+function buildPersonalOperationalProfileRemovedReply(
+  profile: PersonalOperationalProfile,
+  removedLabels: string[],
+): string {
+  return [
+    "Perfil operacional ajustado.",
+    ...removedLabels.map((item) => `- Removido: ${item}`),
+    "",
+    buildPersonalOperationalProfileReply(profile),
+  ].join("\n");
+}
+
 function formatPersonalMemoryKindLabel(kind: PersonalOperationalMemoryItemKind): string {
   switch (kind) {
     case "preference":
@@ -4236,9 +4735,13 @@ function buildPersonalMemoryListReply(input: {
 }): string {
   const lines = [
     "Memória pessoal operacional:",
-    `- Escopo padrão de agenda: ${input.profile.defaultAgendaScope}`,
+    `- Estilo de resposta: ${input.profile.responseStyle}`,
+    `- Briefing da manhã: ${input.profile.briefingPreference} | detalhe: ${input.profile.detailLevel} | tom: ${input.profile.tonePreference}`,
+    `- Modo padrão: ${input.profile.defaultOperationalMode === "field" ? "plantão/rua" : "normal"}`,
+    `- Escopo padrão de agenda: ${labelAgendaScope(input.profile.defaultAgendaScope)}`,
     `- Foco salvo: ${input.profile.savedFocus.length > 0 ? input.profile.savedFocus.join(" | ") : "nenhum"}`,
     `- Regras práticas: ${input.profile.operationalRules.slice(0, 3).join(" | ")}`,
+    `- Deslocamento: ${input.profile.mobilityPreferences.slice(0, 2).join(" | ") || "sem preferência extra"}`,
     `- Itens de apoio: ${input.profile.attire.carryItems.join(" | ")}`,
   ];
 
@@ -4549,9 +5052,13 @@ function inferIntentNextStep(input: IntentResolution): string | undefined {
   }
 }
 
-function buildOperationalPlanContract(prompt: string, brief: ExecutiveMorningBrief): import("../types/response-contracts.js").OrganizationResponseContract {
+function buildOperationalPlanContract(
+  prompt: string,
+  brief: ExecutiveMorningBrief,
+  profile?: PersonalOperationalProfile,
+): import("../types/response-contracts.js").OrganizationResponseContract {
   const normalized = normalizeEmailAnalysisText(prompt);
-  const operationalMode = extractOperationalMode(prompt);
+  const operationalMode = resolveEffectiveOperationalMode(prompt, profile);
   const currentSituation: string[] = [];
   const priorities: string[] = [];
   const actionPlan: string[] = [];
@@ -8896,6 +9403,19 @@ export class AgentCore {
       autonomyLevel: orchestration.policy.autonomyLevel,
     });
 
+    const externalReasoningPreLocalResult = await this.tryRunExternalReasoning(
+      activeUserPrompt,
+      requestId,
+      requestLogger,
+      intent,
+      preferences,
+      options,
+      "pre_local",
+    );
+    if (externalReasoningPreLocalResult) {
+      return externalReasoningPreLocalResult;
+    }
+
     const directPingResult = await this.tryRunDirectPing(
       activeUserPrompt,
       requestId,
@@ -8912,6 +9432,33 @@ export class AgentCore {
     );
     if (directIdentityResult) {
       return directIdentityResult;
+    }
+    const directPersonalProfileShowResult = await this.tryRunDirectPersonalOperationalProfileShow(
+      activeUserPrompt,
+      requestId,
+      orchestration,
+      preferences,
+    );
+    if (directPersonalProfileShowResult) {
+      return directPersonalProfileShowResult;
+    }
+    const directPersonalProfileUpdateResult = await this.tryRunDirectPersonalOperationalProfileUpdate(
+      activeUserPrompt,
+      requestId,
+      orchestration,
+      preferences,
+    );
+    if (directPersonalProfileUpdateResult) {
+      return directPersonalProfileUpdateResult;
+    }
+    const directPersonalProfileDeleteResult = await this.tryRunDirectPersonalOperationalProfileDelete(
+      activeUserPrompt,
+      requestId,
+      orchestration,
+      preferences,
+    );
+    if (directPersonalProfileDeleteResult) {
+      return directPersonalProfileDeleteResult;
     }
     const directPreferencesResult = await this.tryRunDirectUserPreferences(
       activeUserPrompt,
@@ -9502,6 +10049,7 @@ export class AgentCore {
       intent,
       preferences,
       options,
+      "post_direct_routes",
     );
     if (externalReasoningResult) {
       return externalReasoningResult;
@@ -9704,34 +10252,6 @@ export class AgentCore {
     });
   }
 
-  private shouldUseExternalReasoning(
-    prompt: string,
-    intent: IntentResolution,
-  ): boolean {
-    if (!this.externalReasoning.isEnabled()) {
-      return false;
-    }
-
-    const isLowFrictionRead = looksLikeLowFrictionReadPrompt(prompt, intent);
-    if (isLowFrictionRead && !this.config.externalReasoning.routeSimpleReads) {
-      return false;
-    }
-
-    if (intent.compoundIntent) {
-      return true;
-    }
-
-    if (intent.orchestration.route.confidence < 0.7) {
-      return true;
-    }
-
-    if (includesAny(normalizeEmailAnalysisText(prompt), ["estrateg", "estratég", "planej", "prioriz", "analise", "análise"])) {
-      return true;
-    }
-
-    return ["plan", "analyze", "communicate"].includes(intent.orchestration.route.actionMode);
-  }
-
   private async tryRunExternalReasoning(
     userPrompt: string,
     requestId: string,
@@ -9739,12 +10259,15 @@ export class AgentCore {
     intent: IntentResolution,
     preferences: UserPreferences,
     options?: AgentRunOptions,
+    stage: ExternalReasoningStage = "post_direct_routes",
   ): Promise<AgentRunResult | null> {
-    if (!this.shouldUseExternalReasoning(userPrompt, intent)) {
+    if (!shouldAttemptExternalReasoning(this.config.externalReasoning, userPrompt, intent, stage)) {
       return null;
     }
 
     requestLogger.info("Trying external reasoning provider", {
+      mode: this.config.externalReasoning.mode,
+      stage,
       primaryDomain: intent.orchestration.route.primaryDomain,
       actionMode: intent.orchestration.route.actionMode,
       compoundIntent: intent.compoundIntent,
@@ -9761,8 +10284,19 @@ export class AgentCore {
       );
       const response = await this.externalReasoning.reason(request);
       requestLogger.info("External reasoning completed", {
+        mode: this.config.externalReasoning.mode,
+        stage,
         responseKind: response.kind,
       });
+      requestLogger.info(
+        response.kind === "assistant_decision"
+          ? "External reasoning assistant_decision accepted"
+          : "External reasoning text response accepted",
+        {
+          mode: this.config.externalReasoning.mode,
+          stage,
+        },
+      );
 
       return {
         requestId,
@@ -9785,6 +10319,8 @@ export class AgentCore {
       };
     } catch (error) {
       requestLogger.warn("External reasoning failed; falling back to local flow", {
+        mode: this.config.externalReasoning.mode,
+        stage,
         error: error instanceof Error ? error.message : String(error),
       });
       return null;
@@ -9822,6 +10358,7 @@ export class AgentCore {
       ...personalProfile.operationalRules.map((item) => `regra operacional: ${item}`),
     ].slice(0, 8);
     const tasksContext = await this.buildExternalReasoningTasksContext(userPrompt, intent, contextPack);
+    const operationalMode = resolveEffectiveOperationalMode(userPrompt, personalProfile);
 
     return {
       user_message: userPrompt,
@@ -9846,6 +10383,18 @@ export class AgentCore {
           : {}),
         ...(memorySignals.length > 0 ? { memory: memorySignals } : {}),
         ...(personalSignals.length > 0 ? { personal: personalSignals } : {}),
+        personal_profile: {
+          response_style: personalProfile.responseStyle,
+          briefing_preference: personalProfile.briefingPreference,
+          detail_level: personalProfile.detailLevel,
+          tone_preference: personalProfile.tonePreference,
+          default_operational_mode: personalProfile.defaultOperationalMode,
+          default_agenda_scope: personalProfile.defaultAgendaScope,
+          mobility_preferences: personalProfile.mobilityPreferences.slice(0, 4),
+          autonomy_preferences: personalProfile.autonomyPreferences.slice(0, 4),
+          carry_items: personalProfile.attire.carryItems.slice(0, 6),
+        },
+        ...(operationalMode ? { operational_mode: operationalMode } : {}),
         ...(tasksContext ? { tasks: tasksContext } : {}),
         preferences: {
           response_style: preferences.responseStyle,
@@ -10356,12 +10905,15 @@ export class AgentCore {
     });
 
     const brief = await this.personalOs.getExecutiveMorningBrief();
-    const operationalMode = extractOperationalMode(userPrompt);
+    const profile = this.personalMemory.getProfile();
+    const operationalMode = resolveEffectiveOperationalMode(userPrompt, profile);
 
     return {
       requestId,
       reply: buildMorningBriefReply(brief, {
         compact: operationalMode === "field",
+        operationalMode,
+        profile,
       }),
       messages: buildBaseMessages(userPrompt, orchestration),
       toolExecutions: [
@@ -10596,7 +11148,12 @@ export class AgentCore {
       return null;
     }
     const preferences = this.preferences.get();
-    const candidateAliases = resolvePromptAccountAliases(userPrompt, this.googleWorkspaces.getAliases());
+    const profile = this.personalMemory.getProfile();
+    const candidateAliases = resolvePromptAccountAliases(
+      userPrompt,
+      this.googleWorkspaces.getAliases(),
+      profile.defaultAgendaScope,
+    );
     const explicitAccount = candidateAliases.length === 1 ? candidateAliases[0] : undefined;
 
     requestLogger.info("Using direct Google Tasks route", {
@@ -10680,7 +11237,12 @@ export class AgentCore {
       topic: lookup.topic,
       autonomy: resolveActionAutonomyRule(userPrompt).key,
     });
-    const candidateAliases = resolvePromptAccountAliases(userPrompt, this.googleWorkspaces.getAliases());
+    const profile = this.personalMemory.getProfile();
+    const candidateAliases = resolvePromptAccountAliases(
+      userPrompt,
+      this.googleWorkspaces.getAliases(),
+      profile.defaultAgendaScope,
+    );
     const explicitAccount = candidateAliases.length === 1 ? candidateAliases[0] : undefined;
 
     const eventMatches: Array<{
@@ -10826,7 +11388,9 @@ export class AgentCore {
       return null;
     }
 
-    const status = this.googleWorkspace.getStatus();
+    const explicitAccount = extractExplicitAccountAlias(userPrompt, this.googleWorkspaces.getAliases());
+    const workspace = this.googleWorkspaces.getWorkspace(explicitAccount);
+    const status = workspace.getStatus();
     if (!status.ready) {
       return {
         requestId,
@@ -10850,7 +11414,6 @@ export class AgentCore {
       };
     }
 
-    const explicitAccount = extractExplicitAccountAlias(userPrompt, this.googleWorkspaces.getAliases());
     if (explicitAccount) {
       draftResult.draft.account = explicitAccount;
     }
@@ -10891,7 +11454,13 @@ export class AgentCore {
       ? explicitWindow.endIso
       : new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
     const scopeLabel = explicitWindow?.label ?? "próximos 7 dias";
-    const aliases = resolvePromptAccountAliases(userPrompt, this.googleWorkspaces.getAliases());
+    const profile = this.personalMemory.getProfile();
+    const operationalMode = resolveEffectiveOperationalMode(userPrompt, profile);
+    const aliases = resolvePromptAccountAliases(
+      userPrompt,
+      this.googleWorkspaces.getAliases(),
+      profile.defaultAgendaScope,
+    );
 
     const events: Array<{
       account: string;
@@ -10964,7 +11533,7 @@ export class AgentCore {
         overlapCount: insights.filter((item) => item.kind === "overlap").length,
         duplicateCount: insights.filter((item) => item.kind === "duplicate").length,
         namingCount: insights.filter((item) => item.kind === "inconsistent_name").length,
-        items: insights.map((item) => ({
+        items: insights.slice(0, operationalMode === "field" ? 3 : 6).map((item) => ({
           kind: item.kind,
           dayLabel: item.dayLabel,
           summary: item.summary,
@@ -11000,7 +11569,9 @@ export class AgentCore {
       return null;
     }
 
-    const status = this.googleWorkspace.getStatus();
+    const explicitAccount = extractExplicitAccountAlias(userPrompt, this.googleWorkspaces.getAliases());
+    const workspace = this.googleWorkspaces.getWorkspace(explicitAccount);
+    const status = workspace.getStatus();
     if (!status.ready) {
       return {
         requestId,
@@ -11024,13 +11595,12 @@ export class AgentCore {
       };
     }
 
-    const explicitAccount = extractExplicitAccountAlias(userPrompt, this.googleWorkspaces.getAliases());
     if (explicitAccount) {
       draftResult.draft.account = explicitAccount;
     }
     const explicitCalendar = extractExplicitCalendarAlias(
       userPrompt,
-      Object.keys(this.googleWorkspace.getCalendarAliases()),
+      Object.keys(workspace.getCalendarAliases()),
     );
     if (explicitCalendar) {
       draftResult.draft.calendarId = explicitCalendar;
@@ -11113,7 +11683,13 @@ export class AgentCore {
     if (!window) {
       return null;
     }
-    const aliases = resolvePromptAccountAliases(userPrompt, this.googleWorkspaces.getAliases());
+    const profile = this.personalMemory.getProfile();
+    const operationalMode = resolveEffectiveOperationalMode(userPrompt, profile);
+    const aliases = resolvePromptAccountAliases(
+      userPrompt,
+      this.googleWorkspaces.getAliases(),
+      profile.defaultAgendaScope,
+    );
     const explicitAccount = aliases.length === 1 ? aliases[0] : undefined;
     const events: Array<{ account: string; event: Awaited<ReturnType<GoogleWorkspaceService["listEventsInWindow"]>>[number] }> = [];
     for (const alias of aliases) {
@@ -11141,37 +11717,14 @@ export class AgentCore {
       }
     }
     requestLogger.info("Using direct calendar period list route", { period: window.label, account: explicitAccount ?? "all" });
-    const sortedEvents = [...events].sort((left, right) => {
-      const leftStart = left.event.start ? Date.parse(left.event.start) : Number.MAX_SAFE_INTEGER;
-      const rightStart = right.event.start ? Date.parse(right.event.start) : Number.MAX_SAFE_INTEGER;
-      if (leftStart !== rightStart) {
-        return leftStart - rightStart;
-      }
-      return left.event.summary.localeCompare(right.event.summary);
-    });
-
-    const reply = events.length === 0
-      ? `Nenhum compromisso em ${window.label}.`
-      : (() => {
-          const lines = [
-            `${window.label[0]?.toUpperCase() ?? ""}${window.label.slice(1)}: ${sortedEvents.length} compromisso${sortedEvents.length > 1 ? "s" : ""}.`,
-          ];
-          let currentDayHeader: string | null = null;
-          for (const item of sortedEvents) {
-            const dayHeader = formatCalendarDayHeader(item.event.start, this.config.google.defaultTimezone);
-            if (dayHeader !== currentDayHeader) {
-              lines.push("", `${dayHeader}:`);
-              currentDayHeader = dayHeader;
-            }
-            lines.push(
-              `- ${formatCalendarTimeRange(item.event.start, item.event.end, this.config.google.defaultTimezone)} — ${item.event.summary}${summarizeCalendarLocation(item.event.location) ? ` — local: ${summarizeCalendarLocation(item.event.location)}` : ""} | conta: ${item.account}`,
-            );
-          }
-          return lines.join("\n");
-        })();
     return {
       requestId,
-      reply,
+      reply: buildCalendarPeriodReply({
+        label: window.label,
+        timezone: this.config.google.defaultTimezone,
+        compact: operationalMode === "field",
+        events,
+      }),
       messages: buildBaseMessages(userPrompt, orchestration),
       toolExecutions: [],
     };
@@ -11197,46 +11750,41 @@ export class AgentCore {
       cleanCalendarEventTopicReference(parts.source) ??
       parts.source;
     const explicitAccount = extractExplicitAccountAlias(userPrompt, this.googleWorkspaces.getAliases());
-    const aliases = explicitAccount ? [explicitAccount] : this.googleWorkspaces.getAliases();
-    const matches: Array<{ account: string; event: Awaited<ReturnType<GoogleWorkspaceService["listEventsInWindow"]>>[number] }> = [];
-    const allWindowEvents: Array<{ account: string; event: Awaited<ReturnType<GoogleWorkspaceService["listEventsInWindow"]>>[number] }> = [];
-    for (const alias of aliases) {
-      const workspace = this.googleWorkspaces.getWorkspace(alias);
-      if (!workspace.getStatus().ready) continue;
-      const items = await workspace.listEventsInWindow({
-        timeMin: sourceDate?.startIso ?? new Date().toISOString(),
-        timeMax: sourceDate?.endIso ?? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
-        maxResults: 20,
-      });
-      for (const event of items) {
-        allWindowEvents.push({ account: alias, event });
-      }
-      for (const event of items) {
-        if (matchesCalendarEventTopic(event.summary, topic)) {
-          matches.push({ account: alias, event });
-        }
-      }
-    }
-    const resolvedMatches = matches.length === 0 && allWindowEvents.length === 1
-      ? allWindowEvents
-      : matches;
-    if (resolvedMatches.length === 0) {
+    const profile = this.personalMemory.getProfile();
+    const aliases = explicitAccount
+      ? [explicitAccount]
+      : resolvePromptAccountAliases(
+          userPrompt,
+          this.googleWorkspaces.getAliases(),
+          profile.defaultAgendaScope,
+        );
+    const resolution = await resolveCalendarEventReference({
+      accounts: this.googleWorkspaces,
+      aliases,
+      timezone: this.config.google.defaultTimezone,
+      timeMin: sourceDate?.startIso ?? new Date().toISOString(),
+      timeMax: sourceDate?.endIso ?? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+      action: "move",
+      topic,
+      recentMessages: [userPrompt],
+    });
+    if (resolution.kind === "not_found") {
       return {
         requestId,
-        reply: "Não encontrei o evento que você quer mover.",
+        reply: resolution.message,
         messages: buildBaseMessages(userPrompt, orchestration),
         toolExecutions: [],
       };
     }
-    if (resolvedMatches.length > 1) {
+    if (resolution.kind === "clarify") {
       return {
         requestId,
-        reply: "Encontrei mais de um evento compatível para mover. Seja mais específico no título ou data.",
+        reply: resolution.message,
         messages: buildBaseMessages(userPrompt, orchestration),
         toolExecutions: [],
       };
     }
-    const match = resolvedMatches[0];
+    const match = resolution.match;
     const baseDraft = {
       kind: "google_event_update" as const,
       eventId: match.event.id,
@@ -11251,9 +11799,21 @@ export class AgentCore {
       account: match.account,
       reminderMinutes: 30,
     };
-    const adjusted = adjustEventDraftFromInstruction(baseDraft, parts.targetInstruction);
-    const finalDraft = (adjusted ?? baseDraft) as PendingGoogleEventUpdateDraft;
-    requestLogger.info("Using direct Google Calendar move draft route", { account: match.account });
+    const normalizedInstruction = normalizeCalendarUpdateInstruction(parts);
+    const adjusted = adjustEventDraftFromInstruction(baseDraft, normalizedInstruction);
+    if (!adjusted) {
+      return {
+        requestId,
+        reply: "Entendi o evento, mas faltou um ajuste claro. Diga em uma frase curta o que mudar, por exemplo: `título: Reunião no CAPS`, `local: Sala 5` ou `das 14h às 15h`.",
+        messages: buildBaseMessages(userPrompt, orchestration),
+        toolExecutions: [],
+      };
+    }
+    const finalDraft = adjusted as PendingGoogleEventUpdateDraft;
+    requestLogger.info("Using direct Google Calendar update draft route", {
+      account: match.account,
+      verb: parts.verb,
+    });
     return {
       requestId,
       reply: buildGoogleEventUpdateDraftReply(finalDraft),
@@ -11318,21 +11878,18 @@ export class AgentCore {
       return null;
     }
 
-    const status = this.googleWorkspace.getStatus();
-    if (!status.ready) {
-      return {
-        requestId,
-        reply: `A integração do Google Workspace não está pronta. ${status.message}`,
-        messages: buildBaseMessages(userPrompt, orchestration),
-        toolExecutions: [],
-      };
-    }
-
     const explicitAccount = extractExplicitAccountAlias(userPrompt, this.googleWorkspaces.getAliases());
-    const accountAliases = explicitAccount ? [explicitAccount] : this.googleWorkspaces.getAliases();
+    const profile = this.personalMemory.getProfile();
+    const accountAliases = explicitAccount
+      ? [explicitAccount]
+      : resolvePromptAccountAliases(
+          userPrompt,
+          this.googleWorkspaces.getAliases(),
+          profile.defaultAgendaScope,
+        );
     const explicitCalendar = extractExplicitCalendarAlias(
       userPrompt,
-      Object.keys(this.googleWorkspace.getCalendarAliases()),
+      Object.keys(this.googleWorkspaces.getWorkspace(explicitAccount).getCalendarAliases()),
     );
     const targetDate = parseCalendarLookupDate(userPrompt, this.config.google.defaultTimezone);
     const topic = extractCalendarDeleteTopic(userPrompt) ?? extractCalendarLookupTopic(userPrompt);
@@ -11345,67 +11902,48 @@ export class AgentCore {
       };
     }
 
-    const matches: Array<{
-      account: string;
-      calendarId?: string;
-      event: Awaited<ReturnType<GoogleWorkspaceService["listEventsInWindow"]>>[number];
-    }> = [];
-
-    for (const alias of accountAliases) {
-      const workspace = this.googleWorkspaces.getWorkspace(alias);
-      if (!workspace.getStatus().ready) {
-        continue;
-      }
-      const events = await workspace.listEventsInWindow({
-        timeMin: targetDate?.startIso ?? new Date().toISOString(),
-        timeMax: targetDate?.endIso ?? new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
-        maxResults: 10,
-        calendarId: explicitCalendar,
-        query: topic,
-      });
-      const resolvedEvents = events.length > 0
-        ? events
-        : (await workspace.listEventsInWindow({
-            timeMin: targetDate?.startIso ?? new Date().toISOString(),
-            timeMax: targetDate?.endIso ?? new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
-            maxResults: 25,
-            calendarId: explicitCalendar,
-          })).filter((event) => matchesCalendarEventTopic(event.summary, topic));
-      for (const event of resolvedEvents) {
-        matches.push({
-          account: alias,
-          calendarId: explicitCalendar,
-          event,
-        });
-      }
-    }
-
-    if (matches.length === 0) {
+    const hasReadyAccount = accountAliases.some((alias) => this.googleWorkspaces.getWorkspace(alias).getStatus().ready);
+    if (!hasReadyAccount) {
+      const fallbackStatus = this.googleWorkspaces.getWorkspace(explicitAccount).getStatus();
       return {
         requestId,
-        reply: `Não encontrei evento correspondente para cancelar${targetDate ? ` em ${targetDate.label}` : ""}.`,
+        reply: `A integração do Google Workspace não está pronta. ${fallbackStatus.message}`,
         messages: buildBaseMessages(userPrompt, orchestration),
         toolExecutions: [],
       };
     }
 
-    if (matches.length > 1) {
-      const preview = matches
-        .slice(0, 3)
-        .map((item) => `- ${item.event.summary} | ${item.event.start ?? "sem horário"} | conta: ${item.account}`)
-        .join("\n");
+    const resolution = await resolveCalendarEventReference({
+      accounts: this.googleWorkspaces,
+      aliases: accountAliases,
+      timezone: this.config.google.defaultTimezone,
+      timeMin: targetDate?.startIso ?? new Date().toISOString(),
+      timeMax: targetDate?.endIso ?? new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+      action: "delete",
+      topic,
+      calendarId: explicitCalendar,
+      recentMessages: [userPrompt],
+    });
+
+    if (resolution.kind === "not_found") {
       return {
         requestId,
-        reply: [
-          "Encontrei mais de um evento compatível. Me diga qual quer cancelar.",
-          preview,
-        ].join("\n"),
+        reply: targetDate ? `${resolution.message.replace(/\.$/, "")} em ${targetDate.label}.` : resolution.message,
         messages: buildBaseMessages(userPrompt, orchestration),
         toolExecutions: [],
       };
     }
 
-    const match = matches[0];
+    if (resolution.kind === "clarify") {
+      return {
+        requestId,
+        reply: resolution.message,
+        messages: buildBaseMessages(userPrompt, orchestration),
+        toolExecutions: [],
+      };
+    }
+
+    const match = resolution.match;
     requestLogger.info("Using direct Google Calendar event delete draft route", {
       domain: orchestration.route.primaryDomain,
       account: match.account,
@@ -14114,6 +14652,168 @@ export class AgentCore {
     };
   }
 
+  private async tryRunDirectPersonalOperationalProfileShow(
+    userPrompt: string,
+    requestId: string,
+    orchestration: OrchestrationContext,
+    preferences: UserPreferences,
+  ): Promise<AgentRunResult | null> {
+    if (!isPersonalOperationalProfileShowPrompt(userPrompt)) {
+      return null;
+    }
+
+    const execution = await this.executeToolDirect("get_personal_operational_profile", {});
+    const rawResult = execution.rawResult as {
+      profile?: PersonalOperationalProfile;
+    };
+
+    return {
+      requestId,
+      reply: buildPersonalOperationalProfileReply(rawResult.profile ?? this.personalMemory.getProfile()),
+      messages: buildBaseMessages(userPrompt, orchestration, preferences),
+      toolExecutions: [
+        {
+          toolName: "get_personal_operational_profile",
+          resultPreview: execution.content.slice(0, 240),
+        },
+      ],
+    };
+  }
+
+  private async tryRunDirectPersonalOperationalProfileUpdate(
+    userPrompt: string,
+    requestId: string,
+    orchestration: OrchestrationContext,
+    preferences: UserPreferences,
+  ): Promise<AgentRunResult | null> {
+    if (!isPersonalOperationalProfileUpdatePrompt(userPrompt)) {
+      return null;
+    }
+
+    const currentProfile = this.personalMemory.getProfile();
+    const extracted = extractPersonalOperationalProfileUpdate(userPrompt, currentProfile);
+    if (!extracted) {
+      return {
+        requestId,
+        reply: "Diga o ajuste de perfil que você quer. Exemplo: `defina meu estilo de resposta como direto e objetivo`.",
+        messages: buildBaseMessages(userPrompt, orchestration, preferences),
+        toolExecutions: [],
+      };
+    }
+
+    const execution = await this.executeToolDirect("update_personal_operational_profile", {
+      ...(extracted.profile.defaultAgendaScope ? { defaultAgendaScope: extracted.profile.defaultAgendaScope } : {}),
+      ...(extracted.profile.responseStyle ? { responseStyle: extracted.profile.responseStyle } : {}),
+      ...(extracted.profile.briefingPreference ? { briefingPreference: extracted.profile.briefingPreference } : {}),
+      ...(extracted.profile.detailLevel ? { detailLevel: extracted.profile.detailLevel } : {}),
+      ...(extracted.profile.tonePreference ? { tonePreference: extracted.profile.tonePreference } : {}),
+      ...(extracted.profile.defaultOperationalMode ? { defaultOperationalMode: extracted.profile.defaultOperationalMode } : {}),
+      ...(extracted.profile.mobilityPreferences ? { mobilityPreferences: extracted.profile.mobilityPreferences } : {}),
+      ...(extracted.profile.autonomyPreferences ? { autonomyPreferences: extracted.profile.autonomyPreferences } : {}),
+      ...(extracted.profile.savedFocus ? { savedFocus: extracted.profile.savedFocus } : {}),
+      ...(extracted.profile.routineAnchors ? { routineAnchors: extracted.profile.routineAnchors } : {}),
+      ...(extracted.profile.operationalRules ? { operationalRules: extracted.profile.operationalRules } : {}),
+      ...(extracted.profile.attire?.carryItems ? { carryItems: extracted.profile.attire.carryItems } : {}),
+      ...(typeof extracted.profile.fieldModeHours === "number" ? { fieldModeHours: extracted.profile.fieldModeHours } : {}),
+    });
+    if (extracted.preferenceUpdate) {
+      this.preferences.update(extracted.preferenceUpdate);
+    }
+
+    const rawResult = execution.rawResult as {
+      profile?: PersonalOperationalProfile;
+    };
+
+    return {
+      requestId,
+      reply: buildPersonalOperationalProfileUpdatedReply(
+        rawResult.profile ?? this.personalMemory.getProfile(),
+        extracted.changeLabels,
+      ),
+      messages: buildBaseMessages(userPrompt, orchestration, this.preferences.get()),
+      toolExecutions: [
+        {
+          toolName: "update_personal_operational_profile",
+          resultPreview: execution.content.slice(0, 240),
+        },
+      ],
+    };
+  }
+
+  private async tryRunDirectPersonalOperationalProfileDelete(
+    userPrompt: string,
+    requestId: string,
+    orchestration: OrchestrationContext,
+    preferences: UserPreferences,
+  ): Promise<AgentRunResult | null> {
+    if (!isPersonalOperationalProfileDeletePrompt(userPrompt)) {
+      return null;
+    }
+
+    const currentProfile = this.personalMemory.getProfile();
+    const query = extractPersonalOperationalProfileRemoveQuery(userPrompt);
+    if (!query) {
+      return {
+        requestId,
+        reply: "Diga o que devo remover do seu perfil operacional.",
+        messages: buildBaseMessages(userPrompt, orchestration, preferences),
+        toolExecutions: [],
+      };
+    }
+
+    const removal = removeFromPersonalOperationalProfile(currentProfile, query);
+    if (!removal) {
+      return {
+        requestId,
+        reply: `Não encontrei ajuste de perfil compatível com "${query}".`,
+        messages: buildBaseMessages(userPrompt, orchestration, preferences),
+        toolExecutions: [],
+      };
+    }
+
+    const execution = await this.executeToolDirect("update_personal_operational_profile", {
+      ...(removal.profileUpdate.responseStyle ? { responseStyle: removal.profileUpdate.responseStyle } : {}),
+      ...(removal.profileUpdate.briefingPreference ? { briefingPreference: removal.profileUpdate.briefingPreference } : {}),
+      ...(removal.profileUpdate.detailLevel ? { detailLevel: removal.profileUpdate.detailLevel } : {}),
+      ...(removal.profileUpdate.tonePreference ? { tonePreference: removal.profileUpdate.tonePreference } : {}),
+      ...(removal.profileUpdate.defaultOperationalMode ? { defaultOperationalMode: removal.profileUpdate.defaultOperationalMode } : {}),
+      ...(removal.profileUpdate.mobilityPreferences ? { mobilityPreferences: removal.profileUpdate.mobilityPreferences } : {}),
+      ...(removal.profileUpdate.autonomyPreferences ? { autonomyPreferences: removal.profileUpdate.autonomyPreferences } : {}),
+      ...(removal.profileUpdate.routineAnchors ? { routineAnchors: removal.profileUpdate.routineAnchors } : {}),
+      ...(removal.profileUpdate.operationalRules ? { operationalRules: removal.profileUpdate.operationalRules } : {}),
+      ...(removal.profileUpdate.attire?.carryItems ? { carryItems: removal.profileUpdate.attire.carryItems } : {}),
+    });
+    const preferenceReset: import("../types/user-preferences.js").UpdateUserPreferencesInput = {};
+    if (removal.profileUpdate.responseStyle || removal.profileUpdate.tonePreference) {
+      preferenceReset.responseStyle = "executive";
+    }
+    if (removal.profileUpdate.briefingPreference || removal.profileUpdate.detailLevel) {
+      preferenceReset.responseLength = "short";
+    }
+    if (Object.keys(preferenceReset).length > 0) {
+      this.preferences.update(preferenceReset);
+    }
+
+    const rawResult = execution.rawResult as {
+      profile?: PersonalOperationalProfile;
+    };
+
+    return {
+      requestId,
+      reply: buildPersonalOperationalProfileRemovedReply(
+        rawResult.profile ?? this.personalMemory.getProfile(),
+        removal.removedLabels,
+      ),
+      messages: buildBaseMessages(userPrompt, orchestration, preferences),
+      toolExecutions: [
+        {
+          toolName: "update_personal_operational_profile",
+          resultPreview: execution.content.slice(0, 240),
+        },
+      ],
+    };
+  }
+
   private async tryRunDirectPersonalMemoryList(
     userPrompt: string,
     requestId: string,
@@ -14554,7 +15254,9 @@ export class AgentCore {
 
     return {
       requestId,
-      reply: this.responseOs.buildOrganizationReply(buildOperationalPlanContract(userPrompt, brief)),
+      reply: this.responseOs.buildOrganizationReply(
+        buildOperationalPlanContract(userPrompt, brief, this.personalMemory.getProfile()),
+      ),
       messages: buildBaseMessages(userPrompt, intent.orchestration, preferences),
       toolExecutions: [
         {

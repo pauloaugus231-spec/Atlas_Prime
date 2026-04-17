@@ -1,6 +1,13 @@
 export interface PersonalOperationalProfile {
   defaultAgendaScope: "primary" | "work" | "both";
   workCalendarAliases: string[];
+  responseStyle: string;
+  briefingPreference: "curto" | "executivo" | "detalhado";
+  detailLevel: "resumo" | "equilibrado" | "detalhado";
+  tonePreference: "objetivo" | "humano" | "firme" | "acolhedor" | "executivo";
+  defaultOperationalMode: "normal" | "field";
+  mobilityPreferences: string[];
+  autonomyPreferences: string[];
   savedFocus: string[];
   routineAnchors: string[];
   operationalRules: string[];
@@ -16,6 +23,13 @@ export interface PersonalOperationalProfile {
 export interface UpdatePersonalOperationalProfileInput {
   defaultAgendaScope?: PersonalOperationalProfile["defaultAgendaScope"];
   workCalendarAliases?: string[];
+  responseStyle?: string;
+  briefingPreference?: PersonalOperationalProfile["briefingPreference"];
+  detailLevel?: PersonalOperationalProfile["detailLevel"];
+  tonePreference?: PersonalOperationalProfile["tonePreference"];
+  defaultOperationalMode?: PersonalOperationalProfile["defaultOperationalMode"];
+  mobilityPreferences?: string[];
+  autonomyPreferences?: string[];
   savedFocus?: string[];
   routineAnchors?: string[];
   operationalRules?: string[];
