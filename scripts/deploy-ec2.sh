@@ -82,6 +82,27 @@ backup_agent_state() {
   sudo find "$BACKUP_DIR" -maxdepth 1 -type f -name 'agent-state-*.tgz' -mtime +14 -delete
 }
 
+profile_enabled() {
+  local profile="$1"
+  case ",$COMPOSE_PROFILES_VALUE," in
+    *,"$profile",*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+stop_inactive_profile_containers() {
+  if profile_enabled "whatsapp"; then
+    return
+  fi
+
+  log "Parando containers opcionais de WhatsApp/Evolution fora do profile ativo"
+  sudo docker stop \
+    atlas-whatsapp-sidecar \
+    atlas-evolution-api \
+    atlas-evolution-postgres \
+    atlas-evolution-redis >/dev/null 2>&1 || true
+}
+
 if grep -Eq '^OPENAI_API_KEY=.+$' ".env.production"; then
   ensure_env_default "VOICE_ENABLED" "true"
   ensure_env_default "VOICE_STT_PROVIDER" "openai"
@@ -117,6 +138,7 @@ fi
 
 log "Subindo stack de producao com lock exclusivo"
 sudo docker compose -f "$COMPOSE_FILE" up -d --build --remove-orphans
+stop_inactive_profile_containers
 
 deadline=$((SECONDS + HEALTH_TIMEOUT_SECONDS))
 last_status="unknown"

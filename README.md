@@ -238,7 +238,7 @@ O compose de producao sobe apenas o core do Atlas por padrao:
 - Logs ficam em `/srv/atlas/logs`.
 - O deploy cria backup local de `/srv/atlas/state/workspace/.agent-state` em `/srv/atlas/backups` antes de recriar containers.
 
-WhatsApp/Evolution ficam fora do boot padrao para reduzir consumo e evitar concorrencia desnecessaria nos bancos locais. Para ativar esse bloco na nuvem, defina `ATLAS_COMPOSE_PROFILES=whatsapp` ou `COMPOSE_PROFILES=whatsapp` no ambiente de deploy/`.env.production` e rode o deploy novamente.
+WhatsApp/Evolution ficam fora do boot padrao para reduzir consumo e evitar concorrencia desnecessaria nos bancos locais. Quando o profile `whatsapp` nao esta ativo, o deploy tambem para containers antigos desse bloco sem apagar volumes. Para ativar esse bloco na nuvem, defina `ATLAS_COMPOSE_PROFILES=whatsapp` ou `COMPOSE_PROFILES=whatsapp` no ambiente de deploy/`.env.production` e rode o deploy novamente.
 
 Se alterar `.env`, recrie o container:
 
