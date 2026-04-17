@@ -64,56 +64,56 @@ jobs:
           set -euo pipefail
           export DEPLOY_PATH OPERATOR_ID OPERATOR_NAME MONITORED_INSTANCE INSTITUTIONAL_NUMBER DEFAULT_ACCOUNT OPERATOR_ALERT_CHANNEL TELEGRAM_OPERATOR_MODE
           python3 - <<'PY'
-import os
-from pathlib import Path
+            import os
+            from pathlib import Path
 
-path = Path(os.environ["DEPLOY_PATH"]) / ".env.production"
-updates = {
-    "OPERATOR_ID": os.environ["OPERATOR_ID"],
-    "OPERATOR_NAME": os.environ["OPERATOR_NAME"],
-    "OPERATOR_ALERT_CHANNEL": os.environ["OPERATOR_ALERT_CHANNEL"],
-    "TELEGRAM_OPERATOR_MODE": os.environ["TELEGRAM_OPERATOR_MODE"],
-    "WHATSAPP_ENABLED": "true",
-    "WHATSAPP_SIDECAR_ENABLED": "true",
-    "WHATSAPP_CONVERSATION_ENABLED": "false",
-    "WHATSAPP_MONITORED_INSTANCES": os.environ["MONITORED_INSTANCE"],
-    "WHATSAPP_IGNORE_GROUPS": "true",
-    "WHATSAPP_DEFAULT_ACCOUNT": os.environ["DEFAULT_ACCOUNT"],
-    "WHATSAPP_INSTANCE_ACCOUNTS": f"{os.environ['MONITORED_INSTANCE']}:{os.environ['DEFAULT_ACCOUNT']}",
-    "EVOLUTION_INSTANCE_NAME": os.environ["MONITORED_INSTANCE"],
-    "ATLAS_COMPOSE_PROFILES": "whatsapp",
-}
-defaults = {
-    "EVOLUTION_API_URL": "http://evolution-api:8080",
-}
+            path = Path(os.environ["DEPLOY_PATH"]) / ".env.production"
+            updates = {
+                "OPERATOR_ID": os.environ["OPERATOR_ID"],
+                "OPERATOR_NAME": os.environ["OPERATOR_NAME"],
+                "OPERATOR_ALERT_CHANNEL": os.environ["OPERATOR_ALERT_CHANNEL"],
+                "TELEGRAM_OPERATOR_MODE": os.environ["TELEGRAM_OPERATOR_MODE"],
+                "WHATSAPP_ENABLED": "true",
+                "WHATSAPP_SIDECAR_ENABLED": "true",
+                "WHATSAPP_CONVERSATION_ENABLED": "false",
+                "WHATSAPP_MONITORED_INSTANCES": os.environ["MONITORED_INSTANCE"],
+                "WHATSAPP_IGNORE_GROUPS": "true",
+                "WHATSAPP_DEFAULT_ACCOUNT": os.environ["DEFAULT_ACCOUNT"],
+                "WHATSAPP_INSTANCE_ACCOUNTS": f"{os.environ['MONITORED_INSTANCE']}:{os.environ['DEFAULT_ACCOUNT']}",
+                "EVOLUTION_INSTANCE_NAME": os.environ["MONITORED_INSTANCE"],
+                "ATLAS_COMPOSE_PROFILES": "whatsapp",
+            }
+            defaults = {
+                "EVOLUTION_API_URL": "http://evolution-api:8080",
+            }
 
-content = path.read_text(encoding="utf-8") if path.exists() else ""
-lines = content.splitlines()
-out = []
-seen = set()
-existing = {}
-for line in lines:
-    stripped = line.strip()
-    if not stripped or stripped.startswith("#") or "=" not in line:
-        out.append(line)
-        continue
-    key, value = line.split("=", 1)
-    existing[key] = value
-    if key in updates:
-        out.append(f"{key}={updates[key]}")
-        seen.add(key)
-    else:
-        out.append(line)
-for key, value in updates.items():
-    if key not in seen and key not in existing:
-        out.append(f"{key}={value}")
-    elif key not in seen and key in existing:
-        out.append(f"{key}={value}")
-for key, value in defaults.items():
-    if key not in existing and key not in updates:
-        out.append(f"{key}={value}")
-path.write_text("\n".join(out).rstrip() + "\n", encoding="utf-8")
-PY
+            content = path.read_text(encoding="utf-8") if path.exists() else ""
+            lines = content.splitlines()
+            out = []
+            seen = set()
+            existing = {}
+            for line in lines:
+                stripped = line.strip()
+                if not stripped or stripped.startswith("#") or "=" not in line:
+                    out.append(line)
+                    continue
+                key, value = line.split("=", 1)
+                existing[key] = value
+                if key in updates:
+                    out.append(f"{key}={updates[key]}")
+                    seen.add(key)
+                else:
+                    out.append(line)
+            for key, value in updates.items():
+                if key not in seen and key not in existing:
+                    out.append(f"{key}={value}")
+                elif key not in seen and key in existing:
+                    out.append(f"{key}={value}")
+            for key, value in defaults.items():
+                if key not in existing and key not in updates:
+                    out.append(f"{key}={value}")
+            path.write_text("\n".join(out).rstrip() + "\n", encoding="utf-8")
+          PY
 
       - name: Redeploy stack
         run: |
@@ -155,108 +155,108 @@ PY
           done
 
           python3 - <<'PY'
-import json
-import os
-import urllib.request
+            import json
+            import os
+            import urllib.request
 
-base_url = os.environ["BASE_URL"].rstrip("/")
-api_key = os.environ["API_KEY"]
-instance = os.environ["INSTANCE"]
-number = os.environ["NUMBER"]
-headers = {"apikey": api_key, "Content-Type": "application/json"}
-summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+            base_url = os.environ["BASE_URL"].rstrip("/")
+            api_key = os.environ["API_KEY"]
+            instance = os.environ["INSTANCE"]
+            number = os.environ["NUMBER"]
+            headers = {"apikey": api_key, "Content-Type": "application/json"}
+            summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
 
-def request(method: str, path: str, body=None):
-    data = None if body is None else json.dumps(body).encode("utf-8")
-    req = urllib.request.Request(f"{base_url}{path}", data=data, method=method)
-    for key, value in headers.items():
-        req.add_header(key, value)
-    with urllib.request.urlopen(req, timeout=20) as response:
-        raw = response.read().decode("utf-8")
-        return json.loads(raw) if raw else None
+            def request(method: str, path: str, body=None):
+                data = None if body is None else json.dumps(body).encode("utf-8")
+                req = urllib.request.Request(f"{base_url}{path}", data=data, method=method)
+                for key, value in headers.items():
+                    req.add_header(key, value)
+                with urllib.request.urlopen(req, timeout=20) as response:
+                    raw = response.read().decode("utf-8")
+                    return json.loads(raw) if raw else None
 
-def write_summary(lines):
-    if not summary_path:
-        return
-    with open(summary_path, "a", encoding="utf-8") as handle:
-        handle.write("\n".join(lines) + "\n")
+            def write_summary(lines):
+                if not summary_path:
+                    return
+                with open(summary_path, "a", encoding="utf-8") as handle:
+                    handle.write("\n".join(lines) + "\n")
 
-instances = request("GET", "/instance/fetchInstances") or []
-existing = None
-if isinstance(instances, list):
-    for item in instances:
-        if not isinstance(item, dict):
-            continue
-        payload = item.get("instance")
-        if isinstance(payload, dict) and payload.get("instanceName") == instance:
-            existing = payload
-            break
+            instances = request("GET", "/instance/fetchInstances") or []
+            existing = None
+            if isinstance(instances, list):
+                for item in instances:
+                    if not isinstance(item, dict):
+                        continue
+                    payload = item.get("instance")
+                    if isinstance(payload, dict) and payload.get("instanceName") == instance:
+                        existing = payload
+                        break
 
-created = False
-if existing is None:
-    create_body = {
-        "instanceName": instance,
-        "integration": "WHATSAPP-BAILEYS",
-        "qrcode": True,
-        "number": number,
-        "groupsIgnore": True,
-    }
-    create_response = request("POST", "/instance/create", create_body)
-    created = True
-    existing = (create_response or {}).get("instance") if isinstance(create_response, dict) else None
+            created = False
+            if existing is None:
+                create_body = {
+                    "instanceName": instance,
+                    "integration": "WHATSAPP-BAILEYS",
+                    "qrcode": True,
+                    "number": number,
+                    "groupsIgnore": True,
+                }
+                create_response = request("POST", "/instance/create", create_body)
+                created = True
+                existing = (create_response or {}).get("instance") if isinstance(create_response, dict) else None
 
-state = None
-for _ in range(10):
-    try:
-        state_response = request("GET", f"/instance/connectionState/{instance}")
-    except Exception:
-        state_response = None
-    if isinstance(state_response, dict):
-        instance_state = state_response.get("instance")
-        if isinstance(instance_state, dict):
-            state = instance_state.get("state")
-    if state:
-        break
-    import time
-    time.sleep(2)
+            state = None
+            for _ in range(10):
+                try:
+                    state_response = request("GET", f"/instance/connectionState/{instance}")
+                except Exception:
+                    state_response = None
+                if isinstance(state_response, dict):
+                    instance_state = state_response.get("instance")
+                    if isinstance(instance_state, dict):
+                        state = instance_state.get("state")
+                if state:
+                    break
+                import time
+                time.sleep(2)
 
-summary = [
-    "## WhatsApp monitor setup",
-    f"- Instance: `{instance}`",
-    f"- Number: `{number}`",
-    f"- Created now: `{'yes' if created else 'no'}`",
-    f"- Connection state before pairing: `{state or 'unknown'}`",
-]
+            summary = [
+                "## WhatsApp monitor setup",
+                f"- Instance: `{instance}`",
+                f"- Number: `{number}`",
+                f"- Created now: `{'yes' if created else 'no'}`",
+                f"- Connection state before pairing: `{state or 'unknown'}`",
+            ]
 
-if state != "open":
-    connect_response = None
-    last_error = None
-    for _ in range(10):
-        try:
-            connect_response = request("GET", f"/instance/connect/{instance}?number={number}")
-            break
-        except Exception as error:
-            last_error = error
-            import time
-            time.sleep(2)
-    if connect_response is None and last_error is not None:
-        raise last_error
-    pairing_code = connect_response.get("pairingCode") if isinstance(connect_response, dict) else None
-    summary.append(f"- Pairing code: `{pairing_code or 'not returned'}`")
-    print(json.dumps({
-        "instance": instance,
-        "state": state or "unknown",
-        "created": created,
-        "pairingCode": pairing_code,
-    }, ensure_ascii=False))
-else:
-    summary.append("- Pairing code: `already connected`")
-    print(json.dumps({
-        "instance": instance,
-        "state": state,
-        "created": created,
-        "pairingCode": None,
-    }, ensure_ascii=False))
+            if state != "open":
+                connect_response = None
+                last_error = None
+                for _ in range(10):
+                    try:
+                        connect_response = request("GET", f"/instance/connect/{instance}?number={number}")
+                        break
+                    except Exception as error:
+                        last_error = error
+                        import time
+                        time.sleep(2)
+                if connect_response is None and last_error is not None:
+                    raise last_error
+                pairing_code = connect_response.get("pairingCode") if isinstance(connect_response, dict) else None
+                summary.append(f"- Pairing code: `{pairing_code or 'not returned'}`")
+                print(json.dumps({
+                    "instance": instance,
+                    "state": state or "unknown",
+                    "created": created,
+                    "pairingCode": pairing_code,
+                }, ensure_ascii=False))
+            else:
+                summary.append("- Pairing code: `already connected`")
+                print(json.dumps({
+                    "instance": instance,
+                    "state": state,
+                    "created": created,
+                    "pairingCode": None,
+                }, ensure_ascii=False))
 
-write_summary(summary)
-PY
+            write_summary(summary)
+          PY
