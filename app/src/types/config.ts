@@ -37,6 +37,20 @@ export interface TelegramConfig {
   operationalModeHours: number;
 }
 
+export type VoiceSttProvider = "openai" | "command";
+
+export interface VoiceConfig {
+  enabled: boolean;
+  sttProvider: VoiceSttProvider;
+  maxAudioSeconds: number;
+  maxAudioBytes: number;
+  tempDir: string;
+  sttCommand?: string;
+  sttArgs: string[];
+  sttTimeoutMs: number;
+  openAiModel: string;
+}
+
 export interface BriefingConfig {
   weatherEnabled: boolean;
   weatherLocation: string;
@@ -182,6 +196,7 @@ export interface AppConfig {
   paths: AppPathsConfig;
   llm: LlmConfig;
   telegram: TelegramConfig;
+  voice: VoiceConfig;
   briefing: BriefingConfig;
   externalReasoning: ExternalReasoningConfig;
   email: EmailConfig;

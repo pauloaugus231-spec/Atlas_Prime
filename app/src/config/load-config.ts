@@ -10,6 +10,8 @@ import type {
   GoogleMapsConfig,
   GoogleWorkspaceConfig,
   MediaConfig,
+  VoiceConfig,
+  VoiceSttProvider,
 } from "../types/config.js";
 import type { LogLevel } from "../types/logger.js";
 
@@ -435,6 +437,24 @@ function buildExternalReasoningConfig(env: NodeJS.ProcessEnv): ExternalReasoning
   };
 }
 
+function buildVoiceConfig(env: NodeJS.ProcessEnv, workspaceDir: string): VoiceConfig {
+  const rawProvider = env.VOICE_STT_PROVIDER?.trim().toLowerCase();
+  const sttProvider: VoiceSttProvider = rawProvider === "command" ? "command" : "openai";
+  return {
+    enabled: parseBoolean(env.VOICE_ENABLED, false),
+    sttProvider,
+    maxAudioSeconds: parsePositiveInteger(env.VOICE_MAX_AUDIO_SECONDS, 90),
+    maxAudioBytes: parsePositiveInteger(env.VOICE_MAX_AUDIO_BYTES, 15 * 1024 * 1024),
+    tempDir: path.resolve(
+      env.VOICE_TEMP_DIR?.trim() || path.join(workspaceDir, ".agent-state", "voice-temp"),
+    ),
+    sttCommand: env.VOICE_STT_COMMAND?.trim() || undefined,
+    sttArgs: parseStringList(env.VOICE_STT_ARGS),
+    sttTimeoutMs: parsePositiveInteger(env.VOICE_STT_TIMEOUT_MS, 120_000),
+    openAiModel: env.VOICE_OPENAI_MODEL?.trim() || "gpt-4o-mini-transcribe",
+  };
+}
+
 function buildMediaConfig(env: NodeJS.ProcessEnv): MediaConfig {
   const pexelsApiKey = env.PEXELS_API_KEY?.trim() || undefined;
   const pexelsEnabled = parseBoolean(env.PEXELS_ENABLED, Boolean(pexelsApiKey));
@@ -620,6 +640,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       dailyEditorialAutomationEnabled: parseBoolean(env.TELEGRAM_DAILY_EDITORIAL_AUTOMATION_ENABLED, false),
       operationalModeHours: parsePositiveInteger(env.TELEGRAM_OPERATIONAL_MODE_HOURS, 18),
     },
+    voice: buildVoiceConfig(env, workspaceDir),
     briefing: buildBriefingConfig(env),
     externalReasoning: buildExternalReasoningConfig(env),
     email: baseEmailConfig,

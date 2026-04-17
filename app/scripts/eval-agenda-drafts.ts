@@ -82,6 +82,90 @@ function run() {
     detail: JSON.stringify(movedDraft, null, 2),
   });
 
+  const eventPrefixDraft = buildEventDraftFromPrompt(
+    "cria o evento provas da faculdade dia 15 de junho às 8 da manhã",
+    timezone,
+  );
+  results.push({
+    name: "event_prefix_is_removed_from_clean_title",
+    passed: Boolean(
+      eventPrefixDraft.draft &&
+      eventPrefixDraft.draft.summary === "Provas da faculdade" &&
+      eventPrefixDraft.draft.start.includes("-06-15T08:00"),
+    ),
+    detail: JSON.stringify(eventPrefixDraft, null, 2),
+  });
+
+  const createEventDraft = buildEventDraftFromPrompt(
+    "cria um evento provas da faculdade dia 15 de junho às 8 da manhã",
+    timezone,
+  );
+  results.push({
+    name: "create_event_command_is_not_part_of_title",
+    passed: Boolean(
+      createEventDraft.draft &&
+      createEventDraft.draft.summary === "Provas da faculdade" &&
+      createEventDraft.draft.start.includes("-06-15T08:00"),
+    ),
+    detail: JSON.stringify(createEventDraft, null, 2),
+  });
+
+  const agendaVerbDraft = buildEventDraftFromPrompt(
+    "agenda prova da faculdade dia 15 às 8",
+    timezone,
+  );
+  results.push({
+    name: "agenda_as_imperative_creates_clean_title",
+    passed: Boolean(
+      agendaVerbDraft.draft &&
+      agendaVerbDraft.draft.summary === "Prova da faculdade" &&
+      agendaVerbDraft.draft.start.includes("T08:00"),
+    ),
+    detail: JSON.stringify(agendaVerbDraft, null, 2),
+  });
+
+  const agendaPhraseDraft = buildEventDraftFromPrompt(
+    "coloca na agenda provas da faculdade dia 15 de junho às 8",
+    timezone,
+  );
+  results.push({
+    name: "coloca_na_agenda_prefix_is_removed",
+    passed: Boolean(
+      agendaPhraseDraft.draft &&
+      agendaPhraseDraft.draft.summary === "Provas da faculdade" &&
+      agendaPhraseDraft.draft.start.includes("-06-15T08:00"),
+    ),
+    detail: JSON.stringify(agendaPhraseDraft, null, 2),
+  });
+
+  const calledDraft = buildEventDraftFromPrompt(
+    "cria um compromisso chamado provas da faculdade dia 15 às 8",
+    timezone,
+  );
+  results.push({
+    name: "called_phrase_is_removed_from_title",
+    passed: Boolean(
+      calledDraft.draft &&
+      calledDraft.draft.summary === "Provas da faculdade" &&
+      calledDraft.draft.start.includes("T08:00"),
+    ),
+    detail: JSON.stringify(calledDraft, null, 2),
+  });
+
+  const acronymDraft = buildEventDraftFromPrompt(
+    "cria um evento reunião do caps dia 15 de junho às 8",
+    timezone,
+  );
+  results.push({
+    name: "event_title_uses_natural_capitalization_and_acronyms",
+    passed: Boolean(
+      acronymDraft.draft &&
+      acronymDraft.draft.summary === "Reunião do CAPS" &&
+      acronymDraft.draft.start.includes("-06-15T08:00"),
+    ),
+    detail: JSON.stringify(acronymDraft, null, 2),
+  });
+
   const failures = results.filter((item) => !item.passed);
   for (const item of results.filter((entry) => entry.passed)) {
     console.log(`PASS ${item.name}`);

@@ -1,9 +1,9 @@
-interface AudioTranscriptionResult {
+export interface AudioTranscriptionResult {
   text: string;
   model: string;
 }
 
-interface AudioTranscriptionInput {
+export interface AudioTranscriptionInput {
   audio: Uint8Array;
   filename: string;
   mimeType?: string;
@@ -19,6 +19,7 @@ export class OpenAiAudioTranscriptionService {
     private readonly apiKey: string,
     private readonly baseUrl = "https://api.openai.com/v1",
     private readonly model = "gpt-4o-mini-transcribe",
+    private readonly timeoutMs = 120000,
   ) {}
 
   async transcribe(input: AudioTranscriptionInput): Promise<AudioTranscriptionResult> {
@@ -42,7 +43,7 @@ export class OpenAiAudioTranscriptionService {
         Authorization: `Bearer ${this.apiKey}`,
       },
       body,
-      signal: AbortSignal.timeout(120000),
+      signal: AbortSignal.timeout(this.timeoutMs),
     });
 
     if (!response.ok) {

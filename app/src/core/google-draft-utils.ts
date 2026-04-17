@@ -184,6 +184,46 @@ function parseDateReference(normalizedPrompt: string, timeZone: string): { year:
     return { year: yearCandidate, month, day };
   }
 
+  const monthMap = new Map([
+    ["janeiro", 1],
+    ["fevereiro", 2],
+    ["marco", 3],
+    ["abril", 4],
+    ["maio", 5],
+    ["junho", 6],
+    ["julho", 7],
+    ["agosto", 8],
+    ["setembro", 9],
+    ["outubro", 10],
+    ["novembro", 11],
+    ["dezembro", 12],
+  ]);
+  const namedDateMatch = normalizedPrompt.match(
+    /\b(?:dia\s+)?(\d{1,2})\s+(?:de\s+)?(janeiro|fevereiro|marco|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro)(?:\s+(?:de\s+)?(\d{2,4}))?\b/,
+  );
+  if (namedDateMatch) {
+    const day = Number.parseInt(namedDateMatch[1], 10);
+    const month = monthMap.get(namedDateMatch[2]) ?? now.month;
+    const yearCandidate = namedDateMatch[3]
+      ? Number.parseInt(namedDateMatch[3].length === 2 ? `20${namedDateMatch[3]}` : namedDateMatch[3], 10)
+      : now.year;
+    return { year: yearCandidate, month, day };
+  }
+
+  const dayOnlyMatch = normalizedPrompt.match(/\bdia\s+(\d{1,2})\b/);
+  if (dayOnlyMatch) {
+    const day = Number.parseInt(dayOnlyMatch[1], 10);
+    const currentMonthDate = new Date(Date.UTC(now.year, now.month - 1, day, 12, 0, 0));
+    const nextOccurrence = day >= now.day
+      ? currentMonthDate
+      : new Date(Date.UTC(now.year, now.month, day, 12, 0, 0));
+    return {
+      year: nextOccurrence.getUTCFullYear(),
+      month: nextOccurrence.getUTCMonth() + 1,
+      day: nextOccurrence.getUTCDate(),
+    };
+  }
+
   const weekdayMap: Array<{ tokens: string[]; weekday: number }> = [
     { tokens: ["domingo"], weekday: 0 },
     { tokens: ["segunda", "segunda-feira"], weekday: 1 },
@@ -214,6 +254,10 @@ function parseTimeRange(normalizedPrompt: string): { startHour: number; startMin
     if (!match) {
       continue;
     }
+    const prefix = normalizedPrompt.slice(Math.max(0, (match.index ?? 0) - 8), match.index ?? 0);
+    if (/\bdia\s+$/.test(prefix)) {
+      continue;
+    }
 
     return {
       startHour: Number.parseInt(match[1], 10),
@@ -239,13 +283,24 @@ function parseSingleTime(normalizedPrompt: string): { hour: number; minute: numb
       continue;
     }
 
+    const rawHour = Number.parseInt(match[1], 10);
     return {
-      hour: Number.parseInt(match[1], 10),
+      hour: adjustHourForDayPeriod(rawHour, normalizedPrompt),
       minute: Number.parseInt(match[2] ?? "0", 10),
     };
   }
 
   return null;
+}
+
+function adjustHourForDayPeriod(hour: number, normalizedPrompt: string): number {
+  if (/\b(?:da|de|pela)\s+manha\b/.test(normalizedPrompt)) {
+    return hour === 12 ? 0 : hour;
+  }
+  if (/\b(?:da|de|pela)\s+(?:tarde|noite)\b/.test(normalizedPrompt) && hour >= 1 && hour < 12) {
+    return hour + 12;
+  }
+  return hour;
 }
 
 function parseReminderMinutes(normalizedPrompt: string): number | undefined {
@@ -290,8 +345,9 @@ function extractLocation(value: string): string | undefined {
     .replace(/\b(?:proxima|próxima|proximo|próximo)\s+(?:segunda(?:-feira)?|terca(?:-feira)?|terça(?:-feira)?|quarta(?:-feira)?|quinta(?:-feira)?|sexta(?:-feira)?|sabado|sábado|domingo)\b/gi, " ")
     .replace(/\b(?:amanha|amanhã|hoje)\b/gi, " ")
     .replace(/\bdas?\s+\d{1,2}(?::\d{2})?\s*(?:h)?\s+(?:as|a|ate)\s+\d{1,2}(?::\d{2})?\s*(?:h)?\b/gi, " ")
-    .replace(/\bas?\s+\d{1,2}(?::\d{2})?\s*(?:h)?\b/gi, " ")
+    .replace(/\b(?:as|às|a)\s+\d{1,2}(?::\d{2})?\s*(?:h)?\b/gi, " ")
     .replace(/\b\d{1,2}h(?:\d{2})?\b/gi, " ")
+    .replace(/\b(?:da|de|pela)\s+(?:manh[aã]|tarde|noite)\b/gi, " ")
     .replace(/\b(?:principal|primary|abordagem)\b/gi, " ")
     .replace(/\bàs\b/gi, " ")
     .replace(/\s+/g, " ")
@@ -330,35 +386,80 @@ function cleanupDraftTitle(value: string): string {
   return withoutTrailingPunctuation.charAt(0).toUpperCase() + withoutTrailingPunctuation.slice(1);
 }
 
+const EVENT_TITLE_ACRONYMS = new Map([
+  ["caps", "CAPS"],
+  ["creas", "CREAS"],
+  ["cras", "CRAS"],
+  ["paefi", "PAEFI"],
+  ["seas", "SEAS"],
+  ["ubs", "UBS"],
+  ["upa", "UPA"],
+  ["sus", "SUS"],
+]);
+
+function restoreCommonTitleWord(value: string): string {
+  const lower = value.toLowerCase();
+  if (lower === "reuniao") {
+    return "reunião";
+  }
+  return lower;
+}
+
+function formatEventTitle(value: string): string {
+  return value
+    .trim()
+    .split(/\s+/)
+    .map((token, index) => {
+      const lower = token.toLowerCase();
+      if (EVENT_TITLE_ACRONYMS.has(lower)) {
+        return EVENT_TITLE_ACRONYMS.get(lower)!;
+      }
+      const restored = restoreCommonTitleWord(lower);
+      if (index === 0) {
+        return restored.charAt(0).toUpperCase() + restored.slice(1);
+      }
+      return restored;
+    })
+    .join(" ");
+}
+
 function cleanupEventTitle(value: string): string {
   const cleaned = normalize(value)
-    .replace(/\b(?:agende|agendar|marque|marcar|crie|criar|coloque|coloca|adicione|adiciona)\b/g, " ")
+    .replace(/\b(?:agende|agenda|agendar|marque|marca|marcar|crie|cria|criar|coloque|coloca|adicione|adiciona)\b/g, " ")
     .replace(/\bcom(?:\s+google)?\s+meet\b/g, " ")
     .replace(/\bsem(?:\s+google)?\s+meet\b/g, " ")
+    .replace(/\b(?:chamado|chamada|com\s+o\s+titulo|com\s+título|com\s+titulo|titulo|título|nomeado|nomeada)\b/g, " ")
     .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, " ")
     .replace(/\blocal\s*[:=]\s*[^,.;\n]+/gi, " ")
     .replace(/(?:,\s*|\s+)(?:na|no|em)\s+([^,.;\n]{3,})$/gi, " ")
     .replace(/(?:,\s*|\s+)(?:na|no|em)\s+(?:quadra|arena|campo|ginasio|ginásio|clube|audit[oó]rio|sala)\b[^,.;\n]*/gi, " ")
     .replace(
-      /,\s*(?:coloque|coloca|adicione|adiciona|agende|agendar|marque|marcar|registre|salve)\b[\s\S]*$/g,
+      /,\s*(?:coloque|coloca|adicione|adiciona|agende|agenda|agendar|marque|marca|marcar|registre|salve)\b[\s\S]*$/g,
       " ",
     )
     .replace(
-      /\b(?:coloque|coloca|adicione|adiciona|agende|agendar|marque|marcar|registre|salve)\b(?:\s+isso)?\s+(?:na\s+minha\s+agenda|na\s+agenda|no\s+meu\s+calendario|no\s+calendario|ao\s+calendario)\b/g,
+      /\b(?:coloque|coloca|adicione|adiciona|agende|agenda|agendar|marque|marca|marcar|registre|salve)\b(?:\s+isso)?\s+(?:na\s+minha\s+agenda|na\s+agenda|no\s+meu\s+calendario|no\s+calendario|ao\s+calendario)\b/g,
+      " ",
+    )
+    .replace(
+      /\b(?:na\s+minha\s+agenda|na\s+agenda|no\s+meu\s+calendario|no\s+calendario|ao\s+calendario)\s+(?:um|uma|o|a)?\s*(?:evento|compromisso|reuniao|lembrete)?\b/g,
       " ",
     )
     .replace(/\b(?:na minha agenda(?: \w+)?|na agenda(?: \w+)?|no meu calendario(?: \w+)?|no calendario(?: \w+)?)\b/g, " ")
     .replace(/\b(?:agenda|calendario)(?:\s+(?:da|de))?\s+(?:abordagem|principal|pessoal|trabalho)\b/g, " ")
     .replace(/\b(?:na|no|em|para)\s+(?:abordagem|principal|primary|pessoal)\b/g, " ")
-    .replace(/\b(?:um|uma)\s+(?:evento|compromisso|reuniao)\b/g, " ")
+    .replace(/^\s*(?:(?:um|uma|o|a)\s*(?:evento|compromisso|lembrete)|(?:evento|lembrete))\s+/g, " ")
     .replace(/\b(?:convide|convidar|convidados?|participantes?)\b/g, " ")
     .replace(/\b(?:tenho|preciso|quero|gostaria)\s+(?:uma|um)\b/g, " ")
     .replace(/\b(?:na\s+minha\s+agenda|na\s+agenda|no\s+meu\s+calendario|no\s+calendario|ao\s+calendario)\b/g, " ")
-    .replace(/\b(?:para|com prazo|prazo|no dia|dia|amanha|hoje|proxima|proximo|segunda(?:-feira)?|terca(?:-feira)?|quarta(?:-feira)?|quinta(?:-feira)?|sexta(?:-feira)?|sabado|domingo)\b/g, " ")
+    .replace(/\b(?:dia\s+)?\d{1,2}\s+(?:de\s+)?(?:janeiro|fevereiro|marco|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro)(?:\s+(?:de\s+)?\d{2,4})?\b/g, " ")
+    .replace(/\bdia\s+\d{1,2}\b/g, " ")
+    .replace(/\b(?:com prazo|prazo|no dia|dia|amanha|hoje|proxima|proximo|segunda(?:-feira)?|terca(?:-feira)?|quarta(?:-feira)?|quinta(?:-feira)?|sexta(?:-feira)?|sabado|domingo)\b/g, " ")
     .replace(/\b\d{1,2}\/\d{1,2}(?:\/\d{2,4})?\b/g, " ")
     .replace(/\bdas?\s+\d{1,2}(?::\d{2})?\s*(?:h)?\s+(?:as|a|ate)\s+\d{1,2}(?::\d{2})?\s*(?:h)?\b/g, " ")
     .replace(/\bas?\s+\d{1,2}(?::\d{2})?\s*(?:h)?\b/g, " ")
     .replace(/\b\d{1,2}h(?:\d{2})?\b/g, " ")
+    .replace(/\b(?:da|de|pela)\s+(?:manha|tarde|noite)\b/g, " ")
     .replace(/\bduracao\b/g, " ")
     .replace(/\bparticipantes?\b/g, " ")
     .replace(/\bconvidados?\b/g, " ")
@@ -384,12 +485,7 @@ function cleanupEventTitle(value: string): string {
     return "";
   }
 
-  const restored = withoutTrailingPunctuation
-    .replace(/\breuniao\b/gi, "Reunião")
-    .replace(/\bcompromisso\b/gi, "Compromisso")
-    .replace(/\bevento\b/gi, "Evento");
-
-  return restored.charAt(0).toUpperCase() + restored.slice(1);
+  return formatEventTitle(withoutTrailingPunctuation);
 }
 
 function prettifyLocationLabel(value: string): string {
@@ -464,18 +560,25 @@ export function isGoogleTaskCreatePrompt(prompt: string): boolean {
 export function isGoogleEventCreatePrompt(prompt: string): boolean {
   const normalized = normalize(prompt);
   const hasCalendar = /\b(?:agenda|calendario)\b/.test(normalized);
-  const hasAction = /\b(?:coloque|coloca|adicione|adiciona|agende|agendar|marque|marcar|crie|criar)\b/.test(normalized);
+  const hasAction = /\b(?:coloque|coloca|adicione|adiciona|agende|agenda|agendar|marque|marca|marcar|crie|cria|criar)\b/.test(normalized);
   const hasEventNoun = /\b(?:evento|compromisso|reuniao)\b/.test(normalized);
+  const startsWithSchedulingVerb = /^(?:por favor\s+)?(?:coloque|coloca|adicione|adiciona|agende|agenda|agendar|marque|marca|marcar|crie|cria|criar)\b/.test(normalized);
+  const hasTime = Boolean(parseTimeRange(normalized) || parseSingleTime(normalized));
   return includesAny(normalized, [
     "crie um evento",
+    "cria um evento",
     "criar um evento",
     "crie um compromisso",
+    "cria um compromisso",
     "criar um compromisso",
     "agende uma reuniao",
+    "agenda uma reuniao",
     "agendar uma reuniao",
     "marque uma reuniao",
+    "marca uma reuniao",
     "marcar uma reuniao",
     "agende um evento",
+    "agenda um evento",
     "coloque na minha agenda",
     "coloca na minha agenda",
     "coloque na agenda",
@@ -492,6 +595,8 @@ export function isGoogleEventCreatePrompt(prompt: string): boolean {
     "coloca um evento na minha agenda",
   ]) || (
     hasCalendar && hasAction && hasEventNoun
+  ) || (
+    startsWithSchedulingVerb && hasTime
   ) || (
     /tenho\s+(?:uma|um)\s+(?:reuniao|evento|compromisso)\b/.test(normalized) &&
     /\b(?:agenda|calendario)\b/.test(normalized)
@@ -527,8 +632,10 @@ export function buildTaskDraftFromPrompt(prompt: string, timeZone: string): { dr
 export function buildEventDraftFromPrompt(prompt: string, timeZone: string): { draft?: PendingGoogleEventDraft; reason?: string } {
   const normalizedPrompt = normalize(prompt);
   const patterns = [
-    /(?:crie|criar|agende|agendar|marque|marcar|coloque|coloca|adicione|adiciona)\s+(?:um\s+)?(?:evento|compromisso|reuniao)(?:\s+no\s+google calendar|\s+na\s+agenda|\s+na\s+minha\s+agenda|\s+no\s+calendario|\s+no\s+meu\s+calendario)?(?:\s+para|\s*:)?\s+([\s\S]+)/i,
-    /(?:na\s+minha\s+agenda|na\s+agenda|no\s+meu\s+calendario|no\s+calendario|ao\s+calendario)\s*,?\s*(?:coloque|coloca|adicione|adiciona|agende|agendar|marque|marcar|crie|criar)\s+(?:um\s+)?(?:evento|compromisso|reuniao)?(?:\s+para|\s*:)?\s+([\s\S]+)/i,
+    /(?:crie|cria|criar|agende|agenda|agendar|marque|marca|marcar|coloque|coloca|adicione|adiciona)\s+(?:um|uma|o|a)?\s*(?:evento|compromisso|reuni[aã]o|lembrete)(?:\s+chamad[oa])?(?:\s+no\s+google calendar|\s+na\s+agenda|\s+na\s+minha\s+agenda|\s+no\s+calendario|\s+no\s+meu\s+calendario)?(?:(?:\s+para|\s*:)\s*)?([\s\S]+)/i,
+    /(?:crie|cria|criar|agende|agenda|agendar|marque|marca|marcar|coloque|coloca|adicione|adiciona)\s+(?:na\s+minha\s+agenda|na\s+agenda|no\s+meu\s+calendario|no\s+calendario|ao\s+calendario)\s+(?:um|uma|o|a)?\s*(?:evento|compromisso|reuni[aã]o|lembrete)?(?:\s+chamad[oa])?(?:(?:\s+para|\s*:)\s*)?([\s\S]+)/i,
+    /(?:na\s+minha\s+agenda|na\s+agenda|no\s+meu\s+calendario|no\s+calendario|ao\s+calendario)\s*,?\s*(?:coloque|coloca|adicione|adiciona|agende|agenda|agendar|marque|marca|marcar|crie|cria|criar)\s+(?:um|uma|o|a)?\s*(?:evento|compromisso|reuni[aã]o|lembrete)?(?:\s+chamad[oa])?(?:(?:\s+para|\s*:)\s*)?([\s\S]+)/i,
+    /^(?:por favor\s+)?(?:agende|agenda|agendar|marque|marca|marcar)\s+([\s\S]+)/i,
   ];
   const match = patterns.map((pattern) => prompt.match(pattern)).find(Boolean);
   const rawSummary = match?.[1]?.trim() || prompt.trim();

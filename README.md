@@ -486,6 +486,7 @@ Estado atual:
 - o brief diario agora segue um formato operacional mais consistente: visao do dia, atencao principal, rua/clima/deslocamento, agenda limpa, prioridade do dia e mensagem final
 - existe politica explicita de autonomia por intencao: leituras simples rodam direto; escrita e acoes destrutivas continuam confirmadas
 - o Telegram suporta modo operacional de rua/plantao por chat, e esse modo agora afeta briefing, agenda do dia/amanha, conflitos e proximas acoes com respostas mais compactas
+- o Telegram aceita voz assincrona quando `VOICE_ENABLED=true`: o Atlas baixa o audio, transcreve para texto, processa pelo fluxo normal e responde em texto; resposta em audio/TTS fica para uma etapa futura
 - o Atlas consegue revisar conflitos, duplicidades e nomes inconsistentes na agenda sem alterar nada sozinho
 - a memoria pessoal operacional agora fica separada da memoria operacional geral para guardar foco salvo, rotina e regras praticas; alem dos itens livres, existe um perfil operacional base editavel explicitamente pelo Telegram
 - provider externo opcional de raciocinio: suporta `EXTERNAL_REASONING_MODE=off|smart|always`; em `off` fica desligado, em `smart` segue a politica por intencao e em `always` tenta o provider em toda mensagem antes do fluxo local; ele pode devolver texto normal ou `assistant_decision`, e o Atlas continua como executor local controlado de operacoes estruturadas sob whitelist; se o provider falhar, expirar ou devolver resposta invalida, cai em fallback local automaticamente
@@ -577,6 +578,24 @@ Comportamento:
 - se `should_execute=false`, o Atlas responde apenas com `assistant_reply`
 - se `should_execute=true`, o Atlas executa localmente de forma controlada e só depois responde ao usuário
 - para Tasks, o provider externo recebe contexto enxuto de listas e tarefas recentes; se faltar `task_list_id` ou a referencia vier parcial, o Atlas tenta completar localmente com alta confianca antes de executar
+
+## Voz assincrona no Telegram
+
+Nesta etapa, voz e entrada de texto transcrita. O Telegram aceita mensagens de voz e arquivos de audio curtos, aplica limites de duracao/tamanho e encaminha a transcricao para o mesmo fluxo seguro do Atlas. A resposta ainda e em texto.
+
+Configuracao minima:
+
+```env
+VOICE_ENABLED=true
+VOICE_STT_PROVIDER=openai
+VOICE_MAX_AUDIO_SECONDS=90
+VOICE_MAX_AUDIO_BYTES=15728640
+VOICE_TEMP_DIR=/workspace/.agent-state/voice-temp
+VOICE_STT_TIMEOUT_MS=120000
+VOICE_OPENAI_MODEL=gpt-4o-mini-transcribe
+```
+
+Para um caminho local/open, use `VOICE_STT_PROVIDER=command` com `VOICE_STT_COMMAND` e `VOICE_STT_ARGS`; o comando deve devolver texto no stdout ou JSON simples com `{ "text": "..." }`. Em falha de download, limite ou transcricao, o Atlas responde com erro curto e nao quebra o fluxo normal do Telegram.
 
 ## CRM local e placar de receita
 

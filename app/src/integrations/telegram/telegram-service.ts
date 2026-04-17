@@ -28,7 +28,6 @@ import type { ContentItemRecord } from "../../types/content-ops.js";
 import type { Logger } from "../../types/logger.js";
 import type { GoogleWorkspaceAuthService } from "../google/google-auth.js";
 import { ShortVideoRenderService } from "../media/short-video-renderer.js";
-import { OpenAiAudioTranscriptionService } from "../openai/audio-transcription.js";
 import { OpenAiScheduleImportService } from "../openai/schedule-import.js";
 import { YouTubePublisherService } from "../youtube/youtube-publisher.js";
 import {
@@ -48,6 +47,12 @@ import {
   resolveShortGoogleAccountReply,
 } from "../../core/google-account-resolution.js";
 import { EvolutionApiClient } from "../whatsapp/evolution-api.js";
+import {
+  buildVoiceUserErrorMessage,
+  createVoiceMessageHandler,
+  type VoiceMessageHandler,
+} from "../voice/voice-message-handler.js";
+import { extractTelegramVoiceAttachment } from "../voice/telegram-voice.js";
 import { TelegramApi } from "./telegram-api.js";
 import type {
   TelegramCallbackQuery,
@@ -173,13 +178,6 @@ type CalendarUndoAction =
       title?: string;
     };
 
-interface TelegramAudioAttachment {
-  fileId: string;
-  fileName: string;
-  mimeType?: string;
-  kind: "voice" | "audio";
-}
-
 interface TelegramImportAttachment {
   fileId: string;
   fileName: string;
@@ -220,50 +218,6 @@ function normalizeTelegramText(text: string, botUsername?: string): string {
 
 function extractMessageText(message: TelegramMessage): string | undefined {
   return message.text?.trim() || message.caption?.trim() || undefined;
-}
-
-function extensionFromMimeType(mimeType: string | undefined, fallback = "bin"): string {
-  switch (mimeType?.toLowerCase()) {
-    case "audio/ogg":
-    case "application/ogg":
-      return "ogg";
-    case "audio/mpeg":
-      return "mp3";
-    case "audio/mp4":
-    case "audio/x-m4a":
-      return "m4a";
-    case "audio/wav":
-    case "audio/x-wav":
-      return "wav";
-    case "audio/webm":
-      return "webm";
-    default:
-      return fallback;
-  }
-}
-
-function extractAudioAttachment(message: TelegramMessage): TelegramAudioAttachment | undefined {
-  if (message.voice?.file_id) {
-    const extension = extensionFromMimeType(message.voice.mime_type, "ogg");
-    return {
-      fileId: message.voice.file_id,
-      fileName: `voice_${message.message_id}.${extension}`,
-      mimeType: message.voice.mime_type,
-      kind: "voice",
-    };
-  }
-
-  if (message.audio?.file_id) {
-    const extension = extensionFromMimeType(message.audio.mime_type, "mp3");
-    return {
-      fileId: message.audio.file_id,
-      fileName: message.audio.file_name?.trim() || `audio_${message.message_id}.${extension}`,
-      mimeType: message.audio.mime_type,
-      kind: "audio",
-    };
-  }
-
-  return undefined;
 }
 
 function extractImportAttachment(message: TelegramMessage): TelegramImportAttachment | undefined {
@@ -1767,7 +1721,7 @@ export class TelegramService {
   private readonly pendingChoiceStates = new Map<number, PendingChoiceState>();
   private readonly lastCalendarUndoActions = new Map<number, CalendarUndoAction>();
   private readonly operationalModes = new Map<number, OperationalModeState>();
-  private readonly audioTranscription?: OpenAiAudioTranscriptionService;
+  private readonly voiceHandler?: VoiceMessageHandler;
   private readonly scheduleImport?: OpenAiScheduleImportService;
   private readonly whatsapp: EvolutionApiClient;
   private readonly videoRenderer: ShortVideoRenderService;
@@ -1800,11 +1754,11 @@ export class TelegramService {
       googleAuth,
       this.logger.child({ scope: "youtube-publisher" }),
     );
+    this.voiceHandler = createVoiceMessageHandler(
+      this.config,
+      this.logger.child({ scope: "telegram-voice" }),
+    );
     if (this.config.llm.provider === "openai" && this.config.llm.apiKey) {
-      this.audioTranscription = new OpenAiAudioTranscriptionService(
-        this.config.llm.apiKey,
-        this.config.llm.baseUrl,
-      );
       this.scheduleImport = new OpenAiScheduleImportService(
         this.config.llm.apiKey,
         this.config.llm.baseUrl,
@@ -2317,7 +2271,7 @@ export class TelegramService {
 
     let text = extractMessageText(message);
     const importAttachment = extractImportAttachment(message);
-    const audioAttachment = importAttachment ? undefined : (text ? undefined : extractAudioAttachment(message));
+    const audioAttachment = importAttachment ? undefined : (text ? undefined : extractTelegramVoiceAttachment(message));
     if (!text && !audioAttachment && !importAttachment) {
       await this.sendText(
         message.chat.id,
@@ -2359,10 +2313,10 @@ export class TelegramService {
     }
 
     if (!text && audioAttachment) {
-      if (!this.audioTranscription) {
+      if (!this.voiceHandler) {
         await this.sendText(
           message.chat.id,
-          "A transcrição de áudio depende de um provider OpenAI ativo com chave configurada.",
+          "O processamento de voz ainda não está ativo neste ambiente. Manda em texto por enquanto.",
           {
             reply_to_message_id: message.message_id,
           },
@@ -2371,36 +2325,31 @@ export class TelegramService {
       }
 
       try {
-        const remoteFile = await this.api.getFile(audioAttachment.fileId);
-        if (!remoteFile.file_path) {
-          throw new Error("Telegram não retornou file_path para o áudio enviado");
-        }
-        const buffer = await this.api.downloadFile(remoteFile.file_path);
-        const transcription = await this.audioTranscription.transcribe({
-          audio: buffer,
-          filename: audioAttachment.fileName,
-          mimeType: audioAttachment.mimeType,
-          language: "pt",
+        const transcription = await this.voiceHandler.handleTelegramVoice({
+          chatId: message.chat.id,
+          userId,
+          attachment: audioAttachment,
+          telegram: this.api,
         });
         text = transcription.text;
-        this.logger.info("Telegram audio transcribed", {
+        this.logger.info("Telegram audio accepted as text input", {
           chatId: message.chat.id,
           userId,
           kind: audioAttachment.kind,
+          provider: transcription.provider,
           model: transcription.model,
+          sizeBytes: transcription.sizeBytes,
         });
       } catch (error) {
-        this.logger.error("Telegram audio transcription failed", {
+        this.logger.warn("Telegram audio processing failed", {
           chatId: message.chat.id,
           userId,
+          kind: audioAttachment.kind,
           error: error instanceof Error ? error.message : String(error),
         });
         await this.sendText(
           message.chat.id,
-          [
-            "Não consegui transcrever este áudio.",
-            `Detalhe: ${error instanceof Error ? error.message : String(error)}`,
-          ].join("\n"),
+          buildVoiceUserErrorMessage(error),
           {
             reply_to_message_id: message.message_id,
             disable_web_page_preview: true,
