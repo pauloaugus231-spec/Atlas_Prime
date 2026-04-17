@@ -25,6 +25,19 @@ const RECOMMENDED_OPTIONS_TEXT = [
   "2) Seguir agora (Recomendada).",
 ].join("\n");
 
+const CALENDAR_OPTIONS_TEXT = [
+  "Encontrei mais de um evento parecido. Responda com 1 ou 2:",
+  "1) Reunião teste manhã — 20/04, 08:00–09:00 | conta: abordagem",
+  "2) Reunião teste tarde — 20/04, 13:30–14:30 | conta: abordagem",
+].join("\n");
+
+const AMBIGUOUS_AFTERNOON_OPTIONS_TEXT = [
+  "Encontrei mais de um evento parecido. Responda com 1, 2 ou 3:",
+  "1) Reunião teste manhã — 20/04, 08:00–09:00 | conta: abordagem",
+  "2) Reunião teste tarde — 20/04, 13:30–14:30 | conta: abordagem",
+  "3) Reunião teste fim de tarde — 20/04, 16:00–17:00 | conta: abordagem",
+].join("\n");
+
 function runPendingChoiceHarness(input: {
   assistantText: string;
   userReply: string;
@@ -111,6 +124,16 @@ function run() {
     detail: JSON.stringify(secondNatural, null, 2),
   });
 
+  const masculineOrdinal = runPendingChoiceHarness({
+    assistantText: OPTIONS_TEXT,
+    userReply: "o primeiro",
+  });
+  results.push({
+    name: "natural_masculine_first_choice_continues_pending_flow",
+    passed: masculineOrdinal.kind === "select" && masculineOrdinal.selectedIndex === 1,
+    detail: JSON.stringify(masculineOrdinal, null, 2),
+  });
+
   const lastNatural = runPendingChoiceHarness({
     assistantText: OPTIONS_TEXT,
     userReply: "a última",
@@ -129,6 +152,36 @@ function run() {
     name: "referential_choice_uses_recommended_option_when_available",
     passed: referentialChoice.kind === "select" && referentialChoice.selectedIndex === 2,
     detail: JSON.stringify(referentialChoice, null, 2),
+  });
+
+  const afternoonChoice = runPendingChoiceHarness({
+    assistantText: CALENDAR_OPTIONS_TEXT,
+    userReply: "o da tarde",
+  });
+  results.push({
+    name: "calendar_period_choice_selects_matching_option",
+    passed: afternoonChoice.kind === "select" && afternoonChoice.selectedIndex === 2,
+    detail: JSON.stringify(afternoonChoice, null, 2),
+  });
+
+  const timeChoice = runPendingChoiceHarness({
+    assistantText: CALENDAR_OPTIONS_TEXT,
+    userReply: "o de 8h",
+  });
+  results.push({
+    name: "calendar_time_choice_selects_matching_option",
+    passed: timeChoice.kind === "select" && timeChoice.selectedIndex === 1,
+    detail: JSON.stringify(timeChoice, null, 2),
+  });
+
+  const ambiguousAfternoonChoice = runPendingChoiceHarness({
+    assistantText: AMBIGUOUS_AFTERNOON_OPTIONS_TEXT,
+    userReply: "o da tarde",
+  });
+  results.push({
+    name: "ambiguous_calendar_period_choice_requests_short_correction",
+    passed: ambiguousAfternoonChoice.kind === "clarify" && ambiguousAfternoonChoice.reply?.includes("Responda com o número") === true,
+    detail: JSON.stringify(ambiguousAfternoonChoice, null, 2),
   });
 
   const cancel = runPendingChoiceHarness({

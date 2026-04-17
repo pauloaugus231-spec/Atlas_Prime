@@ -42,6 +42,11 @@ import type { ClarificationEngine } from "../../core/clarification-engine.js";
 import type { WhatsAppMessageStore } from "../../core/whatsapp-message-store.js";
 import { rankApprovals } from "../../core/approval-priority.js";
 import { matchPersonalCalendarTerms } from "../../core/calendar-relevance.js";
+import {
+  extractExplicitGoogleAccountAlias,
+  refersToBothGoogleAccounts,
+  resolveShortGoogleAccountReply,
+} from "../../core/google-account-resolution.js";
 import { EvolutionApiClient } from "../whatsapp/evolution-api.js";
 import { TelegramApi } from "./telegram-api.js";
 import type {
@@ -800,6 +805,25 @@ function isClarificationCancelRequest(text: string): boolean {
     "deixa pra lá",
     "esquece",
   ].some((token) => normalized === token || normalized.includes(token));
+}
+
+function isShortCalendarContextReply(text: string): boolean {
+  const normalized = normalizeIntentText(text);
+  if (!normalized) {
+    return false;
+  }
+  if (normalized.length > 80 || normalized.split(/\s+/).length > 8) {
+    return false;
+  }
+
+  return (
+    /\b(?:as|a|das?|de)\s+\d{1,2}(?::\d{2})?\s*h?\b/.test(normalized) ||
+    /\b\d{1,2}h(?:\d{2})?\b/.test(normalized) ||
+    /\b(?:amanha|hoje|segunda|terca|quarta|quinta|sexta|sabado|domingo)\b/.test(normalized) ||
+    /\b(?:manha|tarde|noite)\b/.test(normalized) ||
+    /\b(?:abordagem|principal|primary|pessoal|ambos|ambas)\b/.test(normalized) ||
+    /^(?:esse|essa|esse mesmo|essa mesmo|o primeiro|a primeira|o segundo|a segunda|o da manha|o da tarde|o de \d{1,2}(?::\d{2})?h?)$/.test(normalized)
+  );
 }
 
 function isApprovalListRequest(text: string): boolean {
@@ -2502,6 +2526,65 @@ export class TelegramService {
       return;
     }
 
+    if (pendingDraft?.kind === "google_event" || pendingDraft?.kind === "google_event_update") {
+      const accountResolution = this.resolveShortCalendarAccountReply(normalizedText);
+      if (accountResolution?.kind === "both") {
+        this.logger.info("Calendar draft account clarification required", {
+          chatId: message.chat.id,
+          draftKind: pendingDraft.kind,
+        });
+        await this.sendText(message.chat.id, "Preciso saber em qual agenda: pessoal ou abordagem?", {
+          reply_to_message_id: message.message_id,
+          disable_web_page_preview: true,
+        });
+        return;
+      }
+
+      if (accountResolution?.kind === "single") {
+        if (
+          pendingDraft.kind === "google_event_update" &&
+          pendingDraft.account &&
+          pendingDraft.account !== accountResolution.account
+        ) {
+          await this.sendText(
+            message.chat.id,
+            `Esse rascunho já está vinculado à conta ${pendingDraft.account}. Para mover entre agendas, diga novamente qual evento e a agenda de destino.`,
+            {
+              reply_to_message_id: message.message_id,
+              disable_web_page_preview: true,
+            },
+          );
+          return;
+        }
+
+        const updatedDraft: PendingGoogleEventDraft | PendingGoogleEventUpdateDraft = {
+          ...pendingDraft,
+          account: accountResolution.account,
+        };
+        this.pendingActionDrafts.set(message.chat.id, updatedDraft);
+        const approval = this.persistPendingApproval(message.chat.id, updatedDraft);
+        const reply =
+          updatedDraft.kind === "google_event_update"
+            ? buildGoogleEventUpdateDraftReply(updatedDraft)
+            : buildGoogleEventDraftReply(updatedDraft);
+        this.logger.info("Calendar draft account resolved from short contextual reply", {
+          chatId: message.chat.id,
+          account: accountResolution.account,
+          draftKind: updatedDraft.kind,
+        });
+        await this.sendText(
+          message.chat.id,
+          stripPendingDraftMarkers(reply),
+          {
+            reply_to_message_id: message.message_id,
+            disable_web_page_preview: true,
+            reply_markup: approval ? buildApprovalInlineKeyboard(approval.id) : undefined,
+          },
+        );
+        return;
+      }
+    }
+
     if (
       (pendingDraft?.kind === "google_event" || pendingDraft?.kind === "google_event_update") &&
       /^com(?:\s+google)?\s+meet\b/.test(normalizeIntentText(normalizedText))
@@ -2568,6 +2651,12 @@ export class TelegramService {
             reply_markup: approval ? buildApprovalInlineKeyboard(approval.id) : undefined,
           },
         );
+        if (isShortCalendarContextReply(normalizedText)) {
+          this.logger.info("Calendar draft adjusted from short contextual reply", {
+            chatId: message.chat.id,
+            draftKind: adjustedDraft.kind,
+          });
+        }
         return;
       }
     }
@@ -2748,10 +2837,37 @@ export class TelegramService {
       if (isGoogleEventCreatePrompt(pending.originalPrompt) || isGoogleTaskCreatePrompt(pending.originalPrompt)) {
         let nextPendingDraft: PendingActionDraft | undefined;
         if (isGoogleEventCreatePrompt(pending.originalPrompt)) {
+          const combinedPrompt = [pending.originalPrompt, normalizedText].filter(Boolean).join(" ");
           const baseDraft = buildEventDraftFromPrompt(pending.originalPrompt, this.config.google.defaultTimezone);
           if (baseDraft.draft) {
             const adjusted = adjustEventDraftFromInstruction(baseDraft.draft, normalizedText);
             nextPendingDraft = (adjusted ?? baseDraft.draft) as PendingGoogleEventDraft;
+          } else {
+            const combinedDraft = buildEventDraftFromPrompt(combinedPrompt, this.config.google.defaultTimezone);
+            nextPendingDraft = combinedDraft.draft;
+          }
+
+          if (nextPendingDraft?.kind === "google_event") {
+            if (refersToBothGoogleAccounts(combinedPrompt)) {
+              await this.sendText(message.chat.id, "Preciso saber em qual agenda: pessoal ou abordagem?", {
+                reply_to_message_id: message.message_id,
+                disable_web_page_preview: true,
+              });
+              return true;
+            }
+            const explicitAccount = this.extractExplicitCalendarAccount(combinedPrompt);
+            if (explicitAccount) {
+              nextPendingDraft = {
+                ...nextPendingDraft,
+                account: explicitAccount,
+              };
+            }
+            if (isShortCalendarContextReply(normalizedText)) {
+              this.logger.info("Calendar clarification completed from short contextual reply", {
+                chatId: message.chat.id,
+                account: nextPendingDraft.account,
+              });
+            }
           }
         } else {
           const taskDraft = buildTaskDraftFromPrompt(
@@ -2892,6 +3008,11 @@ export class TelegramService {
     this.clearPendingChoiceState(message.chat.id);
     const history = this.getChatHistory(message.chat.id);
     const concretePrompt = buildConcretePromptFromPendingChoice(history, resolution.option.label);
+    this.logger.info("Pending Telegram choice resolved", {
+      chatId: message.chat.id,
+      optionIndex: resolution.option.index,
+      usedConcreteCalendarPrompt: Boolean(concretePrompt),
+    });
     await this.executeClarifiedPrompt(message, {
       effectiveText: concretePrompt ?? buildPendingChoiceContinuationPrompt({
         state: pending,
@@ -2974,6 +3095,19 @@ export class TelegramService {
     return accountAlias === "primary"
       ? this.config.google
       : (this.config.googleAccounts[accountAlias] ?? this.config.google);
+  }
+
+  private getGoogleAccountAliases(): string[] {
+    const aliases = Object.keys(this.config.googleAccounts);
+    return aliases.length > 0 ? aliases : ["primary"];
+  }
+
+  private resolveShortCalendarAccountReply(text: string) {
+    return resolveShortGoogleAccountReply(text, this.getGoogleAccountAliases());
+  }
+
+  private extractExplicitCalendarAccount(text: string): string | undefined {
+    return extractExplicitGoogleAccountAlias(text, this.getGoogleAccountAliases());
   }
 
   private async handleScheduleImportAttachment(

@@ -22,6 +22,7 @@
     "eval:autonomy": "tsx scripts/eval-autonomy-policy.ts",
     "eval:calendar-conflicts": "tsx scripts/eval-calendar-conflicts.ts",
     "eval:calendar-resolution": "tsx scripts/eval-calendar-event-resolution.ts",
+    "eval:calendar-context": "tsx scripts/eval-calendar-context.ts",
     "eval:morning-brief": "tsx scripts/eval-morning-brief-format.ts",
     "eval:personal-memory": "tsx scripts/eval-personal-memory.ts",
     "dev": "tsx src/index.ts",

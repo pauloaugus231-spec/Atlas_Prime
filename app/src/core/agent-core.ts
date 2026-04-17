@@ -96,6 +96,10 @@ import { GoogleTrendsIntakeService, type GoogleTrendItem } from "./trend-intake.
 import type { ExternalReasoningRequest } from "../types/external-reasoning.js";
 import { analyzeCalendarInsights } from "./calendar-insights.js";
 import { resolveCalendarEventReference } from "./calendar-event-resolution.js";
+import {
+  extractExplicitGoogleAccountAlias,
+  resolveGoogleAccountAliasesForPrompt,
+} from "./google-account-resolution.js";
 import { resolveActionAutonomyRule } from "./action-autonomy-policy.js";
 import { PersonalOperationalMemoryStore } from "./personal-operational-memory.js";
 import type {
@@ -3032,6 +3036,21 @@ function isCalendarPeriodListPrompt(prompt: string): boolean {
       "liste meus eventos",
       "quais compromissos tenho",
       "quais eventos tenho",
+      "qual minha agenda",
+      "qual a minha agenda",
+      "como esta minha agenda",
+      "como está minha agenda",
+      "como esta a minha agenda",
+      "como está a minha agenda",
+      "o que tenho na agenda",
+      "o que tenho de agenda",
+      "o que tenho essa semana",
+      "o que tenho esta semana",
+      "o que tenho na proxima semana",
+      "o que tenho na próxima semana",
+      "minha agenda para",
+      "minha agenda da",
+      "minha agenda do",
       "mostre minha agenda",
       "mostrar minha agenda",
       "veja minha agenda",
@@ -3234,49 +3253,7 @@ function matchesCalendarEventTopic(summary: string, topic: string): boolean {
 }
 
 function extractExplicitAccountAlias(prompt: string, aliases: string[]): string | undefined {
-  const normalized = normalizeEmailAnalysisText(prompt);
-  if (includesAny(normalized, ["conta principal", "agenda principal", "calendario principal", "calendário principal", "primary"])) {
-    return "primary";
-  }
-  for (const alias of aliases) {
-    if (alias === "primary") {
-      continue;
-    }
-
-    const readable = alias.replace(/_/g, " ");
-    if (
-      normalized.includes(`conta ${readable}`) ||
-      normalized.includes(`account ${readable}`) ||
-      normalized.includes(`calendario ${readable}`) ||
-      normalized.includes(`calendário ${readable}`) ||
-      normalized.includes(`email ${readable}`) ||
-      normalized.includes(readable)
-    ) {
-      return alias;
-    }
-  }
-
-  return undefined;
-}
-
-function refersToBothPersonalAndWork(prompt: string): boolean {
-  const normalized = normalizeEmailAnalysisText(prompt);
-  return includesAny(normalized, [
-    "ambos",
-    "ambas",
-    "pessoal e trabalho",
-    "trabalho e pessoal",
-    "pessoal e profissional",
-    "agenda pessoal e trabalho",
-    "calendario pessoal e trabalho",
-    "calendário pessoal e trabalho",
-  ]);
-}
-
-function resolveWorkAlias(aliases: string[]): string | undefined {
-  return aliases.includes("abordagem")
-    ? "abordagem"
-    : aliases.find((alias) => alias !== "primary");
+  return extractExplicitGoogleAccountAlias(prompt, aliases);
 }
 
 function resolvePromptAccountAliases(
@@ -3284,25 +3261,7 @@ function resolvePromptAccountAliases(
   aliases: string[],
   defaultScope: PersonalOperationalProfile["defaultAgendaScope"] = "both",
 ): string[] {
-  const explicit = extractExplicitAccountAlias(prompt, aliases);
-  if (explicit) {
-    return [explicit];
-  }
-
-  if (refersToBothPersonalAndWork(prompt)) {
-    const workAlias = resolveWorkAlias(aliases);
-    return [...new Set(["primary", workAlias].filter((value): value is string => Boolean(value)))];
-  }
-
-  if (defaultScope === "primary") {
-    return aliases.includes("primary") ? ["primary"] : aliases.slice(0, 1);
-  }
-  if (defaultScope === "work") {
-    const workAlias = resolveWorkAlias(aliases);
-    return workAlias ? [workAlias] : aliases.slice(0, 1);
-  }
-
-  return aliases;
+  return resolveGoogleAccountAliasesForPrompt(prompt, aliases, defaultScope);
 }
 
 function shouldSearchAllCalendars(prompt: string): boolean {
@@ -11704,14 +11663,6 @@ export class AgentCore {
           calendarId,
         });
         for (const event of items) {
-          if (!isPersonallyRelevantCalendarEvent({
-            account: alias,
-            summary: event.summary,
-            description: event.description,
-            location: event.location,
-          })) {
-            continue;
-          }
           events.push({ account: alias, event });
         }
       }

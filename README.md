@@ -569,6 +569,9 @@ Comportamento:
 
 - o `brief diário` cruza agenda, tarefas, foco salvo, clima, deslocamento e alertas de conflito
 - a integração pode operar em modo leitura ou escrita, conforme os scopes concedidos no OAuth
+- a agenda `abordagem` é tratada como calendário operacional de primeira classe, com resolução explícita para `abordagem`, `agenda da abordagem`, `calendário da abordagem` e `ambos`
+- no Telegram, respostas curtas em fluxo pendente de agenda, como `às 8h da manhã`, `amanhã`, `na abordagem`, `esse` e `o da tarde`, são interpretadas como continuação contextual antes do roteamento genérico
+- leitura e escrita simples de agenda usam defaults seguros; leituras de período listam os eventos encontrados nos calendários consultados sem ocultar itens por heurística de relevância, e quando falta dado crítico real o Atlas faz clarificação curta
 - no Telegram, uma camada externa de raciocínio pode devolver `assistant_decision` em JSON
 - o Atlas valida esse formato localmente e, por enquanto, só aceita execução estruturada com `execute_calendar_operation` e `execute_task_operation`
 - se `should_execute=false`, o Atlas responde apenas com `assistant_reply`

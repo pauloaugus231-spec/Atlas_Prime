@@ -69,6 +69,19 @@ function run() {
     detail: JSON.stringify(relocatedDraft, null, 2),
   });
 
+  const movedDraft = simpleDraft.draft
+    ? adjustEventDraftFromInstruction(simpleDraft.draft, "às 8h da manhã")
+    : null;
+  results.push({
+    name: "draft_single_time_adjustment_preserves_local_duration",
+    passed: Boolean(
+      movedDraft &&
+      movedDraft.start.includes("T08:00") &&
+      movedDraft.end.includes("T09:00")
+    ),
+    detail: JSON.stringify(movedDraft, null, 2),
+  });
+
   const failures = results.filter((item) => !item.passed);
   for (const item of results.filter((entry) => entry.passed)) {
     console.log(`PASS ${item.name}`);

@@ -15,6 +15,8 @@ const CHOICE_CUES = [
   "escolha uma das opções",
   "responda com o numero",
   "responda com o número",
+  "responda com 1",
+  "responda com",
   "responda apenas uma das opcoes",
   "responda apenas uma das opções",
   "qual prefere",
@@ -45,6 +47,8 @@ const REFERENTIAL_REPLIES = [
 const CANCEL_REPLIES = [
   "cancelar",
   "cancelar isso",
+  "cancelar rascunho",
+  "descartar rascunho",
   "cancela",
 ];
 
@@ -96,12 +100,12 @@ function parseNumericChoice(text: string, state: PendingChoiceState): number | u
     return Number.parseInt(exactMatch[1], 10);
   }
 
-  const ordinalMatch = normalized.match(/^(?:a\s+)?(primeira|primeiro|segunda|segundo|terceira|terceiro|quarta|quarto|quinta|quinto)$/);
+  const ordinalMatch = normalized.match(/^(?:(?:a|o)\s+)?(primeira|primeiro|segunda|segundo|terceira|terceiro|quarta|quarto|quinta|quinto)$/);
   if (ordinalMatch?.[1]) {
     return ORDINAL_TO_INDEX.get(ordinalMatch[1]);
   }
 
-  if (normalized === "a ultima" || normalized === "a última" || normalized === "ultima" || normalized === "última") {
+  if (["a ultima", "a última", "o ultimo", "o último", "ultima", "última", "ultimo", "último"].includes(normalized)) {
     return state.options[state.options.length - 1]?.index;
   }
 
@@ -110,6 +114,116 @@ function parseNumericChoice(text: string, state: PendingChoiceState): number | u
   }
 
   return ORDINAL_TO_INDEX.get(normalized);
+}
+
+function parseOptionStartMinutes(label: string): number | undefined {
+  const normalized = normalize(label);
+  const match =
+    normalized.match(/\b\d{1,2}\/\d{1,2}(?:\/\d{2,4})?,\s*(\d{1,2})(?::(\d{2}))?/) ??
+    normalized.match(/\b(\d{1,2})(?::(\d{2}))\s*[–-]/) ??
+    normalized.match(/\b(\d{1,2})h(\d{2})?\s*[–-]/);
+  if (!match?.[1]) {
+    return undefined;
+  }
+
+  const hour = Number.parseInt(match[1], 10);
+  const minute = Number.parseInt(match[2] ?? "0", 10);
+  if (!Number.isFinite(hour) || hour < 0 || hour > 23 || !Number.isFinite(minute) || minute < 0 || minute > 59) {
+    return undefined;
+  }
+
+  return hour * 60 + minute;
+}
+
+function parseContextualTimeChoice(text: string): number | undefined {
+  const normalized = normalize(text);
+  const match =
+    normalized.match(/^(?:o\s+)?(?:de|das?|as?)\s+(\d{1,2})h(\d{2})?$/) ??
+    normalized.match(/^(?:o\s+)?(?:de|das?|as?)\s+(\d{1,2}):(\d{2})$/) ??
+    normalized.match(/^(?:o\s+)?(?:de|das?|as?)\s+(\d{1,2})$/);
+  if (!match?.[1]) {
+    return undefined;
+  }
+
+  const hour = Number.parseInt(match[1], 10);
+  const minute = Number.parseInt(match[2] ?? "0", 10);
+  if (!Number.isFinite(hour) || hour < 0 || hour > 23 || !Number.isFinite(minute) || minute < 0 || minute > 59) {
+    return undefined;
+  }
+
+  return hour * 60 + minute;
+}
+
+function parseContextualPeriodChoice(text: string): "morning" | "afternoon" | "night" | undefined {
+  const normalized = normalize(text);
+  const match = normalized.match(/^(?:o\s+)?(?:da|de)\s+(manha|tarde|noite)$/);
+  if (!match?.[1]) {
+    return undefined;
+  }
+  if (match[1] === "manha") {
+    return "morning";
+  }
+  if (match[1] === "tarde") {
+    return "afternoon";
+  }
+  return "night";
+}
+
+function periodMatches(minutes: number, period: "morning" | "afternoon" | "night"): boolean {
+  const hour = Math.floor(minutes / 60);
+  if (period === "morning") {
+    return hour >= 0 && hour < 12;
+  }
+  if (period === "afternoon") {
+    return hour >= 12 && hour < 18;
+  }
+  return hour >= 18 && hour < 24;
+}
+
+function buildAmbiguousContextualChoiceMessage(options: PendingChoiceOption[]): string {
+  const valid = options.map((option) => String(option.index));
+  return `Encontrei mais de uma opção compatível. Responda com o número: ${valid.join(", ")}.`;
+}
+
+function resolveContextualCalendarChoice(
+  state: PendingChoiceState,
+  replyText: string,
+): PendingChoiceReplyResolution | null {
+  const targetMinutes = parseContextualTimeChoice(replyText);
+  const targetPeriod = typeof targetMinutes === "number" ? undefined : parseContextualPeriodChoice(replyText);
+  if (typeof targetMinutes !== "number" && !targetPeriod) {
+    return null;
+  }
+
+  const matches = state.options.filter((option) => {
+    const optionMinutes = parseOptionStartMinutes(option.label);
+    if (typeof optionMinutes !== "number") {
+      return false;
+    }
+    if (typeof targetMinutes === "number") {
+      return optionMinutes === targetMinutes;
+    }
+    return periodMatches(optionMinutes, targetPeriod!);
+  });
+
+  if (matches.length === 1) {
+    return {
+      kind: "select",
+      option: matches[0]!,
+    };
+  }
+
+  if (matches.length > 1) {
+    return {
+      kind: "clarify",
+      message: buildAmbiguousContextualChoiceMessage(matches),
+    };
+  }
+
+  return {
+    kind: "clarify",
+    message: buildInvalidChoiceMessage(state.options),
+  };
 }
 
 function isShortReply(text: string): boolean {
@@ -194,6 +308,11 @@ export function resolvePendingChoiceReply(
       kind: "clarify",
       message: buildInvalidChoiceMessage(state.options),
     };
+  }
+
+  const contextualChoice = resolveContextualCalendarChoice(state, replyText);
+  if (contextualChoice) {
+    return contextualChoice;
   }
 
   if (AFFIRMATIVE_REPLIES.includes(normalized)) {

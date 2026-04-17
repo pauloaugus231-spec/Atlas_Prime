@@ -285,12 +285,14 @@ function extractLocation(value: string): string | undefined {
 
   const sanitized = value
     .replace(/\b(?:na\s+minha\s+agenda(?:\s+\w+)?|na\s+agenda(?:\s+\w+)?|no\s+meu\s+calendario(?:\s+\w+)?|no\s+calendario(?:\s+\w+)?)\b/gi, " ")
+    .replace(/\b(?:agenda|calend[aá]rio)(?:\s+(?:da|de))?\s+(?:abordagem|principal|pessoal|trabalho)\b/gi, " ")
+    .replace(/\b(?:na|no|em|para)\s+(?:abordagem|principal|primary|pessoal)\b/gi, " ")
     .replace(/\b(?:proxima|próxima|proximo|próximo)\s+(?:segunda(?:-feira)?|terca(?:-feira)?|terça(?:-feira)?|quarta(?:-feira)?|quinta(?:-feira)?|sexta(?:-feira)?|sabado|sábado|domingo)\b/gi, " ")
     .replace(/\b(?:amanha|amanhã|hoje)\b/gi, " ")
     .replace(/\bdas?\s+\d{1,2}(?::\d{2})?\s*(?:h)?\s+(?:as|a|ate)\s+\d{1,2}(?::\d{2})?\s*(?:h)?\b/gi, " ")
     .replace(/\bas?\s+\d{1,2}(?::\d{2})?\s*(?:h)?\b/gi, " ")
     .replace(/\b\d{1,2}h(?:\d{2})?\b/gi, " ")
-    .replace(/\b(?:principal|primary)\b/gi, " ")
+    .replace(/\b(?:principal|primary|abordagem)\b/gi, " ")
     .replace(/\bàs\b/gi, " ")
     .replace(/\s+/g, " ")
     .trim();
@@ -346,6 +348,8 @@ function cleanupEventTitle(value: string): string {
       " ",
     )
     .replace(/\b(?:na minha agenda(?: \w+)?|na agenda(?: \w+)?|no meu calendario(?: \w+)?|no calendario(?: \w+)?)\b/g, " ")
+    .replace(/\b(?:agenda|calendario)(?:\s+(?:da|de))?\s+(?:abordagem|principal|pessoal|trabalho)\b/g, " ")
+    .replace(/\b(?:na|no|em|para)\s+(?:abordagem|principal|primary|pessoal)\b/g, " ")
     .replace(/\b(?:um|uma)\s+(?:evento|compromisso|reuniao)\b/g, " ")
     .replace(/\b(?:convide|convidar|convidados?|participantes?)\b/g, " ")
     .replace(/\b(?:tenho|preciso|quero|gostaria)\s+(?:uma|um)\b/g, " ")
@@ -363,6 +367,7 @@ function cleanupEventTitle(value: string): string {
     .replace(/\bprecisa\b/g, " ")
     .replace(/\bnao\b/g, " ")
     .replace(/\bprincipal\b/g, " ")
+    .replace(/\babordagem\b/g, " ")
     .replace(/\bas\b/g, " ")
     .replace(/\s+/g, " ")
     .trim();
@@ -686,16 +691,22 @@ export function adjustEventDraftFromInstruction(
     updated.start = updateIsoTimePart(updated.start, single.hour, single.minute);
     const startParts = parseIsoLocalParts(updated.start);
     if (startParts) {
-      const startProbe = new Date(
-        `${String(startParts.year).padStart(4, "0")}-${String(startParts.month).padStart(2, "0")}-${String(startParts.day).padStart(2, "0")}T${String(startParts.hour).padStart(2, "0")}:${String(startParts.minute).padStart(2, "0")}:00${startParts.offset}`,
+      const localEndProbe = new Date(
+        Date.UTC(
+          startParts.year,
+          startParts.month - 1,
+          startParts.day,
+          startParts.hour,
+          startParts.minute + durationMinutes,
+          0,
+        ),
       );
-      const endProbe = new Date(startProbe.getTime() + durationMinutes * 60000);
       const offset = startParts.offset;
-      const year = endProbe.getUTCFullYear();
-      const month = endProbe.getUTCMonth() + 1;
-      const day = endProbe.getUTCDate();
-      const hour = endProbe.getUTCHours();
-      const minute = endProbe.getUTCMinutes();
+      const year = localEndProbe.getUTCFullYear();
+      const month = localEndProbe.getUTCMonth() + 1;
+      const day = localEndProbe.getUTCDate();
+      const hour = localEndProbe.getUTCHours();
+      const minute = localEndProbe.getUTCMinutes();
       updated.end = buildIsoFromParts({ year, month, day, hour, minute, offset });
     }
     changed = true;
@@ -788,6 +799,8 @@ export function buildGoogleEventDraftReply(draft: PendingGoogleEventLikeDraft): 
     `- Título: ${draft.summary}`,
     `- Início: ${formatDraftDateTime(draft.start, draft.timezone)}`,
     `- Fim: ${formatDraftDateTime(draft.end, draft.timezone)}`,
+    ...(draft.account ? [`- Conta: ${draft.account}`] : []),
+    ...(draft.calendarId ? [`- Calendário: ${draft.calendarId}`] : []),
     ...(draft.location ? [`- Local: ${draft.location}`] : []),
     ...(draft.attendees?.length ? [`- Convidados: ${draft.attendees.join(", ")}`] : []),
     `- Lembrete: ${draft.reminderMinutes ?? 30} minutos antes`,
@@ -805,6 +818,8 @@ export function buildGoogleEventDeleteDraftReply(draft: PendingGoogleEventDelete
     "Rascunho de exclusão de evento Google pronto.",
     "Evento identificado:",
     `- Atual: ${draft.summary}`,
+    ...(draft.account ? [`- Conta: ${draft.account}`] : []),
+    ...(draft.calendarId ? [`- Calendário: ${draft.calendarId}`] : []),
     ...(draft.start ? [`- Início: ${formatDraftDateTime(draft.start, draft.timezone)}`] : []),
     ...(draft.end ? [`- Fim: ${formatDraftDateTime(draft.end, draft.timezone)}`] : []),
     ...(draft.location ? [`- Local: ${draft.location}`] : []),
@@ -833,6 +848,8 @@ export function buildGoogleEventUpdateDraftReply(draft: PendingGoogleEventUpdate
     `- Título: ${draft.summary}`,
     `- Início: ${formatDraftDateTime(draft.start, draft.timezone)}`,
     `- Fim: ${formatDraftDateTime(draft.end, draft.timezone)}`,
+    ...(draft.account ? [`- Conta: ${draft.account}`] : []),
+    ...(draft.calendarId ? [`- Calendário: ${draft.calendarId}`] : []),
     ...(draft.location ? [`- Local: ${draft.location}`] : []),
     ...(draft.attendees?.length ? [`- Convidados: ${draft.attendees.join(", ")}`] : []),
     `- Lembrete: ${draft.reminderMinutes ?? 30} minutos antes`,
@@ -849,7 +866,7 @@ export function buildGoogleEventDeleteBatchDraftReply(draft: PendingGoogleEventD
   return [
     `Rascunho de exclusão em lote pronto. Eventos encontrados: ${draft.events.length}.`,
     ...draft.events.slice(0, 10).map((event) =>
-      `- ${event.summary} | ${event.start ? formatDraftDateTime(event.start, draft.timezone) : "sem horário"}`
+      `- ${event.summary} | ${event.start ? formatDraftDateTime(event.start, draft.timezone) : "sem horário"}${event.account ? ` | conta: ${event.account}` : ""}${event.calendarId ? ` | calendário: ${event.calendarId}` : ""}`
     ),
     "Confirme com `sim, quero` ou `agendar`. Para descartar, use `cancelar rascunho`.",
     "",

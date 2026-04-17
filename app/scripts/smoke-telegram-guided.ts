@@ -185,6 +185,10 @@ async function main(): Promise<void> {
       "cancela",
       `renomeie o evento ${testSummaryA} em 20/04/2026 na conta primary para Reunião teste Telegram CAPS`,
       "cancelar rascunho",
+      "crie um evento Reunião teste contexto curto amanhã às 10h",
+      "na abordagem",
+      "às 8h da manhã",
+      "cancelar rascunho",
     ];
 
     let step = 1;
@@ -210,10 +214,16 @@ async function main(): Promise<void> {
       primaryRenameDraft: transcript[6]?.reply.includes("Rascunho de atualização de evento Google pronto.") === true
         && transcript[6]?.reply.includes("- Título: Reunião teste Telegram CAPS"),
       finalDiscarded: transcript[7]?.reply.includes("Rascunho pendente descartado. Nenhuma ação foi executada.") === true,
+      contextualDraftCreated: transcript[8]?.reply.includes("Rascunho de evento Google pronto.") === true,
+      contextualAccountApplied: transcript[9]?.reply.includes("- Conta: abordagem") === true,
+      contextualTimeApplied: transcript[10]?.reply.includes("08:00") === true
+        && transcript[10]?.reply.includes("- Conta: abordagem") === true,
+      contextualDraftDiscarded: transcript[11]?.reply.includes("Rascunho pendente descartado. Nenhuma ação foi executada.") === true,
     };
 
+    const ok = Object.values(checks).every(Boolean);
     console.log(JSON.stringify({
-      ok: Object.values(checks).every(Boolean),
+      ok,
       chatId,
       checks,
       transcript: transcript.map((item) => ({
@@ -222,6 +232,9 @@ async function main(): Promise<void> {
         replyPreview: summarize(item.reply, 320),
       })),
     }, null, 2));
+    if (!ok) {
+      process.exitCode = 1;
+    }
   } finally {
     approvalEngine.listPending(chatId, 20).forEach((item) => {
       approvalEngine.updateStatus(item.id, "discarded");
