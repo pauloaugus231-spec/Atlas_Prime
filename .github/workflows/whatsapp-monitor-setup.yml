@@ -157,6 +157,7 @@ jobs:
           python3 - <<'PY'
           import json
           import os
+          import urllib.error
           import urllib.request
 
           base_url = os.environ["BASE_URL"].rstrip("/")
@@ -166,14 +167,28 @@ jobs:
           headers = {"apikey": api_key, "Content-Type": "application/json"}
           summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
 
+          class ApiError(Exception):
+              def __init__(self, status, payload):
+                  super().__init__(f"HTTP {status}")
+                  self.status = status
+                  self.payload = payload
+
           def request(method: str, path: str, body=None):
               data = None if body is None else json.dumps(body).encode("utf-8")
               req = urllib.request.Request(f"{base_url}{path}", data=data, method=method)
               for key, value in headers.items():
                   req.add_header(key, value)
-              with urllib.request.urlopen(req, timeout=20) as response:
-                  raw = response.read().decode("utf-8")
-                  return json.loads(raw) if raw else None
+              try:
+                  with urllib.request.urlopen(req, timeout=20) as response:
+                      raw = response.read().decode("utf-8")
+                      return json.loads(raw) if raw else None
+              except urllib.error.HTTPError as error:
+                  raw = error.read().decode("utf-8", errors="replace")
+                  try:
+                      payload = json.loads(raw) if raw else None
+                  except json.JSONDecodeError:
+                      payload = raw
+                  raise ApiError(error.code, payload)
 
           def write_summary(lines):
               if not summary_path:
@@ -235,6 +250,18 @@ jobs:
                   try:
                       connect_response = request("GET", f"/instance/connect/{instance}?number={number}")
                       break
+                  except ApiError as error:
+                      if error.status == 403:
+                          try:
+                              request("DELETE", f"/instance/logout/{instance}")
+                          except ApiError:
+                              pass
+                          import time
+                          time.sleep(3)
+                          continue
+                      last_error = error
+                      import time
+                      time.sleep(2)
                   except Exception as error:
                       last_error = error
                       import time
