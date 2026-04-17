@@ -45,6 +45,7 @@ reports/
 /plugins/
 /logs/
 /workspace/
+/.agent-state/
 
 # Vendored upstream clones kept only for local reference
 upstream/

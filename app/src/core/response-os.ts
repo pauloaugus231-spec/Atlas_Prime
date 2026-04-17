@@ -1,5 +1,6 @@
 import type {
   ApprovalReviewContract,
+  CalendarConflictReviewContract,
   CommitmentPrepContract,
   FollowUpReviewContract,
   InboxTriageContract,
@@ -346,6 +347,37 @@ export class ResponseOS {
     if (input.recommendedNextStep) {
       lines.push("", `Próxima ação: ${truncate(input.recommendedNextStep, 140)}`);
     }
+    return this.finalize("analysis", lines.join("\n"));
+  }
+
+  buildCalendarConflictReviewReply(input: CalendarConflictReviewContract): string {
+    if (input.items.length === 0) {
+      return this.finalize(
+        "analysis",
+        `Não encontrei conflitos ou duplicidades relevantes em ${input.scopeLabel}.`,
+      );
+    }
+
+    const lines = [
+      "Leitura operacional:",
+      `- Objetivo: revisar conflitos e duplicidades em ${input.scopeLabel}`,
+      "",
+      "Situação agora:",
+      `- ${input.totalEvents} evento(s) analisado(s)`,
+      `- Sobreposição: ${input.overlapCount} | Duplicidade: ${input.duplicateCount} | Nomes inconsistentes: ${input.namingCount}`,
+      "",
+      "Prioridades:",
+    ];
+
+    for (const item of input.items.slice(0, 6)) {
+      lines.push(`- [${item.kind}] ${item.dayLabel} | ${truncate(item.summary, 120)}`);
+      lines.push(`  ação: ${truncate(item.recommendation, 120)}`);
+    }
+
+    if (input.recommendedNextStep) {
+      lines.push("", `Próxima ação: ${truncate(input.recommendedNextStep, 140)}`);
+    }
+
     return this.finalize("analysis", lines.join("\n"));
   }
 

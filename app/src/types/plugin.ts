@@ -16,6 +16,7 @@ import type { ProjectOpsService } from "../core/project-ops.js";
 import type { SafeExecService } from "../core/safe-exec.js";
 import type { UserPreferencesStore } from "../core/user-preferences.js";
 import type { WorkflowOrchestratorStore } from "../core/workflow-orchestrator.js";
+import type { PersonalOperationalMemoryStore } from "../core/personal-operational-memory.js";
 
 export type ToolPluginResult =
   | string
@@ -44,6 +45,7 @@ export interface ToolExecutionContext {
   projectOps: ProjectOpsService;
   safeExec: SafeExecService;
   preferences: UserPreferencesStore;
+  personalMemory: PersonalOperationalMemoryStore;
   workflows: WorkflowOrchestratorStore;
   orchestration: OrchestrationContext;
 }

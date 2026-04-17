@@ -9,6 +9,9 @@ const ALLOWED_INTENTS = new Set<AssistantDecisionIntent>([
   "calendar_create",
   "calendar_update",
   "calendar_delete",
+  "task_create",
+  "task_update",
+  "task_delete",
   "planning",
   "other",
 ]);
@@ -29,6 +32,59 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
+function hasNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function validateCalendarPayload(payload: Record<string, unknown>): string | undefined {
+  const action = payload.action;
+  if (action !== "create" && action !== "update" && action !== "delete") {
+    return "execute_calendar_operation payload.action must be create, update or delete.";
+  }
+
+  if (action === "create") {
+    if (!hasNonEmptyString(payload.summary) || !hasNonEmptyString(payload.start) || !hasNonEmptyString(payload.end)) {
+      return "Create operations require summary, start and end.";
+    }
+    return undefined;
+  }
+
+  if (!hasNonEmptyString(payload.event_id)) {
+    return `${action === "update" ? "Update" : "Delete"} operations require event_id.`;
+  }
+
+  return undefined;
+}
+
+function validateTaskPayload(payload: Record<string, unknown>): string | undefined {
+  const action = payload.action;
+  if (action !== "create" && action !== "update" && action !== "delete") {
+    return "execute_task_operation payload.action must be create, update or delete.";
+  }
+
+  if (action === "create") {
+    if (!hasNonEmptyString(payload.title)) {
+      return "Task create operations require title.";
+    }
+    return undefined;
+  }
+
+  if (!hasNonEmptyString(payload.task_id) && !hasNonEmptyString(payload.target_title)) {
+    return `${action === "update" ? "Task update" : "Task delete"} operations require task_id or target_title.`;
+  }
+
+  if (action === "update") {
+    const hasUsefulChange = ["title", "notes", "due", "status"].some((field) =>
+      Object.prototype.hasOwnProperty.call(payload, field)
+    );
+    if (!hasUsefulChange) {
+      return "Task update operations require at least one field to change.";
+    }
+  }
+
+  return undefined;
+}
+
 function parseExecution(value: unknown): AssistantDecisionExecution | { error: string } {
   if (!isRecord(value)) {
     return { error: "execution must be an object when should_execute=true." };
@@ -38,33 +94,21 @@ function parseExecution(value: unknown): AssistantDecisionExecution | { error: s
     return { error: "execution.tool must be a non-empty string." };
   }
 
-  if (value.tool !== "execute_calendar_operation") {
-    return { error: "Only execute_calendar_operation is allowed in structured execution for now." };
+  if (value.tool !== "execute_calendar_operation" && value.tool !== "execute_task_operation") {
+    return {
+      error: "Only execute_calendar_operation and execute_task_operation are allowed in structured execution for now.",
+    };
   }
 
   if (!isRecord(value.payload)) {
     return { error: "execution.payload must be an object." };
   }
 
-  const action = value.payload.action;
-  if (action !== "create" && action !== "update" && action !== "delete") {
-    return { error: "execute_calendar_operation payload.action must be create, update or delete." };
-  }
-
-  if (action === "create") {
-    const summary = value.payload.summary;
-    const start = value.payload.start;
-    const end = value.payload.end;
-    if (typeof summary !== "string" || !summary.trim() || typeof start !== "string" || !start.trim() || typeof end !== "string" || !end.trim()) {
-      return { error: "Create operations require summary, start and end." };
-    }
-  }
-
-  if ((action === "update" || action === "delete")) {
-    const eventId = value.payload.event_id;
-    if (typeof eventId !== "string" || !eventId.trim()) {
-      return { error: `${action === "update" ? "Update" : "Delete"} operations require event_id.` };
-    }
+  const validationError = value.tool === "execute_calendar_operation"
+    ? validateCalendarPayload(value.payload)
+    : validateTaskPayload(value.payload);
+  if (validationError) {
+    return { error: validationError };
   }
 
   return {

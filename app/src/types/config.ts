@@ -34,6 +34,7 @@ export interface TelegramConfig {
   pollTimeoutSeconds: number;
   morningBriefEnabled: boolean;
   dailyEditorialAutomationEnabled: boolean;
+  operationalModeHours: number;
 }
 
 export interface BriefingConfig {

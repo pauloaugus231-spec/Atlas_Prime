@@ -109,6 +109,23 @@ export interface ScheduleLookupContract {
   recommendedNextStep?: string;
 }
 
+export interface CalendarConflictReviewContractItem {
+  kind: "overlap" | "duplicate" | "inconsistent_name";
+  dayLabel: string;
+  summary: string;
+  recommendation: string;
+}
+
+export interface CalendarConflictReviewContract {
+  scopeLabel: string;
+  totalEvents: number;
+  overlapCount: number;
+  duplicateCount: number;
+  namingCount: number;
+  items: CalendarConflictReviewContractItem[];
+  recommendedNextStep?: string;
+}
+
 export interface TaskReviewContractItem {
   title: string;
   taskListTitle: string;

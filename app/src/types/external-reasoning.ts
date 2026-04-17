@@ -24,7 +24,26 @@ export interface ExternalReasoningRequest {
         account?: string;
       }>;
     };
+    tasks?: {
+      lists: Array<{
+        account: string;
+        id: string;
+        title: string;
+      }>;
+      items: Array<{
+        account: string;
+        task_id: string;
+        task_list_id: string;
+        task_list_title: string;
+        title: string;
+        status: string;
+        due?: string;
+      }>;
+      recent_focus?: string[];
+      guidance: string[];
+    };
     memory?: string[];
+    personal?: string[];
     preferences: {
       response_style: ResponseStyle;
       response_length: ResponseLengthPreference;

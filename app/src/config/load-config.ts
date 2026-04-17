@@ -609,6 +609,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       pollTimeoutSeconds: parsePositiveInteger(env.TELEGRAM_POLL_TIMEOUT_SECONDS, 30),
       morningBriefEnabled: parseBoolean(env.TELEGRAM_MORNING_BRIEF_ENABLED, true),
       dailyEditorialAutomationEnabled: parseBoolean(env.TELEGRAM_DAILY_EDITORIAL_AUTOMATION_ENABLED, false),
+      operationalModeHours: parsePositiveInteger(env.TELEGRAM_OPERATIONAL_MODE_HOURS, 18),
     },
     briefing: buildBriefingConfig(env),
     externalReasoning: buildExternalReasoningConfig(env),

@@ -42,6 +42,7 @@ import { ClarificationEngine } from "./clarification-engine.js";
 import { ResponseOS } from "./response-os.js";
 import { ContextPackService } from "./context-pack.js";
 import { ContextMemoryService } from "./context-memory.js";
+import { PersonalOperationalMemoryStore } from "./personal-operational-memory.js";
 
 export async function createAgentCore() {
   const config = loadConfig();
@@ -58,6 +59,10 @@ export async function createAgentCore() {
   const preferences = new UserPreferencesStore(
     config.paths.preferencesDbPath,
     logger.child({ scope: "user-preferences" }),
+  );
+  const personalMemory = new PersonalOperationalMemoryStore(
+    config.paths.preferencesDbPath,
+    logger.child({ scope: "personal-operational-memory" }),
   );
   const contentOps = new ContentOpsStore(
     config.paths.contentDbPath,
@@ -160,6 +165,7 @@ export async function createAgentCore() {
     memory,
     memoryEntities,
     contextMemory,
+    personalMemory,
   );
   const email = emailAccounts.getReader("primary");
   const emailWriter = emailAccounts.getWriter("primary");
@@ -228,6 +234,7 @@ export async function createAgentCore() {
     registry,
     memory,
     preferences,
+    personalMemory,
     growthOps,
     contentOps,
     socialAssistant,
@@ -262,6 +269,7 @@ export async function createAgentCore() {
     logger,
     memory,
     preferences,
+    personalMemory,
     contentOps,
     socialAssistant,
     contacts,

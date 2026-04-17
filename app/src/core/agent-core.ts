@@ -95,6 +95,11 @@ import { WebResearchService, type WebResearchMode } from "./web-research.js";
 import { GoogleTrendsIntakeService, type GoogleTrendItem } from "./trend-intake.js";
 import type { ExternalReasoningRequest } from "../types/external-reasoning.js";
 import { looksLikeLowFrictionReadPrompt } from "./clarification-rules.js";
+import { analyzeCalendarInsights } from "./calendar-insights.js";
+import { resolveActionAutonomyRule } from "./action-autonomy-policy.js";
+import { PersonalOperationalMemoryStore } from "./personal-operational-memory.js";
+import type { PersonalOperationalMemoryItem, PersonalOperationalMemoryItemKind } from "../types/personal-operational-memory.js";
+import { resolveStructuredTaskOperationPayload } from "./task-operation-resolution.js";
 
 function stripCodeFences(value: string): string {
   const trimmed = value.trim();
@@ -455,6 +460,14 @@ function isMorningBriefPrompt(prompt: string): boolean {
     "me de o resumo da manha",
     "me de o resumo da manhã",
   ].some((token) => normalized.includes(token));
+}
+
+function extractOperationalMode(prompt: string): "field" | null {
+  const normalized = normalizeEmailAnalysisText(prompt);
+  if (normalized.includes("modo_operacional=field")) {
+    return "field";
+  }
+  return null;
 }
 
 function isMacQueueStatusPrompt(prompt: string): boolean {
@@ -1018,6 +1031,179 @@ function isUserPreferencesPrompt(prompt: string): boolean {
     "minhas preferencias",
     "minhas preferências",
   ]);
+}
+
+function isPersonalMemoryListPrompt(prompt: string): boolean {
+  const normalized = normalizeEmailAnalysisText(prompt);
+  return includesAny(normalized, [
+    "liste minha memoria pessoal",
+    "listar minha memoria pessoal",
+    "mostre minha memoria pessoal",
+    "mostrar minha memoria pessoal",
+    "quais sao minhas memorias pessoais",
+    "quais sao minhas regras pessoais",
+    "quais sao minhas rotinas",
+  ]);
+}
+
+function isPersonalMemorySavePrompt(prompt: string): boolean {
+  const normalized = normalizeEmailAnalysisText(prompt);
+  const explicitMemoryIntent = includesAny(normalized, [
+    "salve na minha memoria pessoal",
+    "salve na memoria pessoal",
+    "guarde na minha memoria pessoal",
+    "guarde na memoria pessoal",
+    "registre na minha memoria pessoal",
+    "adicione na minha memoria pessoal",
+  ]);
+  const implicitOperationalMemoryIntent =
+    (normalized.startsWith("salve que ") || normalized.startsWith("guarde que "))
+    && includesAny(normalized, [
+      "plantao",
+      "plantão",
+      "rotina",
+      "resposta",
+      "respostas curtas",
+      "casaco",
+      "carregador",
+      "dois dias fora",
+      "na rua",
+      "deslocamento",
+    ]);
+  return explicitMemoryIntent || implicitOperationalMemoryIntent;
+}
+
+function isPersonalMemoryUpdatePrompt(prompt: string): boolean {
+  const normalized = normalizeEmailAnalysisText(prompt);
+  return includesAny(normalized, [
+    "atualize minha memoria pessoal",
+    "atualizar minha memoria pessoal",
+    "edite minha memoria pessoal",
+    "altere minha memoria pessoal",
+    "altere a minha memoria pessoal",
+  ]);
+}
+
+function isPersonalMemoryDeletePrompt(prompt: string): boolean {
+  const normalized = normalizeEmailAnalysisText(prompt);
+  return includesAny(normalized, [
+    "remova da minha memoria pessoal",
+    "remover da minha memoria pessoal",
+    "apague da minha memoria pessoal",
+    "delete da minha memoria pessoal",
+    "exclua da minha memoria pessoal",
+  ]);
+}
+
+function extractPersonalMemoryStatement(prompt: string): string | undefined {
+  const cleaned = prompt
+    .replace(/^\s*(?:salve|guarde|registre|adicione)\s+(?:na\s+)?(?:minha\s+)?mem[oó]ria\s+pessoal\s*(?:que|:)?\s*/i, "")
+    .replace(/^\s*(?:salve|guarde)\s+que\s*/i, "")
+    .trim();
+  return cleaned || undefined;
+}
+
+function inferPersonalMemoryKind(statement: string): PersonalOperationalMemoryItemKind {
+  const normalized = normalizeEmailAnalysisText(statement);
+  if (includesAny(normalized, ["foco", "prioridade do dia"])) {
+    return "focus";
+  }
+  if (includesAny(normalized, ["casaco", "carregador", "roupa", "guarda chuva", "guarda-chuva", "levar", "leve"])) {
+    return "packing";
+  }
+  if (includesAny(normalized, ["plantao", "plantão", "rotina", "quando eu for", "quando eu estiver", "vou sair", "dois dias fora"])) {
+    return "routine";
+  }
+  if (includesAny(normalized, ["respostas curtas", "resposta curta", "prefiro", "me responda", "tom", "estilo"])) {
+    return "preference";
+  }
+  if (includesAny(normalized, ["regra", "sempre", "nunca", "devo"])) {
+    return "rule";
+  }
+  if (includesAny(normalized, ["deslocamento", "na rua", "seas", "albergue", "trajeto"])) {
+    return "mobility";
+  }
+  if (includesAny(normalized, ["agenda", "calendario", "calendário", "abordagem", "primary", "trabalho"])) {
+    return "context";
+  }
+  return "note";
+}
+
+function buildPersonalMemoryTitle(statement: string, kind: PersonalOperationalMemoryItemKind): string {
+  const cleaned = statement
+    .replace(/^que\s+/i, "")
+    .replace(/^quando\s+/i, "")
+    .replace(/[.;]+$/g, "")
+    .trim();
+  const compact = cleaned.length > 72 ? `${cleaned.slice(0, 69).trim()}...` : cleaned;
+  if (compact) {
+    return compact[0]?.toUpperCase() + compact.slice(1);
+  }
+
+  switch (kind) {
+    case "focus":
+      return "Foco operacional";
+    case "packing":
+      return "Itens e roupa";
+    case "routine":
+      return "Rotina operacional";
+    case "preference":
+      return "Preferência operacional";
+    case "rule":
+      return "Regra operacional";
+    case "mobility":
+      return "Deslocamento";
+    case "context":
+      return "Contexto pessoal";
+    case "note":
+    default:
+      return "Nota operacional";
+  }
+}
+
+function extractPersonalMemoryId(prompt: string): number | undefined {
+  const match = prompt.match(/\b(?:item|id)\s*(\d+)\b/i) ?? prompt.match(/#(\d+)\b/);
+  if (!match?.[1]) {
+    return undefined;
+  }
+  const parsed = Number.parseInt(match[1], 10);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function extractPersonalMemoryUpdateTarget(prompt: string): string | undefined {
+  const byId = extractPersonalMemoryId(prompt);
+  if (byId) {
+    return undefined;
+  }
+
+  const match = prompt.match(/mem[oó]ria\s+pessoal\s+(?:sobre|da|do|a regra|o item)?\s*(.+?)\s+(?:para|com|:)/i);
+  if (match?.[1]) {
+    return match[1].trim();
+  }
+
+  return undefined;
+}
+
+function extractPersonalMemoryUpdateContent(prompt: string): string | undefined {
+  const match = prompt.match(/\b(?:para|com|:)\s+(.+)$/i);
+  if (!match?.[1]) {
+    return undefined;
+  }
+  return match[1].trim();
+}
+
+function extractPersonalMemoryDeleteTarget(prompt: string): string | undefined {
+  const byId = extractPersonalMemoryId(prompt);
+  if (byId) {
+    return undefined;
+  }
+
+  const cleaned = prompt
+    .replace(/^\s*(?:remova|remover|apague|delete|exclua)\s+(?:da\s+)?minha\s+mem[oó]ria\s+pessoal\s*/i, "")
+    .replace(/^a\s+regra\s+/i, "")
+    .replace(/^o\s+item\s+/i, "")
+    .trim();
+  return cleaned || undefined;
 }
 
 function isMemoryEntityListPrompt(prompt: string): boolean {
@@ -2505,6 +2691,21 @@ function isCalendarPeriodListPrompt(prompt: string): boolean {
   );
 }
 
+function isCalendarConflictReviewPrompt(prompt: string): boolean {
+  const normalized = normalizeEmailAnalysisText(prompt);
+  return includesAny(normalized, [
+    "conflitos da agenda",
+    "conflict",
+    "duplicidades da agenda",
+    "duplicidade da agenda",
+    "eventos duplicados",
+    "agenda duplicada",
+    "sobreposicao de agenda",
+    "sobreposição de agenda",
+    "limpeza da agenda",
+  ]);
+}
+
 function isCalendarMovePrompt(prompt: string): boolean {
   const normalized = normalizeEmailAnalysisText(prompt);
   return includesAny(normalized, [
@@ -2637,6 +2838,36 @@ function extractExplicitAccountAlias(prompt: string, aliases: string[]): string 
   }
 
   return undefined;
+}
+
+function refersToBothPersonalAndWork(prompt: string): boolean {
+  const normalized = normalizeEmailAnalysisText(prompt);
+  return includesAny(normalized, [
+    "ambos",
+    "ambas",
+    "pessoal e trabalho",
+    "trabalho e pessoal",
+    "pessoal e profissional",
+    "agenda pessoal e trabalho",
+    "calendario pessoal e trabalho",
+    "calendário pessoal e trabalho",
+  ]);
+}
+
+function resolvePromptAccountAliases(prompt: string, aliases: string[]): string[] {
+  const explicit = extractExplicitAccountAlias(prompt, aliases);
+  if (explicit) {
+    return [explicit];
+  }
+
+  if (refersToBothPersonalAndWork(prompt)) {
+    const workAlias = aliases.includes("abordagem")
+      ? "abordagem"
+      : aliases.find((alias) => alias !== "primary");
+    return [...new Set(["primary", workAlias].filter((value): value is string => Boolean(value)))];
+  }
+
+  return aliases;
 }
 
 function shouldSearchAllCalendars(prompt: string): boolean {
@@ -3668,7 +3899,13 @@ function classifyBriefPeriod(iso: string | null | undefined, timezone: string): 
   return "noite";
 }
 
-function buildMorningBriefReply(input: ExecutiveMorningBrief): string {
+function buildMorningBriefReply(
+  input: ExecutiveMorningBrief,
+  options?: {
+    compact?: boolean;
+  },
+): string {
+  const compact = options?.compact === true;
   const attentionNow: string[] = [];
   const highestEmail = input.emails.find((item) => item.priority === "alta") ?? input.emails[0];
   const nextEvent = input.events[0];
@@ -3705,12 +3942,27 @@ function buildMorningBriefReply(input: ExecutiveMorningBrief): string {
     "Resumo rápido:",
     `- Hoje: ${input.events.length} compromisso(s) | ${input.taskBuckets.actionableCount} tarefa(s) acionáveis | ${input.emails.length} email(s)`,
     `- Pendências: ${input.taskBuckets.overdue.length} tarefa(s) atrasada(s) | ${input.taskBuckets.stale.length} tarefa(s) no backlog antigo`,
+    `- Ritmo: ${input.overloadLevel}${input.conflictSummary.overlaps > 0 ? ` | ${input.conflictSummary.overlaps} conflito(s)` : ""}${input.conflictSummary.duplicates > 0 ? ` | ${input.conflictSummary.duplicates} duplicidade(s)` : ""}`,
   ];
 
   if (attentionNow.length > 0) {
     lines.push("", "Atenção agora:");
     for (const item of attentionNow.slice(0, 3)) {
       lines.push(`- ${item}`);
+    }
+  }
+
+  if (input.personalFocus.length > 0) {
+    lines.push("", "Foco salvo:");
+    for (const item of input.personalFocus.slice(0, compact ? 2 : 3)) {
+      lines.push(`- ${truncateBriefText(item, 110)}`);
+    }
+  }
+
+  if (input.mobilityAlerts.length > 0) {
+    lines.push("", compact ? "Modo rua:" : "Deslocamento e rua:");
+    for (const item of input.mobilityAlerts.slice(0, compact ? 2 : 3)) {
+      lines.push(`- ${truncateBriefText(item, 110)}`);
     }
   }
 
@@ -3786,18 +4038,22 @@ function buildMorningBriefReply(input: ExecutiveMorningBrief): string {
     lines.push("- Nenhuma tarefa aberta em foco.");
   }
 
-  lines.push("", "Inbox primeiro:");
+  lines.push("", compact ? "Inbox essencial:" : "Inbox primeiro:");
   if (input.emails.length > 0) {
-    for (const item of input.emails.slice(0, 3)) {
+    for (const item of input.emails.slice(0, compact ? 2 : 3)) {
       lines.push(
         `- ${item.priority.toUpperCase()} — ${truncateBriefText(item.subject || "(sem assunto)")} — ${summarizeEmailSender(item.from)} — ${item.account}`,
       );
     }
-    if (input.emails.length > 3) {
-      lines.push(`- ... e mais ${input.emails.length - 3} email(s) prioritário(s).`);
+    if (input.emails.length > (compact ? 2 : 3)) {
+      lines.push(`- ... e mais ${input.emails.length - (compact ? 2 : 3)} email(s) prioritário(s).`);
     }
   } else {
     lines.push("- Nenhum email prioritário agora.");
+  }
+
+  if (input.dayRecommendation) {
+    lines.push("", `Recomendação prática: ${truncateBriefText(input.dayRecommendation, 110)}`);
   }
 
   if (input.nextAction) {
@@ -3949,6 +4205,84 @@ function buildUserPreferencesReply(preferences: UserPreferences): string {
     `- Próxima ação sugerida: ${preferences.proactiveNextStep ? "sim" : "não"}`,
     `- Fallback automático de fontes: ${preferences.autoSourceFallback ? "sim" : "não"}`,
     `- Nome do agente: ${preferences.preferredAgentName}`,
+  ].join("\n");
+}
+
+function formatPersonalMemoryKindLabel(kind: PersonalOperationalMemoryItemKind): string {
+  switch (kind) {
+    case "preference":
+      return "Preferência";
+    case "routine":
+      return "Rotina";
+    case "rule":
+      return "Regra";
+    case "packing":
+      return "Itens";
+    case "mobility":
+      return "Deslocamento";
+    case "context":
+      return "Contexto";
+    case "focus":
+      return "Foco";
+    case "note":
+    default:
+      return "Nota";
+  }
+}
+
+function buildPersonalMemoryListReply(input: {
+  profile: ReturnType<PersonalOperationalMemoryStore["getProfile"]>;
+  items: PersonalOperationalMemoryItem[];
+}): string {
+  const lines = [
+    "Memória pessoal operacional:",
+    `- Escopo padrão de agenda: ${input.profile.defaultAgendaScope}`,
+    `- Foco salvo: ${input.profile.savedFocus.length > 0 ? input.profile.savedFocus.join(" | ") : "nenhum"}`,
+    `- Regras práticas: ${input.profile.operationalRules.slice(0, 3).join(" | ")}`,
+    `- Itens de apoio: ${input.profile.attire.carryItems.join(" | ")}`,
+  ];
+
+  if (input.items.length === 0) {
+    lines.push("", "Nenhum item adicional salvo na memória pessoal.");
+    return lines.join("\n");
+  }
+
+  lines.push("", "Itens salvos:");
+  for (const item of input.items) {
+    lines.push(`- #${item.id} | ${formatPersonalMemoryKindLabel(item.kind)} | ${item.title}`);
+    lines.push(`  ${item.content}`);
+  }
+
+  return lines.join("\n");
+}
+
+function buildPersonalMemorySavedReply(item: PersonalOperationalMemoryItem): string {
+  return [
+    "Memória pessoal salva.",
+    `- #${item.id} | ${formatPersonalMemoryKindLabel(item.kind)} | ${item.title}`,
+    `- Conteúdo: ${item.content}`,
+  ].join("\n");
+}
+
+function buildPersonalMemoryUpdatedReply(item: PersonalOperationalMemoryItem): string {
+  return [
+    "Memória pessoal atualizada.",
+    `- #${item.id} | ${formatPersonalMemoryKindLabel(item.kind)} | ${item.title}`,
+    `- Conteúdo: ${item.content}`,
+  ].join("\n");
+}
+
+function buildPersonalMemoryDeletedReply(item: PersonalOperationalMemoryItem): string {
+  return [
+    "Memória pessoal removida.",
+    `- #${item.id} | ${formatPersonalMemoryKindLabel(item.kind)} | ${item.title}`,
+  ].join("\n");
+}
+
+function buildPersonalMemoryAmbiguousReply(query: string, items: PersonalOperationalMemoryItem[]): string {
+  return [
+    `Encontrei mais de um item para "${query}". Diga o id exato para eu seguir.`,
+    ...items.slice(0, 5).map((item) => `- #${item.id} | ${formatPersonalMemoryKindLabel(item.kind)} | ${item.title}`),
   ].join("\n");
 }
 
@@ -4217,6 +4551,7 @@ function inferIntentNextStep(input: IntentResolution): string | undefined {
 
 function buildOperationalPlanContract(prompt: string, brief: ExecutiveMorningBrief): import("../types/response-contracts.js").OrganizationResponseContract {
   const normalized = normalizeEmailAnalysisText(prompt);
+  const operationalMode = extractOperationalMode(prompt);
   const currentSituation: string[] = [];
   const priorities: string[] = [];
   const actionPlan: string[] = [];
@@ -4254,6 +4589,15 @@ function buildOperationalPlanContract(prompt: string, brief: ExecutiveMorningBri
   if (weatherToday) {
     currentSituation.push(`clima hoje: ${weatherToday.description.toLowerCase()} | ${weatherToday.tip}`);
   }
+  if (brief.mobilityAlerts[0]) {
+    currentSituation.push(`deslocamento: ${brief.mobilityAlerts[0]}`);
+  }
+  if (brief.conflictSummary.duplicates > 0) {
+    currentSituation.push(`${brief.conflictSummary.duplicates} duplicidade(s) provável(is) na agenda`);
+  }
+  if (operationalMode === "field") {
+    currentSituation.push("modo rua ativo neste chat");
+  }
 
   if (conflictEvents[0]) {
     priorities.push(`resolver o conflito de agenda em ${conflictEvents[0].summary}`);
@@ -4269,6 +4613,12 @@ function buildOperationalPlanContract(prompt: string, brief: ExecutiveMorningBri
   }
   if (topEmail) {
     priorities.push(`validar se o email ${topEmail.subject} exige ação agora`);
+  }
+  if (brief.mobilityAlerts[0]) {
+    priorities.push(`preparar operação externa com base em: ${brief.mobilityAlerts[0]}`);
+  }
+  if (operationalMode === "field") {
+    priorities.push("responder curto e preservar deslocamento");
   }
 
   if (conflictEvents.length > 0) {
@@ -4288,6 +4638,12 @@ function buildOperationalPlanContract(prompt: string, brief: ExecutiveMorningBri
   }
   if (topEmail) {
     actionPlan.push(`validar se o email ${topEmail.subject} exige ação real ou pode esperar`);
+  }
+  if (brief.dayRecommendation) {
+    actionPlan.push(brief.dayRecommendation);
+  }
+  if (operationalMode === "field") {
+    actionPlan.push("evitar novas frentes e operar com checklist curto");
   }
 
   return {
@@ -4332,7 +4688,7 @@ function buildOperationalPlanContract(prompt: string, brief: ExecutiveMorningBri
         ? `${nextPauloEvent.prepHint[0]?.toUpperCase() ?? ""}${nextPauloEvent.prepHint.slice(1)} para ${nextPauloEvent.summary}.`
         : topApproval
           ? `Decidir a aprovação ${topApproval.item.subject}.`
-          : brief.nextAction ?? actionPlan[0],
+          : brief.dayRecommendation ?? brief.nextAction ?? actionPlan[0],
   };
 }
 
@@ -8104,6 +8460,7 @@ export class AgentCore {
     private readonly pluginRegistry: ToolPluginRegistry,
     private readonly memory: OperationalMemoryStore,
     private readonly preferences: UserPreferencesStore,
+    private readonly personalMemory: PersonalOperationalMemoryStore,
     private readonly growthOps: GrowthOpsStore,
     private readonly contentOps: ContentOpsStore,
     private readonly socialAssistant: SocialAssistantStore,
@@ -8564,6 +8921,42 @@ export class AgentCore {
     if (directPreferencesResult) {
       return directPreferencesResult;
     }
+    const directPersonalMemoryListResult = await this.tryRunDirectPersonalMemoryList(
+      activeUserPrompt,
+      requestId,
+      orchestration,
+      preferences,
+    );
+    if (directPersonalMemoryListResult) {
+      return directPersonalMemoryListResult;
+    }
+    const directPersonalMemorySaveResult = await this.tryRunDirectPersonalMemorySave(
+      activeUserPrompt,
+      requestId,
+      orchestration,
+      preferences,
+    );
+    if (directPersonalMemorySaveResult) {
+      return directPersonalMemorySaveResult;
+    }
+    const directPersonalMemoryUpdateResult = await this.tryRunDirectPersonalMemoryUpdate(
+      activeUserPrompt,
+      requestId,
+      orchestration,
+      preferences,
+    );
+    if (directPersonalMemoryUpdateResult) {
+      return directPersonalMemoryUpdateResult;
+    }
+    const directPersonalMemoryDeleteResult = await this.tryRunDirectPersonalMemoryDelete(
+      activeUserPrompt,
+      requestId,
+      orchestration,
+      preferences,
+    );
+    if (directPersonalMemoryDeleteResult) {
+      return directPersonalMemoryDeleteResult;
+    }
     const directMorningBriefResult = await this.tryRunDirectMorningBrief(
       activeUserPrompt,
       requestId,
@@ -8769,6 +9162,15 @@ export class AgentCore {
     );
     if (directCalendarLookupResult) {
       return directCalendarLookupResult;
+    }
+    const directCalendarConflictReviewResult = await this.tryRunDirectCalendarConflictReview(
+      activeUserPrompt,
+      requestId,
+      requestLogger,
+      orchestration,
+    );
+    if (directCalendarConflictReviewResult) {
+      return directCalendarConflictReviewResult;
     }
     const directCalendarPeriodListResult = await this.tryRunDirectCalendarPeriodList(
       activeUserPrompt,
@@ -9180,6 +9582,7 @@ export class AgentCore {
             fileAccess: this.fileAccess,
             memory: this.memory,
             preferences: this.preferences,
+      personalMemory: this.personalMemory,
             growthOps: this.growthOps,
             contentOps: this.contentOps,
             socialAssistant: this.socialAssistant,
@@ -9266,6 +9669,7 @@ export class AgentCore {
       fileAccess: this.fileAccess,
       memory: this.memory,
       preferences: this.preferences,
+      personalMemory: this.personalMemory,
       growthOps: this.growthOps,
       contentOps: this.contentOps,
       socialAssistant: this.socialAssistant,
@@ -9285,6 +9689,19 @@ export class AgentCore {
       content: execution.content,
       rawResult: execution.rawResult,
     };
+  }
+
+  async resolveStructuredTaskOperationPayload(
+    payload: Record<string, unknown>,
+    options?: {
+      recentMessages?: string[];
+    },
+  ) {
+    return resolveStructuredTaskOperationPayload({
+      payload,
+      recentMessages: options?.recentMessages,
+      accounts: this.googleWorkspaces,
+    });
   }
 
   private shouldUseExternalReasoning(
@@ -9335,7 +9752,7 @@ export class AgentCore {
 
     try {
       const contextPack = await this.contextPacks.buildForPrompt(userPrompt, intent);
-      const request = this.buildExternalReasoningRequest(
+      const request = await this.buildExternalReasoningRequest(
         userPrompt,
         intent,
         preferences,
@@ -9374,13 +9791,14 @@ export class AgentCore {
     }
   }
 
-  private buildExternalReasoningRequest(
+  private async buildExternalReasoningRequest(
     userPrompt: string,
     intent: IntentResolution,
     preferences: UserPreferences,
     contextPack: Awaited<ReturnType<ContextPackService["buildForPrompt"]>>,
     options?: AgentRunOptions,
-  ): ExternalReasoningRequest {
+  ): Promise<ExternalReasoningRequest> {
+    const personalProfile = this.personalMemory.getProfile();
     const briefEvents = (contextPack?.brief?.events ?? [])
       .slice(0, 6)
       .flatMap((event) => {
@@ -9398,6 +9816,12 @@ export class AgentCore {
     const memorySignals = contextPack?.signals.filter((signal) =>
       includesAny(signal.toLowerCase(), ["approval", "workflow", "memoria", "memória", "email", "tarefa", "clima"])
     ) ?? [];
+    const personalSignals = [
+      ...personalProfile.savedFocus.map((item) => `foco salvo: ${item}`),
+      ...personalProfile.routineAnchors.map((item) => `rotina: ${item}`),
+      ...personalProfile.operationalRules.map((item) => `regra operacional: ${item}`),
+    ].slice(0, 8);
+    const tasksContext = await this.buildExternalReasoningTasksContext(userPrompt, intent, contextPack);
 
     return {
       user_message: userPrompt,
@@ -9421,6 +9845,8 @@ export class AgentCore {
             }
           : {}),
         ...(memorySignals.length > 0 ? { memory: memorySignals } : {}),
+        ...(personalSignals.length > 0 ? { personal: personalSignals } : {}),
+        ...(tasksContext ? { tasks: tasksContext } : {}),
         preferences: {
           response_style: preferences.responseStyle,
           response_length: preferences.responseLength,
@@ -9428,6 +9854,114 @@ export class AgentCore {
         },
         recent_messages: intent.historyUserTurns.slice(-6),
       },
+    };
+  }
+
+  private shouldAttachTasksContextToExternalReasoning(
+    userPrompt: string,
+    intent: IntentResolution,
+    contextPack: Awaited<ReturnType<ContextPackService["buildForPrompt"]>>,
+  ): boolean {
+    const normalizedPrompt = normalizeEmailAnalysisText(userPrompt);
+    if (includesAny(normalizedPrompt, [
+      "taref",
+      "google tasks",
+      "task",
+      "penden",
+      "lembrete",
+      "concluir",
+      "finalizar",
+      "follow up",
+    ])) {
+      return true;
+    }
+
+    if ((contextPack?.signals ?? []).some((signal) =>
+      includesAny(normalizeEmailAnalysisText(signal), ["taref", "google tasks", "task", "penden"])
+    )) {
+      return true;
+    }
+
+    return intent.orchestration.route.primaryDomain === "secretario_operacional"
+      && ["plan", "analyze", "execute"].includes(intent.orchestration.route.actionMode);
+  }
+
+  private async buildExternalReasoningTasksContext(
+    userPrompt: string,
+    intent: IntentResolution,
+    contextPack: Awaited<ReturnType<ContextPackService["buildForPrompt"]>>,
+  ): Promise<ExternalReasoningRequest["context"]["tasks"] | undefined> {
+    if (!this.shouldAttachTasksContextToExternalReasoning(userPrompt, intent, contextPack)) {
+      return undefined;
+    }
+
+    const candidateAliases = resolvePromptAccountAliases(userPrompt, this.googleWorkspaces.getAliases());
+    const lists: NonNullable<ExternalReasoningRequest["context"]["tasks"]>["lists"] = [];
+    const items: NonNullable<ExternalReasoningRequest["context"]["tasks"]>["items"] = [];
+
+    for (const alias of candidateAliases) {
+      const workspace = this.googleWorkspaces.getWorkspace(alias);
+      if (!workspace.getStatus().ready) {
+        continue;
+      }
+
+      try {
+        const taskLists = await workspace.listTaskLists();
+        lists.push(
+          ...taskLists.slice(0, 3).map((taskList) => ({
+            account: alias,
+            id: taskList.id,
+            title: taskList.title,
+          })),
+        );
+
+        const tasks = await workspace.listTasks({
+          maxResults: 4,
+          showCompleted: false,
+        });
+        items.push(
+          ...tasks.slice(0, 4).map((task) => ({
+            account: alias,
+            task_id: task.id,
+            task_list_id: task.taskListId,
+            task_list_title: task.taskListTitle,
+            title: task.title,
+            status: task.status,
+            ...(task.due ? { due: task.due } : {}),
+          })),
+        );
+      } catch (error) {
+        this.logger.debug("Skipping Google Tasks context for external reasoning", {
+          account: alias,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+
+      if (lists.length >= 6 && items.length >= 8) {
+        break;
+      }
+    }
+
+    if (lists.length === 0 && items.length === 0) {
+      return undefined;
+    }
+
+    const recentFocus = intent.historyUserTurns
+      .map((turn) => turn.trim())
+      .filter((turn) => includesAny(normalizeEmailAnalysisText(turn), ["taref", "task", "penden", "concluir", "finalizar"]))
+      .slice(-2);
+
+    return {
+      lists: lists.slice(0, 6),
+      items: items.slice(0, 8),
+      ...(recentFocus.length > 0 ? { recent_focus: recentFocus } : {}),
+      guidance: [
+        "For task create, include title.",
+        "For task update/delete, include task_id and task_list_id when known.",
+        "If only the task list title is known, you may include task_list_title.",
+        "If only the current task title is known, you may include target_title.",
+        "Never invent task_id or task_list_id. If uncertain, return text or should_execute=false.",
+      ],
     };
   }
 
@@ -9822,10 +10356,13 @@ export class AgentCore {
     });
 
     const brief = await this.personalOs.getExecutiveMorningBrief();
+    const operationalMode = extractOperationalMode(userPrompt);
 
     return {
       requestId,
-      reply: buildMorningBriefReply(brief),
+      reply: buildMorningBriefReply(brief, {
+        compact: operationalMode === "field",
+      }),
       messages: buildBaseMessages(userPrompt, orchestration),
       toolExecutions: [
         {
@@ -10059,12 +10596,13 @@ export class AgentCore {
       return null;
     }
     const preferences = this.preferences.get();
-    const explicitAccount = extractExplicitAccountAlias(userPrompt, this.googleWorkspaces.getAliases());
-    const candidateAliases = explicitAccount ? [explicitAccount] : this.googleWorkspaces.getAliases();
+    const candidateAliases = resolvePromptAccountAliases(userPrompt, this.googleWorkspaces.getAliases());
+    const explicitAccount = candidateAliases.length === 1 ? candidateAliases[0] : undefined;
 
     requestLogger.info("Using direct Google Tasks route", {
       domain: orchestration.route.primaryDomain,
-      account: explicitAccount ?? "all",
+      account: explicitAccount ?? (candidateAliases.length > 1 ? candidateAliases.join(",") : "all"),
+      autonomy: resolveActionAutonomyRule(userPrompt).key,
     });
 
     const tasks: Array<TaskSummary & { account: string }> = [];
@@ -10140,8 +10678,10 @@ export class AgentCore {
     requestLogger.info("Using direct calendar multi-source lookup route", {
       targetDate: lookup.targetDate.isoDate,
       topic: lookup.topic,
+      autonomy: resolveActionAutonomyRule(userPrompt).key,
     });
-    const explicitAccount = extractExplicitAccountAlias(userPrompt, this.googleWorkspaces.getAliases());
+    const candidateAliases = resolvePromptAccountAliases(userPrompt, this.googleWorkspaces.getAliases());
+    const explicitAccount = candidateAliases.length === 1 ? candidateAliases[0] : undefined;
 
     const eventMatches: Array<{
       account: string;
@@ -10151,7 +10691,6 @@ export class AgentCore {
       htmlLink?: string;
     }> = [];
 
-    const candidateAliases = explicitAccount ? [explicitAccount] : this.googleWorkspaces.getAliases();
     for (const alias of candidateAliases) {
       const workspace = this.googleWorkspaces.getWorkspace(alias);
       const status = workspace.getStatus();
@@ -10334,6 +10873,123 @@ export class AgentCore {
     };
   }
 
+  private async tryRunDirectCalendarConflictReview(
+    userPrompt: string,
+    requestId: string,
+    requestLogger: Logger,
+    orchestration: OrchestrationContext,
+  ): Promise<AgentRunResult | null> {
+    if (!isCalendarConflictReviewPrompt(userPrompt)) {
+      return null;
+    }
+
+    const explicitWindow = parseCalendarPeriodWindow(userPrompt, this.config.google.defaultTimezone);
+    const start = explicitWindow
+      ? explicitWindow.startIso
+      : new Date().toISOString();
+    const end = explicitWindow
+      ? explicitWindow.endIso
+      : new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+    const scopeLabel = explicitWindow?.label ?? "próximos 7 dias";
+    const aliases = resolvePromptAccountAliases(userPrompt, this.googleWorkspaces.getAliases());
+
+    const events: Array<{
+      account: string;
+      summary: string;
+      start: string | null;
+      end: string | null;
+      location?: string;
+      owner: "paulo" | "equipe" | "delegavel";
+    }> = [];
+
+    for (const alias of aliases) {
+      const workspace = this.googleWorkspaces.getWorkspace(alias);
+      if (!workspace.getStatus().ready) {
+        continue;
+      }
+
+      const calendarTargets = resolveCalendarTargets(workspace, userPrompt);
+      for (const calendarId of calendarTargets) {
+        const items = await workspace.listEventsInWindow({
+          timeMin: start,
+          timeMax: end,
+          maxResults: 40,
+          calendarId,
+        });
+        for (const event of items) {
+          if (!isPersonallyRelevantCalendarEvent({
+            account: alias,
+            summary: event.summary,
+            description: event.description,
+            location: event.location,
+          })) {
+            continue;
+          }
+          const matchedTerms = matchPersonalCalendarTerms({
+            account: alias,
+            summary: event.summary,
+            description: event.description,
+            location: event.location,
+          });
+          events.push({
+            account: alias,
+            summary: event.summary,
+            start: event.start,
+            end: event.end,
+            location: event.location,
+            owner: alias === "primary"
+              ? "paulo"
+              : normalizeEmailAnalysisText([event.summary, event.location].filter(Boolean).join(" ")).includes("paulo")
+                ? "paulo"
+                : matchedTerms.length > 0
+                  ? "equipe"
+                  : "delegavel",
+          });
+        }
+      }
+    }
+
+    const insights = analyzeCalendarInsights(events, this.config.google.defaultTimezone);
+    requestLogger.info("Using direct calendar conflict review route", {
+      scopeLabel,
+      events: events.length,
+      insights: insights.length,
+    });
+
+    return {
+      requestId,
+      reply: this.responseOs.buildCalendarConflictReviewReply({
+        scopeLabel,
+        totalEvents: events.length,
+        overlapCount: insights.filter((item) => item.kind === "overlap").length,
+        duplicateCount: insights.filter((item) => item.kind === "duplicate").length,
+        namingCount: insights.filter((item) => item.kind === "inconsistent_name").length,
+        items: insights.map((item) => ({
+          kind: item.kind,
+          dayLabel: item.dayLabel,
+          summary: item.summary,
+          recommendation: item.recommendation,
+        })),
+        recommendedNextStep: insights[0]?.recommendation,
+      }),
+      messages: buildBaseMessages(userPrompt, orchestration),
+      toolExecutions: [
+        {
+          toolName: "calendar_conflict_review",
+          resultPreview: JSON.stringify(
+            {
+              scopeLabel,
+              events: events.length,
+              insights: insights.length,
+            },
+            null,
+            2,
+          ),
+        },
+      ],
+    };
+  }
+
   private async tryRunDirectGoogleEventDraft(
     userPrompt: string,
     requestId: string,
@@ -10457,8 +11113,8 @@ export class AgentCore {
     if (!window) {
       return null;
     }
-    const explicitAccount = extractExplicitAccountAlias(userPrompt, this.googleWorkspaces.getAliases());
-    const aliases = explicitAccount ? [explicitAccount] : this.googleWorkspaces.getAliases();
+    const aliases = resolvePromptAccountAliases(userPrompt, this.googleWorkspaces.getAliases());
+    const explicitAccount = aliases.length === 1 ? aliases[0] : undefined;
     const events: Array<{ account: string; event: Awaited<ReturnType<GoogleWorkspaceService["listEventsInWindow"]>>[number] }> = [];
     for (const alias of aliases) {
       const workspace = this.googleWorkspaces.getWorkspace(alias);
@@ -13458,6 +14114,252 @@ export class AgentCore {
     };
   }
 
+  private async tryRunDirectPersonalMemoryList(
+    userPrompt: string,
+    requestId: string,
+    orchestration: OrchestrationContext,
+    preferences: UserPreferences,
+  ): Promise<AgentRunResult | null> {
+    if (!isPersonalMemoryListPrompt(userPrompt)) {
+      return null;
+    }
+
+    const execution = await this.executeToolDirect("list_personal_memory_items", {
+      limit: 12,
+    });
+    const rawResult = execution.rawResult as {
+      items?: PersonalOperationalMemoryItem[];
+      profile?: ReturnType<PersonalOperationalMemoryStore["getProfile"]>;
+    };
+
+    return {
+      requestId,
+      reply: buildPersonalMemoryListReply({
+        profile: rawResult.profile ?? this.personalMemory.getProfile(),
+        items: rawResult.items ?? [],
+      }),
+      messages: buildBaseMessages(userPrompt, orchestration, preferences),
+      toolExecutions: [
+        {
+          toolName: "list_personal_memory_items",
+          resultPreview: execution.content.slice(0, 240),
+        },
+      ],
+    };
+  }
+
+  private async tryRunDirectPersonalMemorySave(
+    userPrompt: string,
+    requestId: string,
+    orchestration: OrchestrationContext,
+    preferences: UserPreferences,
+  ): Promise<AgentRunResult | null> {
+    if (!isPersonalMemorySavePrompt(userPrompt)) {
+      return null;
+    }
+
+    const statement = extractPersonalMemoryStatement(userPrompt);
+    if (!statement) {
+      return {
+        requestId,
+        reply: "Diga o que devo salvar na memória pessoal. Exemplo: `salve na minha memória pessoal que em dias de plantão quero respostas curtas`.",
+        messages: buildBaseMessages(userPrompt, orchestration, preferences),
+        toolExecutions: [],
+      };
+    }
+
+    const kind = inferPersonalMemoryKind(statement);
+    const execution = await this.executeToolDirect("save_personal_memory_item", {
+      kind,
+      title: buildPersonalMemoryTitle(statement, kind),
+      content: statement,
+    });
+    const rawResult = execution.rawResult as { item?: PersonalOperationalMemoryItem };
+    const item = rawResult.item;
+    if (!item) {
+      return {
+        requestId,
+        reply: "Não consegui salvar esse item na memória pessoal.",
+        messages: buildBaseMessages(userPrompt, orchestration, preferences),
+        toolExecutions: [],
+      };
+    }
+
+    return {
+      requestId,
+      reply: buildPersonalMemorySavedReply(item),
+      messages: buildBaseMessages(userPrompt, orchestration, preferences),
+      toolExecutions: [
+        {
+          toolName: "save_personal_memory_item",
+          resultPreview: execution.content.slice(0, 240),
+        },
+      ],
+    };
+  }
+
+  private async tryRunDirectPersonalMemoryUpdate(
+    userPrompt: string,
+    requestId: string,
+    orchestration: OrchestrationContext,
+    preferences: UserPreferences,
+  ): Promise<AgentRunResult | null> {
+    if (!isPersonalMemoryUpdatePrompt(userPrompt)) {
+      return null;
+    }
+
+    const id = extractPersonalMemoryId(userPrompt);
+    const query = extractPersonalMemoryUpdateTarget(userPrompt);
+    const content = extractPersonalMemoryUpdateContent(userPrompt);
+    if (!id && !query) {
+      return {
+        requestId,
+        reply: "Diga qual item da memória pessoal devo atualizar, por id ou por referência curta. Exemplo: `atualize minha memória pessoal #3 para respostas muito curtas em plantão`.",
+        messages: buildBaseMessages(userPrompt, orchestration, preferences),
+        toolExecutions: [],
+      };
+    }
+
+    if (!content) {
+      return {
+        requestId,
+        reply: "Entendi o item alvo, mas faltou dizer o novo conteúdo. Exemplo: `atualize minha memória pessoal sobre rotina de plantão para respostas curtas e foco em deslocamento`.",
+        messages: buildBaseMessages(userPrompt, orchestration, preferences),
+        toolExecutions: [],
+      };
+    }
+
+    let targetId = id;
+    if (!targetId && query) {
+      const matches = this.personalMemory.findItems(query, 5);
+      if (matches.length === 0) {
+        return {
+          requestId,
+          reply: `Não encontrei item de memória pessoal para "${query}".`,
+          messages: buildBaseMessages(userPrompt, orchestration, preferences),
+          toolExecutions: [],
+        };
+      }
+      if (matches.length > 1) {
+        return {
+          requestId,
+          reply: buildPersonalMemoryAmbiguousReply(query, matches),
+          messages: buildBaseMessages(userPrompt, orchestration, preferences),
+          toolExecutions: [],
+        };
+      }
+      targetId = matches[0]?.id;
+    }
+
+    if (!targetId) {
+      return null;
+    }
+
+    const kind = inferPersonalMemoryKind(content);
+    const execution = await this.executeToolDirect("update_personal_memory_item", {
+      id: targetId,
+      kind,
+      title: buildPersonalMemoryTitle(content, kind),
+      content,
+    });
+    const rawResult = execution.rawResult as { item?: PersonalOperationalMemoryItem };
+    const item = rawResult.item;
+    if (!item) {
+      return {
+        requestId,
+        reply: "Não consegui atualizar esse item da memória pessoal.",
+        messages: buildBaseMessages(userPrompt, orchestration, preferences),
+        toolExecutions: [],
+      };
+    }
+
+    return {
+      requestId,
+      reply: buildPersonalMemoryUpdatedReply(item),
+      messages: buildBaseMessages(userPrompt, orchestration, preferences),
+      toolExecutions: [
+        {
+          toolName: "update_personal_memory_item",
+          resultPreview: execution.content.slice(0, 240),
+        },
+      ],
+    };
+  }
+
+  private async tryRunDirectPersonalMemoryDelete(
+    userPrompt: string,
+    requestId: string,
+    orchestration: OrchestrationContext,
+    preferences: UserPreferences,
+  ): Promise<AgentRunResult | null> {
+    if (!isPersonalMemoryDeletePrompt(userPrompt)) {
+      return null;
+    }
+
+    let targetId = extractPersonalMemoryId(userPrompt);
+    const query = extractPersonalMemoryDeleteTarget(userPrompt);
+
+    if (!targetId && !query) {
+      return {
+        requestId,
+        reply: "Diga qual item da memória pessoal devo remover, por id ou por referência curta. Exemplo: `remova da minha memória pessoal #4`.",
+        messages: buildBaseMessages(userPrompt, orchestration, preferences),
+        toolExecutions: [],
+      };
+    }
+
+    if (!targetId && query) {
+      const matches = this.personalMemory.findItems(query, 5);
+      if (matches.length === 0) {
+        return {
+          requestId,
+          reply: `Não encontrei item de memória pessoal para "${query}".`,
+          messages: buildBaseMessages(userPrompt, orchestration, preferences),
+          toolExecutions: [],
+        };
+      }
+      if (matches.length > 1) {
+        return {
+          requestId,
+          reply: buildPersonalMemoryAmbiguousReply(query, matches),
+          messages: buildBaseMessages(userPrompt, orchestration, preferences),
+          toolExecutions: [],
+        };
+      }
+      targetId = matches[0]?.id;
+    }
+
+    if (!targetId) {
+      return null;
+    }
+
+    const execution = await this.executeToolDirect("delete_personal_memory_item", {
+      id: targetId,
+    });
+    const rawResult = execution.rawResult as { item?: PersonalOperationalMemoryItem };
+    const item = rawResult.item;
+    if (!item) {
+      return {
+        requestId,
+        reply: "Não consegui remover esse item da memória pessoal.",
+        messages: buildBaseMessages(userPrompt, orchestration, preferences),
+        toolExecutions: [],
+      };
+    }
+
+    return {
+      requestId,
+      reply: buildPersonalMemoryDeletedReply(item),
+      messages: buildBaseMessages(userPrompt, orchestration, preferences),
+      toolExecutions: [
+        {
+          toolName: "delete_personal_memory_item",
+          resultPreview: execution.content.slice(0, 240),
+        },
+      ],
+    };
+  }
+
   private async tryRunDirectWorkflowPlanning(
     userPrompt: string,
     requestId: string,
@@ -14903,6 +15805,9 @@ export class AgentCore {
     if (weatherTip) {
       checklist.push(weatherTip);
     }
+    for (const mobilityAlert of brief.mobilityAlerts.filter((item) => item.startsWith("itens base:")).slice(0, 1)) {
+      checklist.push(mobilityAlert);
+    }
 
     const alerts: string[] = [];
     if (nextEvent.hasConflict) {
@@ -15125,6 +16030,7 @@ export class AgentCore {
       fileAccess: this.fileAccess,
       memory: this.memory,
       preferences: this.preferences,
+      personalMemory: this.personalMemory,
       growthOps: this.growthOps,
       contentOps: this.contentOps,
       socialAssistant: this.socialAssistant,

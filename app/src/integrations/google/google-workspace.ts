@@ -62,6 +62,8 @@ export interface DeletedGoogleTask {
   status: "deleted";
 }
 
+export interface UpdatedGoogleTask extends CreatedGoogleTask {}
+
 export interface CreatedCalendarEvent {
   id: string;
   status: string;
@@ -519,6 +521,47 @@ export class GoogleWorkspaceService {
       id: taskId,
       taskListId,
       status: "deleted",
+    };
+  }
+
+  async updateTask(input: {
+    taskId: string;
+    taskListId: string;
+    title?: string;
+    notes?: string;
+    due?: string | null;
+    status?: string;
+  }): Promise<UpdatedGoogleTask> {
+    const taskId = input.taskId.trim();
+    const taskListId = input.taskListId.trim();
+    if (!taskId || !taskListId) {
+      throw new Error("Task id and task list id are required.");
+    }
+
+    this.assertWriteReady();
+
+    const task = await this.fetchJson<GoogleTaskCreateResponse>(
+      `https://tasks.googleapis.com/tasks/v1/lists/${encodeURIComponent(taskListId)}/tasks/${encodeURIComponent(taskId)}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({
+          ...(typeof input.title === "string" ? { title: input.title } : {}),
+          ...(typeof input.notes === "string" ? { notes: input.notes } : {}),
+          ...(typeof input.due === "string" ? { due: input.due } : input.due === null ? { due: null } : {}),
+          ...(typeof input.status === "string" ? { status: input.status } : {}),
+        }),
+      },
+    );
+
+    return {
+      id: task.id ?? taskId,
+      title: task.title ?? input.title ?? "",
+      notes: task.notes ?? input.notes,
+      due: task.due ?? input.due ?? null,
+      status: task.status ?? input.status ?? "needsAction",
+      taskListId,
+      taskListTitle: taskListId,
+      updated: task.updated ?? null,
     };
   }
 

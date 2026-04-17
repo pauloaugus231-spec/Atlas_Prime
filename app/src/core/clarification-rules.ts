@@ -1,4 +1,5 @@
 import type { IntentResolution } from "./intent-router.js";
+import { isHighAutonomyReadPrompt, resolveActionAutonomyRule } from "./action-autonomy-policy.js";
 
 export interface ClarificationRuleProposal {
   objectiveSummary: string;
@@ -94,41 +95,12 @@ export function looksLikeLowFrictionReadPrompt(
     return false;
   }
 
-  const hasCalendarSignal = includesAny(normalized, ["agenda", "calendario", "calendário", "compromisso", "compromissos", "evento", "eventos"]);
-  const hasNextCommitmentSignal = includesAny(normalized, [
-    "proximos compromissos",
-    "próximos compromissos",
-    "proximo compromisso",
-    "próximo compromisso",
-  ]);
-  const hasBriefSignal = includesAny(normalized, [
-    "brief diario",
-    "brief diário",
-    "briefing da manha",
-    "briefing da manhã",
-    "resumo do dia",
-    "resumo da manha",
-    "resumo da manhã",
-  ]);
-  const hasWeatherSignal = includesAny(normalized, [
-    "clima",
-    "previsao do tempo",
-    "previsão do tempo",
-    "tempo hoje",
-    "tempo amanha",
-    "tempo amanhã",
-  ]);
-
-  if ((hasCalendarSignal && hasCalendarTimeScope(normalized)) || hasNextCommitmentSignal || hasBriefSignal || hasWeatherSignal) {
+  if (isHighAutonomyReadPrompt(prompt, intent)) {
     return true;
   }
 
-  if (!intent) {
-    return false;
-  }
-
-  return intent.orchestration.route.primaryDomain === "secretario_operacional"
-    && (hasCalendarSignal || hasBriefSignal || hasWeatherSignal);
+  const rule = resolveActionAutonomyRule(prompt, intent);
+  return rule.key === "operations.read.brief";
 }
 
 export function looksLikeCalendarDeletePrompt(prompt: string): boolean {

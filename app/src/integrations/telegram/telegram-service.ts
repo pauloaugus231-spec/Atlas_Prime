@@ -95,6 +95,13 @@ type PendingActionDraft =
   | PendingGoogleEventDeleteBatchDraft
   | PendingGoogleEventImportBatchDraft;
 
+interface OperationalModeState {
+  kind: "field";
+  reason: string;
+  activatedAt: number;
+  expiresAt: number;
+}
+
 type ScheduledEditorialSlotKey = "morning_finance" | "lunch_income" | "night_trends";
 
 interface DailyEditorialResearchPayload {
@@ -1564,7 +1571,12 @@ function buildGenericControlledActionFailureMessage(label: string, rawResult: un
   return [`Não foi possível concluir ${label} nesta tentativa.`, `Detalhe: ${message}`].join("\n");
 }
 
-function buildAgentPrompt(message: TelegramMessage, text: string, history: ChatTurn[]): string {
+function buildAgentPrompt(
+  message: TelegramMessage,
+  text: string,
+  history: ChatTurn[],
+  mode?: OperationalModeState | null,
+): string {
   const promptLines = [
     "Contexto do Telegram:",
     `chat_type=${message.chat.type}`,
@@ -1581,9 +1593,59 @@ function buildAgentPrompt(message: TelegramMessage, text: string, history: ChatT
     promptLines.push("");
   }
 
+  if (mode) {
+    promptLines.push("Modo operacional ativo:");
+    promptLines.push(`modo_operacional=${mode.kind}`);
+    promptLines.push(`motivo=${mode.reason}`);
+    promptLines.push("");
+  }
+
   promptLines.push("Mensagem atual do usuário:");
   promptLines.push(text);
   return promptLines.join("\n");
+}
+
+function extractOperationalModeIntent(text: string): { action: "activate" | "deactivate"; reason: string } | null {
+  const normalized = normalizeIntentText(text);
+  if (!normalized) {
+    return null;
+  }
+
+  if (includesAny(normalized, [
+    "sair do plantao",
+    "sair do plantão",
+    "encerrar plantao",
+    "encerrar plantão",
+    "modo normal",
+    "desativar modo rua",
+    "fim do plantao",
+    "fim do plantão",
+  ])) {
+    return {
+      action: "deactivate",
+      reason: "modo normal",
+    };
+  }
+
+  if (includesAny(normalized, [
+    "estou em plantao",
+    "estou em plantão",
+    "estou na rua",
+    "vou sair e so volto amanha",
+    "vou sair e só volto amanhã",
+    "vou direto do",
+    "estou em campo",
+    "modo rua",
+    "entrar em plantao",
+    "entrar em plantão",
+  ])) {
+    return {
+      action: "activate",
+      reason: text.trim(),
+    };
+  }
+
+  return null;
 }
 
 function buildPendingDraftAdjustmentPrompt(pendingDraft: PendingEmailDraft, userInstruction: string): string {
@@ -1605,6 +1667,7 @@ export class TelegramService {
   private readonly chatHistory = new Map<number, ChatTurn[]>();
   private readonly pendingActionDrafts = new Map<number, PendingActionDraft>();
   private readonly lastCalendarUndoActions = new Map<number, CalendarUndoAction>();
+  private readonly operationalModes = new Map<number, OperationalModeState>();
   private readonly audioTranscription?: OpenAiAudioTranscriptionService;
   private readonly scheduleImport?: OpenAiScheduleImportService;
   private readonly whatsapp: EvolutionApiClient;
@@ -1650,6 +1713,33 @@ export class TelegramService {
         this.logger.child({ scope: "schedule-import" }),
       );
     }
+  }
+
+  private getOperationalMode(chatId: number): OperationalModeState | null {
+    const mode = this.operationalModes.get(chatId);
+    if (!mode) {
+      return null;
+    }
+    if (mode.expiresAt <= Date.now()) {
+      this.operationalModes.delete(chatId);
+      return null;
+    }
+    return mode;
+  }
+
+  private activateOperationalMode(chatId: number, reason: string): OperationalModeState {
+    const mode: OperationalModeState = {
+      kind: "field",
+      reason: reason.trim() || "operação externa",
+      activatedAt: Date.now(),
+      expiresAt: Date.now() + this.config.telegram.operationalModeHours * 60 * 60 * 1000,
+    };
+    this.operationalModes.set(chatId, mode);
+    return mode;
+  }
+
+  private clearOperationalMode(chatId: number): void {
+    this.operationalModes.delete(chatId);
   }
 
   async start(signal: AbortSignal): Promise<void> {
@@ -2234,6 +2324,37 @@ export class TelegramService {
       return;
     }
 
+    const operationalModeIntent = extractOperationalModeIntent(normalizedText);
+    if (operationalModeIntent) {
+      if (operationalModeIntent.action === "deactivate") {
+        this.clearOperationalMode(message.chat.id);
+        await this.sendText(
+          message.chat.id,
+          "Modo operacional de rua desativado. Voltei ao comportamento normal neste chat.",
+          {
+            reply_to_message_id: message.message_id,
+            disable_web_page_preview: true,
+          },
+        );
+      } else {
+        const mode = this.activateOperationalMode(message.chat.id, operationalModeIntent.reason);
+        await this.sendText(
+          message.chat.id,
+          [
+            "Modo operacional de rua ativado.",
+            `- Duração padrão: ${this.config.telegram.operationalModeHours}h`,
+            "- Vou priorizar agenda, deslocamento, clima, itens e resposta curta neste chat.",
+            `- Contexto: ${mode.reason}`,
+          ].join("\n"),
+          {
+            reply_to_message_id: message.message_id,
+            disable_web_page_preview: true,
+          },
+        );
+      }
+      return;
+    }
+
     if (resolvedText && isManualVideoScriptRequest(resolvedText)) {
       await this.handleManualVideoScriptRequest(message, resolvedText);
       return;
@@ -2419,7 +2540,7 @@ export class TelegramService {
         chatId: message.chat.id,
         channel: "telegram",
         prompt: normalizedText,
-        intent: this.core.resolveIntent(buildAgentPrompt(message, normalizedText, history)),
+        intent: this.core.resolveIntent(buildAgentPrompt(message, normalizedText, history, this.getOperationalMode(message.chat.id))),
       });
       if (clarification) {
         const reply = this.clarificationEngine.buildQuestionMessage(clarification);
@@ -2449,10 +2570,10 @@ export class TelegramService {
         this.clearPendingActionDraft(message.chat.id);
       }
       const result = await this.core.runUserPrompt(
-        buildAgentPrompt(message, effectiveText, history),
+        buildAgentPrompt(message, effectiveText, history, this.getOperationalMode(message.chat.id)),
         { chatId: message.chat.id },
       );
-      const structuredDecisionReply = await this.resolveStructuredAssistantDecisionReply(result.reply);
+      const structuredDecisionReply = await this.resolveStructuredAssistantDecisionReply(result.reply, message.chat.id);
       if (structuredDecisionReply.handled) {
         this.appendChatTurn(message.chat.id, {
           role: "user",
@@ -2654,10 +2775,10 @@ export class TelegramService {
   ): Promise<void> {
     const history = this.getChatHistory(message.chat.id);
     const result = await this.core.runUserPrompt(
-      buildAgentPrompt(message, input.effectiveText, history),
+      buildAgentPrompt(message, input.effectiveText, history, this.getOperationalMode(message.chat.id)),
       { chatId: message.chat.id },
     );
-    const structuredDecisionReply = await this.resolveStructuredAssistantDecisionReply(result.reply);
+    const structuredDecisionReply = await this.resolveStructuredAssistantDecisionReply(result.reply, message.chat.id);
     if (structuredDecisionReply.handled) {
       this.appendChatTurn(message.chat.id, {
         role: "user",
@@ -3570,8 +3691,9 @@ export class TelegramService {
                 text: pendingDraft.replyText,
               }),
             }
-          : pendingDraft.kind === "google_task"
-            ? await this.core.executeToolDirect("create_google_task", {
+        : pendingDraft.kind === "google_task"
+            ? await this.core.executeToolDirect("execute_task_operation", {
+                action: "create",
                 title: pendingDraft.title,
                 ...(pendingDraft.notes ? { notes: pendingDraft.notes } : {}),
                 ...(pendingDraft.due ? { due: pendingDraft.due } : {}),
@@ -3579,7 +3701,8 @@ export class TelegramService {
                 ...(pendingDraft.account ? { account: pendingDraft.account } : {}),
               })
             : pendingDraft.kind === "google_event"
-              ? await this.core.executeToolDirect("create_calendar_event", {
+              ? await this.core.executeToolDirect("execute_calendar_operation", {
+                  action: "create",
                   summary: pendingDraft.summary,
                   start: pendingDraft.start,
                   end: pendingDraft.end,
@@ -3595,7 +3718,8 @@ export class TelegramService {
                   ...(pendingDraft.createMeet ? { create_meet: true } : {}),
                 })
               : pendingDraft.kind === "google_event_update"
-                ? await this.core.executeToolDirect("update_calendar_event", {
+                ? await this.core.executeToolDirect("execute_calendar_operation", {
+                    action: "update",
                     event_id: pendingDraft.eventId,
                     summary: pendingDraft.summary,
                     start: pendingDraft.start,
@@ -3612,7 +3736,8 @@ export class TelegramService {
                     ...(pendingDraft.createMeet ? { create_meet: true } : {}),
                   })
                 : pendingDraft.kind === "google_event_delete"
-                  ? await this.core.executeToolDirect("delete_calendar_event", {
+                  ? await this.core.executeToolDirect("execute_calendar_operation", {
+                      action: "delete",
                       event_id: pendingDraft.eventId,
                       ...(pendingDraft.calendarId ? { calendar_id: pendingDraft.calendarId } : {}),
                       ...(pendingDraft.account ? { account: pendingDraft.account } : {}),
@@ -3620,7 +3745,8 @@ export class TelegramService {
                   : pendingDraft.kind === "google_event_delete_batch"
                     ? await Promise.all(
                         pendingDraft.events.map((event) =>
-                          this.core.executeToolDirect("delete_calendar_event", {
+                          this.core.executeToolDirect("execute_calendar_operation", {
+                            action: "delete",
                             event_id: event.eventId,
                             ...(event.calendarId ? { calendar_id: event.calendarId } : {}),
                             ...(event.account ? { account: event.account } : {}),
@@ -3640,7 +3766,8 @@ export class TelegramService {
                         const failed: Array<Record<string, unknown>> = [];
 
                         for (const event of pendingDraft.events) {
-                          const result = await this.core.executeToolDirect("create_calendar_event", {
+                          const result = await this.core.executeToolDirect("execute_calendar_operation", {
+                            action: "create",
                             summary: event.summary,
                             start: event.start,
                             end: event.end,
@@ -3951,7 +4078,8 @@ export class TelegramService {
       let reply = "Última alteração de agenda desfeita com sucesso.";
 
       if (undoAction.kind === "create") {
-        await this.core.executeToolDirect("delete_calendar_event", {
+        await this.core.executeToolDirect("execute_calendar_operation", {
+          action: "delete",
           event_id: undoAction.eventId,
           ...(undoAction.calendarId ? { calendar_id: undoAction.calendarId } : {}),
           ...(undoAction.account ? { account: undoAction.account } : {}),
@@ -3962,7 +4090,8 @@ export class TelegramService {
       } else if (undoAction.kind === "create_batch") {
         await Promise.all(
           undoAction.events.map((event) =>
-            this.core.executeToolDirect("delete_calendar_event", {
+            this.core.executeToolDirect("execute_calendar_operation", {
+              action: "delete",
               event_id: event.eventId,
               ...(event.calendarId ? { calendar_id: event.calendarId } : {}),
               ...(event.account ? { account: event.account } : {}),
@@ -3971,7 +4100,8 @@ export class TelegramService {
         );
         reply = `Última importação de agenda desfeita. Total removido: ${undoAction.events.length}.`;
       } else if (undoAction.kind === "task_create") {
-        await this.core.executeToolDirect("delete_google_task", {
+        await this.core.executeToolDirect("execute_task_operation", {
+          action: "delete",
           task_id: undoAction.taskId,
           task_list_id: undoAction.taskListId,
           ...(undoAction.account ? { account: undoAction.account } : {}),
@@ -3980,7 +4110,8 @@ export class TelegramService {
           ? `Última tarefa desfeita: ${undoAction.title}.`
           : "Última criação de tarefa foi desfeita.";
       } else if (undoAction.kind === "update") {
-        await this.core.executeToolDirect("update_calendar_event", {
+        await this.core.executeToolDirect("execute_calendar_operation", {
+          action: "update",
           event_id: undoAction.eventId,
           summary: undoAction.previous.summary,
           ...(undoAction.previous.description ? { description: undoAction.previous.description } : {}),
@@ -3996,7 +4127,8 @@ export class TelegramService {
         });
         reply = `Última alteração de agenda desfeita: ${undoAction.previous.summary}.`;
       } else if (undoAction.kind === "delete") {
-        await this.core.executeToolDirect("create_calendar_event", {
+        await this.core.executeToolDirect("execute_calendar_operation", {
+          action: "create",
           summary: undoAction.restoreDraft.summary,
           start: undoAction.restoreDraft.start,
           end: undoAction.restoreDraft.end,
@@ -4013,7 +4145,8 @@ export class TelegramService {
       } else {
         await Promise.all(
           undoAction.restoreDrafts.map((draft) =>
-            this.core.executeToolDirect("create_calendar_event", {
+            this.core.executeToolDirect("execute_calendar_operation", {
+              action: "create",
               summary: draft.summary,
               start: draft.start,
               end: draft.end,
@@ -4142,7 +4275,7 @@ export class TelegramService {
     return draft;
   }
 
-  private async resolveStructuredAssistantDecisionReply(rawReply: string): Promise<{
+  private async resolveStructuredAssistantDecisionReply(rawReply: string, chatId?: number): Promise<{
     handled: boolean;
     visibleReply: string;
   }> {
@@ -4176,9 +4309,36 @@ export class TelegramService {
     }
 
     try {
+      const resolvedPayload = parsed.decision.execution.tool === "execute_task_operation"
+        ? await this.core.resolveStructuredTaskOperationPayload(parsed.decision.execution.payload, {
+            recentMessages: chatId !== undefined
+              ? this.getChatHistory(chatId).map((turn) => turn.text).slice(-6)
+              : [],
+          })
+        : null;
+
+      if (resolvedPayload?.kind === "clarify") {
+        return {
+          handled: true,
+          visibleReply: resolvedPayload.message,
+        };
+      }
+
+      if (resolvedPayload?.kind === "invalid") {
+        return {
+          handled: true,
+          visibleReply: [
+            "Não consegui executar a decisão estruturada local.",
+            `Detalhe: ${resolvedPayload.error}`,
+          ].join("\n"),
+        };
+      }
+
       const execution = await this.core.executeToolDirect(
         parsed.decision.execution.tool,
-        parsed.decision.execution.payload,
+        resolvedPayload?.kind === "resolved"
+          ? resolvedPayload.payload
+          : parsed.decision.execution.payload,
       );
       const rawResult = execution.rawResult && typeof execution.rawResult === "object"
         ? execution.rawResult as Record<string, unknown>
@@ -4187,7 +4347,7 @@ export class TelegramService {
         return {
           handled: true,
           visibleReply: [
-            "Não consegui executar a decisão estruturada de calendário.",
+            "Não consegui executar a decisão estruturada local.",
             `Detalhe: ${typeof rawResult.error === "string" ? rawResult.error : "Falha na execução local."}`,
           ].join("\n"),
         };
@@ -4204,7 +4364,7 @@ export class TelegramService {
       return {
         handled: true,
         visibleReply: [
-          "Não consegui executar a decisão estruturada de calendário.",
+          "Não consegui executar a decisão estruturada local.",
           `Detalhe: ${error instanceof Error ? error.message : String(error)}`,
         ].join("\n"),
       };

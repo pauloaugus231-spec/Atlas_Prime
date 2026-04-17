@@ -108,6 +108,12 @@ export class ContextPackService {
       if (brief.weather?.days[0]?.tip) {
         signals.push(`clima: ${brief.weather.days[0].tip}`);
       }
+      if (brief.personalFocus[0]) {
+        signals.push(`foco salvo: ${brief.personalFocus[0]}`);
+      }
+      if (brief.mobilityAlerts[0]) {
+        signals.push(`deslocamento: ${brief.mobilityAlerts[0]}`);
+      }
       const operationalMemory = this.contextMemory.summarize("operational", 3);
       signals.push(...operationalMemory.signals);
 

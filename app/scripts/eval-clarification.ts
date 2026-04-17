@@ -4,6 +4,7 @@ import {
   buildClarificationRuleProposal,
   buildClarifiedExecutionPrompt,
   looksLikeCalendarDeletePrompt,
+  looksLikeLowFrictionReadPrompt,
 } from "../src/core/clarification-rules.js";
 
 interface EvalResult {
@@ -84,6 +85,28 @@ function run() {
       && supportProposal.questions[0]?.includes("prepare respostas"),
     ),
     detail: JSON.stringify(supportProposal, null, 2),
+  });
+
+  const agendaIntent = router.resolve("qual minha agenda para amanhã?");
+  results.push({
+    name: "simple_read_uses_low_friction_policy",
+    passed: looksLikeLowFrictionReadPrompt("qual minha agenda para amanhã?", agendaIntent),
+    detail: JSON.stringify(agendaIntent, null, 2),
+  });
+
+  const bothExecutionPrompt = buildClarifiedExecutionPrompt(
+    "qual minha agenda para amanhã?",
+    "ambos",
+    agendaIntent,
+  );
+  results.push({
+    name: "simple_read_answer_keeps_direct_execution",
+    passed: Boolean(
+      bothExecutionPrompt
+      && bothExecutionPrompt.includes("qual minha agenda para amanhã?")
+      && bothExecutionPrompt.includes("ambos"),
+    ),
+    detail: bothExecutionPrompt ?? "(vazio)",
   });
 
   const deleteExecutionPrompt = buildClarifiedExecutionPrompt(

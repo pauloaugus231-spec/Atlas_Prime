@@ -89,7 +89,7 @@ async function resolveStructuredDecisionForEval(
     return {
       handled: true,
       visibleReply: [
-        "Não consegui executar a decisão estruturada de calendário.",
+        "Não consegui executar a decisão estruturada local.",
         `Detalhe: ${typeof rawResult.error === "string" ? rawResult.error : "Falha na execução local."}`,
       ].join("\n"),
       executionCalls,

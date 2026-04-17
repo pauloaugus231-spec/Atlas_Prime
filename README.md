@@ -17,7 +17,7 @@ As fases entregues até agora incluem:
 - escrita segura de arquivos no workspace
 - integracao de email com leitura IMAP, triagem operacional e envio SMTP controlado
 - orquestrador inicial de domínios com policy engine por risco e autonomia
-- pacote inicial de secretario operacional com Google Calendar, Tasks e Contacts em modo leitura
+- pacote inicial de secretario operacional com Google Calendar, Tasks e Contacts em leitura e escrita controlada
 - workspace isolado
 - leitura apenas de diretorios autorizados
 - plugins de base, growth e email com confirmacao explicita de envio
@@ -480,9 +480,14 @@ Estado atual:
 - leitura e organizacao: implementadas
 - consultas simples de leitura usam defaults inteligentes e execucao direta quando o contexto ja basta; em agenda, o padrao e responder em modo resumo
 - escrita controlada de eventos no Google Calendar: implementada, dependendo de write scopes concedidos no OAuth
-- escrita de tarefas: implementada, dependendo de write scopes concedidos no OAuth
-- uso recomendado: consultas simples leem direto; criar, atualizar e excluir continuam com confirmacao explicita
-- provider externo opcional de raciocinio: pode devolver texto normal ou `assistant_decision`, mas o Atlas continua como executor local controlado e cai em fallback local se o provider falhar
+- escrita controlada de tarefas Google: implementada com executor unificado, dependendo de write scopes concedidos no OAuth
+- uso recomendado: consultas simples leem direto; criar e atualizar usam confirmacao curta; excluir continua com confirmacao forte
+- o brief diario agora combina agenda, tarefas, foco salvo, clima, deslocamento, recomendacao pratica e sinal de sobrecarga
+- existe politica explicita de autonomia por intencao: leituras simples rodam direto; escrita e acoes destrutivas continuam confirmadas
+- o Telegram suporta modo operacional de rua/plantao por chat, para respostas mais objetivas e orientadas a deslocamento
+- o Atlas consegue revisar conflitos, duplicidades e nomes inconsistentes na agenda sem alterar nada sozinho
+- a memoria pessoal operacional agora fica separada da memoria operacional geral para guardar foco salvo, rotina e regras praticas; ela tambem pode ser gerida explicitamente pelo Telegram
+- provider externo opcional de raciocinio: pode devolver texto normal ou `assistant_decision`, e o Atlas executa localmente operacoes estruturadas de calendario e tasks sob whitelist controlada; para Tasks, ele tambem completa referencias locais com alta confianca e pede clarificacao curta quando houver ambiguidade; se o provider falhar, cai em fallback local
 
 Plugins novos:
 
@@ -495,6 +500,10 @@ Plugins novos:
 - `update_calendar_event`
 - `delete_calendar_event`
 - `execute_calendar_operation`
+- `create_google_task`
+- `update_google_task`
+- `delete_google_task`
+- `execute_task_operation`
 
 Como configurar:
 
@@ -555,12 +564,13 @@ Procure o contato Maria Silva.
 
 Comportamento:
 
-- o `brief diário` cruza agenda, tarefas e foco salvo na memória operacional
+- o `brief diário` cruza agenda, tarefas, foco salvo, clima, deslocamento e alertas de conflito
 - a integração pode operar em modo leitura ou escrita, conforme os scopes concedidos no OAuth
 - no Telegram, uma camada externa de raciocínio pode devolver `assistant_decision` em JSON
-- o Atlas valida esse formato localmente e, por enquanto, só aceita execução estruturada com `execute_calendar_operation`
+- o Atlas valida esse formato localmente e, por enquanto, só aceita execução estruturada com `execute_calendar_operation` e `execute_task_operation`
 - se `should_execute=false`, o Atlas responde apenas com `assistant_reply`
 - se `should_execute=true`, o Atlas executa localmente de forma controlada e só depois responde ao usuário
+- para Tasks, o provider externo recebe contexto enxuto de listas e tarefas recentes; se faltar `task_list_id` ou a referencia vier parcial, o Atlas tenta completar localmente com alta confianca antes de executar
 
 ## CRM local e placar de receita
 

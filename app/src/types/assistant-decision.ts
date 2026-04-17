@@ -2,6 +2,9 @@ export type AssistantDecisionIntent =
   | "calendar_create"
   | "calendar_update"
   | "calendar_delete"
+  | "task_create"
+  | "task_update"
+  | "task_delete"
   | "planning"
   | "other";
 

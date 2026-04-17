@@ -87,6 +87,79 @@
     }
   },
   {
+    "name": "assistant_decision_task_create_executes_locally",
+    "rawReply": {
+      "type": "assistant_decision",
+      "intent": "task_create",
+      "should_execute": true,
+      "assistant_reply": "Tarefa criada.",
+      "execution": {
+        "tool": "execute_task_operation",
+        "payload": {
+          "action": "create",
+          "title": "Revisar agenda",
+          "notes": "Priorizar compromissos da manhã"
+        }
+      }
+    },
+    "expect": {
+      "handled": true,
+      "executionCalls": 1,
+      "tool": "execute_task_operation",
+      "action": "create",
+      "visibleReplyIncludes": "Tarefa criada."
+    }
+  },
+  {
+    "name": "assistant_decision_task_update_executes_locally",
+    "rawReply": {
+      "type": "assistant_decision",
+      "intent": "task_update",
+      "should_execute": true,
+      "assistant_reply": "Tarefa atualizada.",
+      "execution": {
+        "tool": "execute_task_operation",
+        "payload": {
+          "action": "update",
+          "task_id": "task_123",
+          "task_list_id": "default",
+          "status": "completed"
+        }
+      }
+    },
+    "expect": {
+      "handled": true,
+      "executionCalls": 1,
+      "tool": "execute_task_operation",
+      "action": "update",
+      "visibleReplyIncludes": "Tarefa atualizada."
+    }
+  },
+  {
+    "name": "assistant_decision_task_delete_executes_locally",
+    "rawReply": {
+      "type": "assistant_decision",
+      "intent": "task_delete",
+      "should_execute": true,
+      "assistant_reply": "Tarefa removida.",
+      "execution": {
+        "tool": "execute_task_operation",
+        "payload": {
+          "action": "delete",
+          "task_id": "task_456",
+          "task_list_id": "default"
+        }
+      }
+    },
+    "expect": {
+      "handled": true,
+      "executionCalls": 1,
+      "tool": "execute_task_operation",
+      "action": "delete",
+      "visibleReplyIncludes": "Tarefa removida."
+    }
+  },
+  {
     "name": "assistant_decision_rejects_invalid_tool",
     "rawReply": {
       "type": "assistant_decision",
@@ -207,6 +280,69 @@
       "handled": true,
       "executionCalls": 0,
       "visibleReplyIncludes": "Delete operations require event_id"
+    }
+  },
+  {
+    "name": "assistant_decision_rejects_invalid_task_create_semantics",
+    "rawReply": {
+      "type": "assistant_decision",
+      "intent": "task_create",
+      "should_execute": true,
+      "assistant_reply": "Criar sem título.",
+      "execution": {
+        "tool": "execute_task_operation",
+        "payload": {
+          "action": "create"
+        }
+      }
+    },
+    "expect": {
+      "handled": true,
+      "executionCalls": 0,
+      "visibleReplyIncludes": "Task create operations require title"
+    }
+  },
+  {
+    "name": "assistant_decision_rejects_invalid_task_update_semantics",
+    "rawReply": {
+      "type": "assistant_decision",
+      "intent": "task_update",
+      "should_execute": true,
+      "assistant_reply": "Atualizar task sem campo útil.",
+      "execution": {
+        "tool": "execute_task_operation",
+        "payload": {
+          "action": "update",
+          "task_id": "task_789",
+          "task_list_id": "default"
+        }
+      }
+    },
+    "expect": {
+      "handled": true,
+      "executionCalls": 0,
+      "visibleReplyIncludes": "Task update operations require at least one field to change"
+    }
+  },
+  {
+    "name": "assistant_decision_rejects_invalid_task_delete_semantics",
+    "rawReply": {
+      "type": "assistant_decision",
+      "intent": "task_delete",
+      "should_execute": true,
+      "assistant_reply": "Excluir task sem task_id.",
+      "execution": {
+        "tool": "execute_task_operation",
+        "payload": {
+          "action": "delete",
+          "task_list_id": "default"
+        }
+      }
+    },
+    "expect": {
+      "handled": true,
+      "executionCalls": 0,
+      "visibleReplyIncludes": "Task delete operations require task_id"
     }
   }
 ]

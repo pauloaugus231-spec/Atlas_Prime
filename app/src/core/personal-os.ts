@@ -6,12 +6,15 @@ import type { FounderOpsService, FounderOpsSnapshot } from "./founder-ops.js";
 import type { ContextMemoryService, ScopedMemorySummary } from "./context-memory.js";
 import type { MemoryEntityStore } from "./memory-entity-store.js";
 import type { OperationalMemoryStore } from "./operational-memory.js";
+import type { PersonalOperationalMemoryStore } from "./personal-operational-memory.js";
 import { WeatherService, type WeatherForecastResult } from "./weather-service.js";
 import type { WorkflowOrchestratorStore } from "./workflow-orchestrator.js";
+import { analyzeCalendarInsights } from "./calendar-insights.js";
 import type { Logger } from "../types/logger.js";
 import type { ApprovalInboxItemRecord } from "../types/approval-inbox.js";
 import type { BriefingConfig } from "../types/config.js";
 import type { MemoryEntityKind } from "../types/memory-entities.js";
+import type { PersonalOperationalProfile } from "../types/personal-operational-memory.js";
 import type { TaskSummary } from "../integrations/google/google-workspace.js";
 import type { EmailAccountsService } from "../integrations/email/email-accounts.js";
 import type { GoogleWorkspaceAccountsService } from "../integrations/google/google-workspace-accounts.js";
@@ -93,6 +96,15 @@ export interface ExecutiveMorningBrief {
   };
   founderSnapshot: FounderOpsSnapshot;
   nextAction?: string;
+  personalFocus: string[];
+  overloadLevel: "leve" | "moderado" | "pesado";
+  mobilityAlerts: string[];
+  conflictSummary: {
+    overlaps: number;
+    duplicates: number;
+    naming: number;
+  };
+  dayRecommendation?: string;
   weather?: {
     locationLabel: string;
     current?: {
@@ -294,28 +306,32 @@ function buildWeatherTip(day: {
   minTempC?: number;
   maxTempC?: number;
   precipitationProbabilityMax?: number;
-}): string {
+}, profile: PersonalOperationalProfile): string {
   const rainChance = day.precipitationProbabilityMax ?? 0;
   const maxTemp = day.maxTempC ?? 0;
   const minTemp = day.minTempC ?? 0;
   const normalizedDescription = normalizeEmailAnalysisText(day.description);
   let clothingTip = "roupa confortável";
-  if (minTemp <= 12 || maxTemp <= 18) {
+  if (minTemp <= Math.max(12, profile.attire.coldTemperatureC - 4) || maxTemp <= profile.attire.coldTemperatureC) {
     clothingTip = "agasalho";
   } else if (minTemp <= 16) {
     clothingTip = "camada leve cedo";
   } else if (minTemp <= 20 && maxTemp <= 25) {
     clothingTip = "roupa leve com camada fina";
-  } else if (maxTemp >= 29) {
+  } else if (maxTemp >= profile.attire.lightClothingTemperatureC + 5) {
     clothingTip = "roupa bem leve";
-  } else if (maxTemp >= 24) {
+  } else if (maxTemp >= profile.attire.lightClothingTemperatureC) {
     clothingTip = "roupa leve ou fresca";
   }
 
   let carryTip = "sem necessidade de guarda-chuva";
-  if (rainChance >= 50 || normalizedDescription.includes("chuva") || normalizedDescription.includes("trovoada")) {
+  if (
+    rainChance >= Math.max(50, profile.attire.umbrellaProbabilityThreshold)
+    || normalizedDescription.includes("chuva")
+    || normalizedDescription.includes("trovoada")
+  ) {
     carryTip = "leve guarda-chuva";
-  } else if (rainChance >= 30) {
+  } else if (rainChance >= Math.max(30, profile.attire.umbrellaProbabilityThreshold - 10)) {
     carryTip = "guarda-chuva por precaução";
   }
 
@@ -330,7 +346,10 @@ function buildWeatherTip(day: {
   return [`vestir: ${clothingTip}`, `levar: ${carryTip}`, ...extras].join(" | ");
 }
 
-function buildBriefWeather(forecast: WeatherForecastResult | null | undefined): ExecutiveMorningBrief["weather"] | undefined {
+function buildBriefWeather(
+  forecast: WeatherForecastResult | null | undefined,
+  profile: PersonalOperationalProfile,
+): ExecutiveMorningBrief["weather"] | undefined {
   if (!forecast || forecast.daily.length === 0) {
     return undefined;
   }
@@ -341,7 +360,7 @@ function buildBriefWeather(forecast: WeatherForecastResult | null | undefined): 
     minTempC: day.minTempC,
     maxTempC: day.maxTempC,
     precipitationProbabilityMax: day.precipitationProbabilityMax,
-    tip: buildWeatherTip(day),
+    tip: buildWeatherTip(day, profile),
   }));
 
   return {
@@ -613,6 +632,90 @@ function pickDailyMotivation(timezone: string): { text: string; author?: string 
   return catalog[hashText(key) % catalog.length];
 }
 
+function summarizeConflictInsights(events: ExecutiveBriefEvent[], timezone: string): ExecutiveMorningBrief["conflictSummary"] {
+  const insights = analyzeCalendarInsights(
+    events.map((event) => ({
+      account: event.account,
+      summary: event.summary,
+      start: event.start,
+      end: event.end ?? null,
+      location: event.location,
+      owner: event.owner,
+    })),
+    timezone,
+  );
+
+  return {
+    overlaps: insights.filter((item) => item.kind === "overlap").length,
+    duplicates: insights.filter((item) => item.kind === "duplicate").length,
+    naming: insights.filter((item) => item.kind === "inconsistent_name").length,
+  };
+}
+
+function buildMobilityAlerts(input: {
+  events: ExecutiveBriefEvent[];
+  weather: ExecutiveMorningBrief["weather"];
+  profile: PersonalOperationalProfile;
+}): string[] {
+  const alerts: string[] = [];
+  const nextExternal = input.events.find((event) => event.owner === "paulo" && event.context === "externo");
+  if (nextExternal) {
+    alerts.push(`saída externa: ${nextExternal.summary}${nextExternal.location ? ` | local: ${nextExternal.location}` : ""}`);
+    if (!nextExternal.location) {
+      alerts.push("compromisso externo sem local claro");
+    }
+  }
+
+  const todayWeather = input.weather?.days[0];
+  if (todayWeather) {
+    alerts.push(todayWeather.tip);
+  }
+
+  if (input.profile.attire.carryItems.length > 0) {
+    alerts.push(`itens base: ${input.profile.attire.carryItems.slice(0, 3).join(", ")}`);
+  }
+
+  return alerts.slice(0, 4);
+}
+
+function classifyOverloadLevel(input: {
+  events: ExecutiveBriefEvent[];
+  taskBuckets: ExecutiveBriefTaskBuckets;
+  conflicts: ExecutiveMorningBrief["conflictSummary"];
+}): ExecutiveMorningBrief["overloadLevel"] {
+  const score =
+    input.events.length
+    + input.taskBuckets.actionableCount
+    + input.conflicts.overlaps * 2
+    + input.conflicts.duplicates;
+
+  if (score >= 8) {
+    return "pesado";
+  }
+  if (score >= 4) {
+    return "moderado";
+  }
+  return "leve";
+}
+
+function chooseDayRecommendation(input: {
+  nextAction?: string;
+  overloadLevel: ExecutiveMorningBrief["overloadLevel"];
+  mobilityAlerts: string[];
+  conflicts: ExecutiveMorningBrief["conflictSummary"];
+}): string | undefined {
+  if (input.conflicts.overlaps > 0) {
+    return "trave primeiro os conflitos da agenda antes de assumir qualquer nova frente";
+  }
+  if (input.mobilityAlerts[0]) {
+    return `prepare a rua cedo: ${input.mobilityAlerts[0]}`;
+  }
+  if (input.overloadLevel === "pesado") {
+    return "mantenha resposta curta, preserve deslocamento e evite abrir novas pendências";
+  }
+  return input.nextAction;
+}
+
 export class PersonalOSService {
   private readonly weather: WeatherService;
 
@@ -629,6 +732,7 @@ export class PersonalOSService {
     private readonly memory: OperationalMemoryStore,
     private readonly memoryEntities: MemoryEntityStore,
     private readonly contextMemory: ContextMemoryService,
+    private readonly personalMemory: PersonalOperationalMemoryStore,
   ) {
     this.weather = new WeatherService(this.logger.child({ scope: "weather" }));
   }
@@ -825,6 +929,7 @@ export class PersonalOSService {
     const founderSnapshot = this.founderOps.getDailySnapshot();
     const motivation = pickDailyMotivation(this.timezone);
     const operationalMemory = this.contextMemory.summarize("operational", 4);
+    const profile = this.personalMemory.getProfile();
     const weatherForecast = this.briefingConfig.weatherEnabled
       ? await this.weather.getForecast({
           location: this.briefingConfig.weatherLocation,
@@ -838,7 +943,14 @@ export class PersonalOSService {
           return null;
         })
       : null;
-    const weather = buildBriefWeather(weatherForecast);
+    const weather = buildBriefWeather(weatherForecast, profile);
+    const conflictSummary = summarizeConflictInsights(annotatedEvents, this.timezone);
+    const personalFocus = profile.savedFocus.slice(0, 3);
+    const mobilityAlerts = buildMobilityAlerts({
+      events: annotatedEvents,
+      weather,
+      profile,
+    });
     const nextAction = chooseNextAction({
       timezone: this.timezone,
       events: annotatedEvents,
@@ -849,6 +961,17 @@ export class PersonalOSService {
       focus,
       memoryEntities,
       operationalMemory,
+    });
+    const overloadLevel = classifyOverloadLevel({
+      events: annotatedEvents,
+      taskBuckets,
+      conflicts: conflictSummary,
+    });
+    const dayRecommendation = chooseDayRecommendation({
+      nextAction,
+      overloadLevel,
+      mobilityAlerts,
+      conflicts: conflictSummary,
     });
 
     this.logger.debug("Built executive morning brief snapshot", {
@@ -872,6 +995,11 @@ export class PersonalOSService {
       founderSnapshot,
       weather,
       nextAction,
+      personalFocus,
+      overloadLevel,
+      mobilityAlerts,
+      conflictSummary,
+      dayRecommendation,
     };
   }
 }

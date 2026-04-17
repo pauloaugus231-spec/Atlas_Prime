@@ -49,6 +49,16 @@ export default defineToolPlugin<CreateGoogleTaskParameters>({
         ok: false,
         account,
         status,
+        error: "Google workspace is not ready.",
+      };
+    }
+
+    if (!status.writeReady) {
+      return {
+        ok: false,
+        account,
+        status,
+        error: "Google workspace is authenticated but missing write scopes.",
       };
     }
 
