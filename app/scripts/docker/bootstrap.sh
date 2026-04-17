@@ -7,7 +7,14 @@ PLUGINS_DIR="${PLUGINS_DIR:-/plugins}"
 LOGS_DIR="${LOGS_DIR:-/logs}"
 AUTHORIZED_PROJECTS_DIR="${AUTHORIZED_PROJECTS_DIR:-/authorized-projects}"
 BOOTSTRAP_STRICT_OLLAMA="${BOOTSTRAP_STRICT_OLLAMA:-true}"
-LLM_PROVIDER="${LLM_PROVIDER:-ollama}"
+LLM_PROVIDER="${LLM_PROVIDER:-}"
+if [ -z "$LLM_PROVIDER" ]; then
+  if [ -n "${OPENAI_API_KEY:-}" ]; then
+    LLM_PROVIDER="openai"
+  else
+    LLM_PROVIDER="ollama"
+  fi
+fi
 
 log() {
   printf '[bootstrap] %s\n' "$*"
