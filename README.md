@@ -479,6 +479,7 @@ Estado atual:
 
 - leitura e organizacao: implementadas
 - consultas simples de leitura usam defaults inteligentes e execucao direta quando o contexto ja basta; em agenda, o padrao e responder em modo resumo
+- quando o Atlas apresenta opcoes numeradas no Telegram, respostas curtas como `1`, `3`, `ok` ou `cancelar` continuam o fluxo pendente em vez de reiniciar uma clarificacao generica
 - escrita controlada de eventos no Google Calendar: implementada, dependendo de write scopes concedidos no OAuth
 - escrita controlada de tarefas Google: implementada com executor unificado, dependendo de write scopes concedidos no OAuth
 - uso recomendado: consultas simples leem direto; criar e atualizar usam confirmacao curta; excluir continua com confirmacao forte

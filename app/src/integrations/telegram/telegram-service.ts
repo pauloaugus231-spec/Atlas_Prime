@@ -31,6 +31,12 @@ import { ShortVideoRenderService } from "../media/short-video-renderer.js";
 import { OpenAiAudioTranscriptionService } from "../openai/audio-transcription.js";
 import { OpenAiScheduleImportService } from "../openai/schedule-import.js";
 import { YouTubePublisherService } from "../youtube/youtube-publisher.js";
+import {
+  buildPendingChoiceContinuationPrompt,
+  extractPendingChoiceState,
+  resolvePendingChoiceReply,
+  type PendingChoiceState,
+} from "./pending-choice.js";
 import type { ApprovalEngine } from "../../core/approval-engine.js";
 import type { ClarificationEngine } from "../../core/clarification-engine.js";
 import type { WhatsAppMessageStore } from "../../core/whatsapp-message-store.js";
@@ -48,6 +54,7 @@ import type {
 
 const MAX_CHAT_HISTORY_TURNS = 6;
 const RECENT_PENDING_CONFIRMATION_WINDOW_MS = 30 * 60 * 1000;
+const PENDING_CHOICE_WINDOW_MS = 30 * 60 * 1000;
 
 interface ChatTurn {
   role: "user" | "assistant";
@@ -1666,6 +1673,7 @@ export class TelegramService {
   private readonly hasAllowlist: boolean;
   private readonly chatHistory = new Map<number, ChatTurn[]>();
   private readonly pendingActionDrafts = new Map<number, PendingActionDraft>();
+  private readonly pendingChoiceStates = new Map<number, PendingChoiceState>();
   private readonly lastCalendarUndoActions = new Map<number, CalendarUndoAction>();
   private readonly operationalModes = new Map<number, OperationalModeState>();
   private readonly audioTranscription?: OpenAiAudioTranscriptionService;
@@ -2232,6 +2240,7 @@ export class TelegramService {
 
     if (text === "/start") {
       this.clearChatHistory(message.chat.id);
+      this.clearPendingChoiceState(message.chat.id);
       await this.sendText(message.chat.id, buildWelcomeMessage(bot, userId, userAllowed), {
         reply_to_message_id: message.message_id,
       });
@@ -2251,6 +2260,7 @@ export class TelegramService {
 
     if (text === "/reset") {
       this.clearChatHistory(message.chat.id);
+      this.clearPendingChoiceState(message.chat.id);
       await this.sendText(message.chat.id, "Histórico curto deste chat foi limpo.", {
         reply_to_message_id: message.message_id,
       });
@@ -2535,6 +2545,11 @@ export class TelegramService {
         return;
       }
 
+      const pendingChoiceHandled = await this.handlePendingChoice(message, normalizedText);
+      if (pendingChoiceHandled) {
+        return;
+      }
+
       const history = this.getChatHistory(message.chat.id);
       const clarification = await this.clarificationEngine.maybeRequest({
         chatId: message.chat.id,
@@ -2763,6 +2778,61 @@ export class TelegramService {
     }
 
     return false;
+  }
+
+  private async handlePendingChoice(message: TelegramMessage, normalizedText: string): Promise<boolean> {
+    if (this.clarificationEngine.getLatestPending(message.chat.id)) {
+      return false;
+    }
+
+    const pending = this.getPendingChoiceState(message.chat.id);
+    if (!pending) {
+      return false;
+    }
+
+    if (isClearlyNewTopLevelIntent(normalizedText)) {
+      this.clearPendingChoiceState(message.chat.id);
+      return false;
+    }
+
+    const resolution = resolvePendingChoiceReply(pending, normalizedText);
+    if (resolution.kind === "no_match") {
+      if (normalizedText.length > 24 || normalizedText.split(/\s+/).length > 4) {
+        this.clearPendingChoiceState(message.chat.id);
+      }
+      return false;
+    }
+
+    if (resolution.kind === "cancel" || resolution.kind === "clarify") {
+      if (resolution.kind === "cancel") {
+        this.clearPendingChoiceState(message.chat.id);
+      }
+      this.appendChatTurn(message.chat.id, {
+        role: "user",
+        text: normalizedText,
+      });
+      this.appendChatTurn(message.chat.id, {
+        role: "assistant",
+        text: resolution.message,
+      });
+      await this.sendText(message.chat.id, resolution.message, {
+        reply_to_message_id: message.message_id,
+        disable_web_page_preview: true,
+      });
+      return true;
+    }
+
+    this.clearPendingChoiceState(message.chat.id);
+    await this.executeClarifiedPrompt(message, {
+      effectiveText: buildPendingChoiceContinuationPrompt({
+        state: pending,
+        option: resolution.option,
+        userReply: normalizedText,
+      }),
+      replyToMessageId: message.message_id,
+      userHistoryText: `${normalizedText} [escolha pendente: ${resolution.option.index}]`,
+    });
+    return true;
   }
 
   private async executeClarifiedPrompt(
@@ -4209,6 +4279,24 @@ export class TelegramService {
     this.chatHistory.delete(chatId);
   }
 
+  private getPendingChoiceState(chatId: number): PendingChoiceState | undefined {
+    const pending = this.pendingChoiceStates.get(chatId);
+    if (!pending) {
+      return undefined;
+    }
+
+    if (Date.now() - pending.createdAt > PENDING_CHOICE_WINDOW_MS) {
+      this.pendingChoiceStates.delete(chatId);
+      return undefined;
+    }
+
+    return pending;
+  }
+
+  private clearPendingChoiceState(chatId: number): void {
+    this.pendingChoiceStates.delete(chatId);
+  }
+
   private clearPendingActionDraft(chatId: number, status?: "discarded" | "executed" | "superseded"): void {
     this.pendingActionDrafts.delete(chatId);
     if (status) {
@@ -4401,6 +4489,15 @@ export class TelegramService {
         reply_to_message_id: index === 0 ? options.reply_to_message_id : undefined,
         disable_web_page_preview: options.disable_web_page_preview,
         reply_markup: index === 0 ? options.reply_markup : undefined,
+      });
+    }
+
+    const pendingChoice = extractPendingChoiceState(text);
+    if (pendingChoice) {
+      this.pendingChoiceStates.set(chatId, pendingChoice);
+      this.logger.info("Registered pending choice state from assistant reply", {
+        chatId,
+        options: pendingChoice.options.map((option) => option.index),
       });
     }
   }

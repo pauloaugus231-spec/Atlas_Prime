@@ -15,6 +15,7 @@
     "eval:agenda-drafts": "tsx scripts/eval-agenda-drafts.ts",
     "eval:responses": "tsx scripts/eval-response-os.ts",
     "eval:assistant-decision": "tsx scripts/eval-assistant-decision.ts",
+    "eval:telegram-choice": "tsx scripts/eval-telegram-choice-continuity.ts",
     "eval:task-operations": "tsx scripts/eval-task-operations.ts",
     "eval:task-decision-resolution": "tsx scripts/eval-task-decision-resolution.ts",
     "eval:autonomy": "tsx scripts/eval-autonomy-policy.ts",
