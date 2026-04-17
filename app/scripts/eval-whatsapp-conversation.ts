@@ -1,4 +1,5 @@
 import { WhatsAppConversationService } from "../src/integrations/whatsapp/whatsapp-conversation-service.js";
+import { resolveWhatsAppInboundMode } from "../src/core/whatsapp-routing.js";
 import type { AppConfig } from "../src/types/config.js";
 import type { Logger } from "../src/types/logger.js";
 
@@ -35,6 +36,7 @@ function makeConfig(overrides?: Partial<AppConfig["whatsapp"]>): AppConfig {
       sidecarEnabled: true,
       conversationEnabled: true,
       allowedNumbers: [],
+      unauthorizedMode: "ignore",
       ignoreGroups: true,
       sidecarPort: 8790,
       webhookPath: "/webhooks/evolution",
@@ -168,6 +170,32 @@ async function run(): Promise<void> {
       text: "sim",
     });
     results.push(assert(executed && confirm.reply?.includes("Evento criado"), "pending_calendar_create_confirms_locally"));
+  }
+
+  {
+    const config = makeConfig({
+      allowedNumbers: ["5551999999999"],
+      unauthorizedMode: "monitor",
+    });
+    results.push(assert(
+      resolveWhatsAppInboundMode(config.whatsapp, { number: "5551999999999" }) === "conversation",
+      "allowed_operator_number_uses_conversation_mode",
+    ));
+    results.push(assert(
+      resolveWhatsAppInboundMode(config.whatsapp, { number: "5551888888888" }) === "monitor",
+      "non_allowed_number_uses_monitor_mode_when_configured",
+    ));
+  }
+
+  {
+    const config = makeConfig({
+      allowedNumbers: ["5551999999999"],
+      unauthorizedMode: "ignore",
+    });
+    results.push(assert(
+      resolveWhatsAppInboundMode(config.whatsapp, { number: "5551888888888" }) === "ignore",
+      "non_allowed_number_can_be_ignored_when_monitor_is_disabled",
+    ));
   }
 
   {

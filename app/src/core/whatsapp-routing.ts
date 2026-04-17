@@ -17,6 +17,10 @@ function normalizeText(value: string | undefined | null): string {
     .trim();
 }
 
+function normalizePhone(value: string | undefined | null): string {
+  return (value ?? "").replace(/\D+/g, "");
+}
+
 export function detectWhatsAppAccountAliasFromText(text: string | undefined): string | undefined {
   const normalized = normalizeText(text);
   if (!normalized) {
@@ -126,4 +130,33 @@ export function describeWhatsAppRoute(config: WhatsAppConfig, options: {
     accountAlias,
     instanceName,
   };
+}
+
+export function isAllowedWhatsAppOperatorNumber(config: WhatsAppConfig, number: string | undefined): boolean {
+  const normalizedNumber = normalizePhone(number);
+  const allowedNumbers = config.allowedNumbers.map(normalizePhone).filter(Boolean);
+  if (!normalizedNumber) {
+    return false;
+  }
+  if (allowedNumbers.length === 0) {
+    return true;
+  }
+  return allowedNumbers.includes(normalizedNumber);
+}
+
+export function resolveWhatsAppInboundMode(
+  config: WhatsAppConfig,
+  options: {
+    number?: string;
+  } = {},
+): "conversation" | "monitor" | "ignore" {
+  if (!config.conversationEnabled) {
+    return "monitor";
+  }
+
+  if (isAllowedWhatsAppOperatorNumber(config, options.number)) {
+    return "conversation";
+  }
+
+  return config.unauthorizedMode;
 }

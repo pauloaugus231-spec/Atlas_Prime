@@ -6,7 +6,7 @@ import {
   type PendingGoogleEventDraft,
 } from "../src/core/google-draft-utils.js";
 import { matchPersonalCalendarTerms } from "../src/core/calendar-relevance.js";
-import { describeWhatsAppRoute } from "../src/core/whatsapp-routing.js";
+import { describeWhatsAppRoute, resolveWhatsAppInboundMode } from "../src/core/whatsapp-routing.js";
 import { TelegramApi } from "../src/integrations/telegram/telegram-api.js";
 import {
   EvolutionApiClient,
@@ -233,8 +233,18 @@ async function main(): Promise<void> {
   const telegramChatId = config.whatsapp.notifyTelegramChatId ?? config.telegram.allowedUserIds[0];
   const telegramApi = config.telegram.botToken ? new TelegramApi(config.telegram.botToken) : undefined;
   const webhookPath = config.whatsapp.webhookPath;
-  if (!telegramChatId && !config.whatsapp.conversationEnabled) {
-    throw new Error("Nenhum chat do Telegram configurado para receber aprovações de WhatsApp.");
+  const monitoringCanHappen = !config.whatsapp.conversationEnabled || config.whatsapp.unauthorizedMode === "monitor";
+  if (!telegramChatId && monitoringCanHappen) {
+    throw new Error("Nenhum chat do Telegram configurado para receber monitoramento/aprovações de WhatsApp.");
+  }
+  if (
+    config.whatsapp.conversationEnabled &&
+    config.whatsapp.unauthorizedMode === "monitor" &&
+    config.whatsapp.allowedNumbers.length === 0
+  ) {
+    logger.warn("WhatsApp hybrid mode enabled without operator numbers", {
+      unauthorizedMode: config.whatsapp.unauthorizedMode,
+    });
   }
   const conversation = new WhatsAppConversationService(
     config,
@@ -289,8 +299,15 @@ async function main(): Promise<void> {
         instanceName: payload.instance ?? config.whatsapp.defaultInstanceName,
         text: inboundText,
       });
+      const inboundMode = resolveWhatsAppInboundMode(config.whatsapp, { number });
+      logger.info("WhatsApp inbound routed", {
+        instanceName: route.instanceName,
+        account: route.accountAlias,
+        number,
+        inboundMode,
+      });
 
-      if (config.whatsapp.conversationEnabled) {
+      if (inboundMode === "conversation") {
         const result = await conversation.handleInboundText({
           instanceName: route.instanceName,
           remoteJid: message.remoteJid,
@@ -301,6 +318,12 @@ async function main(): Promise<void> {
         });
         response.writeHead(result.ignored ? 202 : 200, { "Content-Type": "application/json" });
         response.end(JSON.stringify(result));
+        return;
+      }
+
+      if (inboundMode === "ignore") {
+        response.writeHead(202, { "Content-Type": "application/json" });
+        response.end(JSON.stringify({ ok: true, ignored: true, reason: "unauthorized_number" }));
         return;
       }
 

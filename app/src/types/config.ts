@@ -58,6 +58,7 @@ export interface BriefingConfig {
 }
 
 export type ExternalReasoningMode = "off" | "smart" | "always";
+export type WhatsAppUnauthorizedMode = "ignore" | "monitor";
 
 export interface ExternalReasoningConfig {
   mode: ExternalReasoningMode;
@@ -183,6 +184,7 @@ export interface WhatsAppConfig {
   sidecarEnabled: boolean;
   conversationEnabled: boolean;
   allowedNumbers: string[];
+  unauthorizedMode: WhatsAppUnauthorizedMode;
   ignoreGroups: boolean;
   sidecarPort: number;
   webhookPath: string;

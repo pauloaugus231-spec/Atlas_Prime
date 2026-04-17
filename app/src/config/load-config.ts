@@ -10,6 +10,7 @@ import type {
   GoogleMapsConfig,
   GoogleWorkspaceConfig,
   MediaConfig,
+  WhatsAppUnauthorizedMode,
   VoiceConfig,
   VoiceSttProvider,
 } from "../types/config.js";
@@ -116,6 +117,10 @@ function parseLogLevel(value: string | undefined): LogLevel {
     return value;
   }
   return "info";
+}
+
+function parseWhatsAppUnauthorizedMode(value: string | undefined): WhatsAppUnauthorizedMode {
+  return value === "monitor" ? "monitor" : "ignore";
 }
 
 function parseAllowedUserIds(value: string | undefined): number[] {
@@ -687,6 +692,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       sidecarEnabled: parseBoolean(env.WHATSAPP_SIDECAR_ENABLED, false),
       conversationEnabled: parseBoolean(env.WHATSAPP_CONVERSATION_ENABLED, false),
       allowedNumbers: parseStringList(env.WHATSAPP_ALLOWED_NUMBERS),
+      unauthorizedMode: parseWhatsAppUnauthorizedMode(env.WHATSAPP_UNAUTHORIZED_MODE),
       ignoreGroups: parseBoolean(env.WHATSAPP_IGNORE_GROUPS, true),
       sidecarPort: parsePositiveInteger(env.WHATSAPP_SIDECAR_PORT, 8790),
       webhookPath: env.WHATSAPP_SIDECAR_WEBHOOK_PATH?.trim() || "/webhooks/evolution",
