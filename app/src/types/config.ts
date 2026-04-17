@@ -181,6 +181,9 @@ export interface WhatsAppConfig {
   defaultAccountAlias: string;
   instanceAccounts: Record<string, string>;
   sidecarEnabled: boolean;
+  conversationEnabled: boolean;
+  allowedNumbers: string[];
+  ignoreGroups: boolean;
   sidecarPort: number;
   webhookPath: string;
   notifyTelegramChatId?: number;

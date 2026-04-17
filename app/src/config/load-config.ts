@@ -685,6 +685,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
           : undefined,
       ),
       sidecarEnabled: parseBoolean(env.WHATSAPP_SIDECAR_ENABLED, false),
+      conversationEnabled: parseBoolean(env.WHATSAPP_CONVERSATION_ENABLED, false),
+      allowedNumbers: parseStringList(env.WHATSAPP_ALLOWED_NUMBERS),
+      ignoreGroups: parseBoolean(env.WHATSAPP_IGNORE_GROUPS, true),
       sidecarPort: parsePositiveInteger(env.WHATSAPP_SIDECAR_PORT, 8790),
       webhookPath: env.WHATSAPP_SIDECAR_WEBHOOK_PATH?.trim() || "/webhooks/evolution",
       notifyTelegramChatId: (() => {

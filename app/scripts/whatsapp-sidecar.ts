@@ -14,6 +14,7 @@ import {
   parseEvolutionWebhookMessage,
   type EvolutionWebhookPayload,
 } from "../src/integrations/whatsapp/evolution-api.js";
+import { WhatsAppConversationService } from "../src/integrations/whatsapp/whatsapp-conversation-service.js";
 import type { AppConfig } from "../src/types/config.js";
 import type { Logger } from "../src/types/logger.js";
 
@@ -208,6 +209,7 @@ async function main(): Promise<void> {
   const {
     config,
     logger,
+    core,
     client,
     approvals,
     communicationRouter,
@@ -231,9 +233,16 @@ async function main(): Promise<void> {
   const telegramChatId = config.whatsapp.notifyTelegramChatId ?? config.telegram.allowedUserIds[0];
   const telegramApi = config.telegram.botToken ? new TelegramApi(config.telegram.botToken) : undefined;
   const webhookPath = config.whatsapp.webhookPath;
-  if (!telegramChatId) {
+  if (!telegramChatId && !config.whatsapp.conversationEnabled) {
     throw new Error("Nenhum chat do Telegram configurado para receber aprovações de WhatsApp.");
   }
+  const conversation = new WhatsAppConversationService(
+    config,
+    logger.child({ scope: "whatsapp-conversation" }),
+    core,
+    evolution,
+    whatsappMessages,
+  );
 
   const server = http.createServer(async (request, response) => {
     if (request.method === "GET" && request.url === "/health") {
@@ -280,6 +289,26 @@ async function main(): Promise<void> {
         instanceName: payload.instance ?? config.whatsapp.defaultInstanceName,
         text: inboundText,
       });
+
+      if (config.whatsapp.conversationEnabled) {
+        const result = await conversation.handleInboundText({
+          instanceName: route.instanceName,
+          remoteJid: message.remoteJid,
+          number,
+          pushName: message.pushName,
+          text: inboundText,
+          createdAt: payload.date_time,
+        });
+        response.writeHead(result.ignored ? 202 : 200, { "Content-Type": "application/json" });
+        response.end(JSON.stringify(result));
+        return;
+      }
+
+      if (!telegramChatId) {
+        response.writeHead(500, { "Content-Type": "application/json" });
+        response.end(JSON.stringify({ ok: false, message: "telegram approval chat not configured" }));
+        return;
+      }
 
       whatsappMessages.saveMessage({
         instanceName: route.instanceName,

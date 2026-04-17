@@ -499,6 +499,7 @@ Estado atual:
 - existe politica explicita de autonomia por intencao: leituras simples rodam direto; escrita e acoes destrutivas continuam confirmadas
 - o Telegram suporta modo operacional de rua/plantao por chat, e esse modo agora afeta briefing, agenda do dia/amanha, conflitos e proximas acoes com respostas mais compactas
 - o Telegram aceita voz assincrona quando `VOICE_ENABLED=true`: o Atlas baixa o audio, transcreve para texto, processa pelo fluxo normal e responde em texto; resposta em audio/TTS fica para uma etapa futura
+- o WhatsApp via Evolution API pode operar como canal principal 1:1 quando `WHATSAPP_SIDECAR_ENABLED=true` e `WHATSAPP_CONVERSATION_ENABLED=true`; nesse modo, mensagens de texto entram no mesmo core do Atlas, com memoria curta por chat, confirmacoes locais e execucao controlada de agenda/tasks
 - o Atlas consegue revisar conflitos, duplicidades e nomes inconsistentes na agenda sem alterar nada sozinho
 - a memoria pessoal operacional agora fica separada da memoria operacional geral para guardar foco salvo, rotina e regras praticas; alem dos itens livres, existe um perfil operacional base editavel explicitamente pelo Telegram
 - provider externo opcional de raciocinio: suporta `EXTERNAL_REASONING_MODE=off|smart|always`; em `off` fica desligado, em `smart` segue a politica por intencao e em `always` tenta o provider em toda mensagem antes do fluxo local; ele pode devolver texto normal ou `assistant_decision`, e o Atlas continua como executor local controlado de operacoes estruturadas sob whitelist; se o provider falhar, expirar ou devolver resposta invalida, cai em fallback local automaticamente
@@ -608,6 +609,30 @@ VOICE_OPENAI_MODEL=gpt-4o-mini-transcribe
 ```
 
 Para um caminho local/open, use `VOICE_STT_PROVIDER=command` com `VOICE_STT_COMMAND` e `VOICE_STT_ARGS`; o comando deve devolver texto no stdout ou JSON simples com `{ "text": "..." }`. Em falha de download, limite ou transcricao, o Atlas responde com erro curto e nao quebra o fluxo normal do Telegram.
+
+## WhatsApp como canal principal
+
+O sidecar de WhatsApp usa Evolution API e pode operar em dois modos:
+
+- conversa 1:1: `WHATSAPP_CONVERSATION_ENABLED=true`
+- triagem com aprovacao no Telegram: `WHATSAPP_CONVERSATION_ENABLED=false`
+
+No modo de conversa, o Atlas recebe texto do WhatsApp, normaliza canal/chat/usuario, passa pelo mesmo `AgentCore` usado no Telegram e responde de volta pelo Evolution. Agenda, Tasks, memoria pessoal, briefing, modo rua/plantao e `assistant_decision` continuam executados localmente pelo Atlas, sem execucao arbitraria fora da whitelist.
+
+Config minima:
+
+```env
+WHATSAPP_ENABLED=true
+WHATSAPP_SIDECAR_ENABLED=true
+WHATSAPP_CONVERSATION_ENABLED=true
+WHATSAPP_ALLOWED_NUMBERS=5551999999999
+WHATSAPP_IGNORE_GROUPS=true
+EVOLUTION_API_URL=http://evolution-api:8080
+EVOLUTION_API_KEY=
+EVOLUTION_INSTANCE_NAME=atlas_prime
+```
+
+Em producao na EC2, se `WHATSAPP_ENABLED=true` e `WHATSAPP_SIDECAR_ENABLED=true`, o deploy ativa automaticamente o profile `whatsapp`. Grupos sao ignorados por padrao nesta etapa. Para liberar apenas numeros especificos, preencha `WHATSAPP_ALLOWED_NUMBERS` com numeros em formato internacional, separados por virgula.
 
 ## CRM local e placar de receita
 

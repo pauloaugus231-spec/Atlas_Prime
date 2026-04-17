@@ -119,6 +119,13 @@ fi
 if [[ -z "$COMPOSE_PROFILES_VALUE" ]]; then
   COMPOSE_PROFILES_VALUE="$(read_env_file_value "COMPOSE_PROFILES")"
 fi
+if [[ -z "$COMPOSE_PROFILES_VALUE" ]]; then
+  whatsapp_enabled="$(read_env_file_value "WHATSAPP_ENABLED")"
+  whatsapp_sidecar_enabled="$(read_env_file_value "WHATSAPP_SIDECAR_ENABLED")"
+  if [[ "$whatsapp_enabled" == "true" && "$whatsapp_sidecar_enabled" == "true" ]]; then
+    COMPOSE_PROFILES_VALUE="whatsapp"
+  fi
+fi
 
 exec 9>"$LOCK_FILE"
 if ! flock -w 300 9; then
