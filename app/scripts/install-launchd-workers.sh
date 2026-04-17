@@ -3,7 +3,7 @@ set -euo pipefail
 
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ROOT_DIR="$(cd "$APP_DIR/.." && pwd)"
-LOGS_DIR="${HOST_AGENT_LOGS:-/Users/user/Agente_Logs}"
+LOGS_DIR="${HOST_AGENT_LOGS:-${LOGS_DIR:-$HOME/Agente_Logs}}"
 LAUNCH_AGENTS_DIR="${HOME}/Library/LaunchAgents"
 mkdir -p "$LOGS_DIR" "$LAUNCH_AGENTS_DIR"
 

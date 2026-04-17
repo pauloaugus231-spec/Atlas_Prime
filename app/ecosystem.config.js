@@ -1,7 +1,7 @@
 const path = require("node:path");
 
 const projectRoot = path.resolve(__dirname);
-const logsDir = process.env.HOST_AGENT_LOGS || "/Users/user/Agente_Logs";
+const logsDir = process.env.HOST_AGENT_LOGS || process.env.LOGS_DIR || path.join(projectRoot, "logs");
 
 module.exports = {
   apps: [

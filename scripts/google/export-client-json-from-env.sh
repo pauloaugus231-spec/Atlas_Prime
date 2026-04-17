@@ -1,18 +1,42 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="/Users/user/Documents/agente_ai"
-ENV_FILE="$ROOT_DIR/.env"
-TARGET_JSON="/Users/user/Agente_Workspace/.agent-state/google-oauth-client.json"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="${ATLAS_ROOT_DIR:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
+ENV_FILE="${ATLAS_ENV_FILE:-$ROOT_DIR/.env}"
+if [ ! -f "$ENV_FILE" ] && [ -f "$ROOT_DIR/.env.production" ]; then
+  ENV_FILE="$ROOT_DIR/.env.production"
+fi
+
+read_env_value() {
+  local key="$1"
+  local value
+  value="$(awk -F= -v key="$key" '$1 == key { sub(/^[^=]*=/, ""); value = $0 } END { print value }' "$ENV_FILE")"
+  value="${value%\"}"
+  value="${value#\"}"
+  value="${value%\'}"
+  value="${value#\'}"
+  printf '%s' "$value"
+}
+
+HOST_WORKSPACE_DIR="${ATLAS_HOST_WORKSPACE_DIR:-$(read_env_value HOST_AGENT_WORKSPACE)}"
+if [ -z "$HOST_WORKSPACE_DIR" ]; then
+  if [ -d "/srv/atlas/state/workspace" ] || [[ "$ENV_FILE" == *".env.production" ]]; then
+    HOST_WORKSPACE_DIR="/srv/atlas/state/workspace"
+  else
+    HOST_WORKSPACE_DIR="$ROOT_DIR/app/workspace"
+  fi
+fi
+TARGET_JSON="${ATLAS_GOOGLE_CLIENT_JSON:-$HOST_WORKSPACE_DIR/.agent-state/google-oauth-client.json}"
 
 if [ ! -f "$ENV_FILE" ]; then
   printf 'Arquivo .env nao encontrado: %s\n' "$ENV_FILE" >&2
   exit 1
 fi
 
-client_id="$(perl -ne 'print "$1\n" if /^GOOGLE_CLIENT_ID=(.*)$/' "$ENV_FILE" | tail -n 1)"
-client_secret="$(perl -ne 'print "$1\n" if /^GOOGLE_CLIENT_SECRET=(.*)$/' "$ENV_FILE" | tail -n 1)"
-redirect_uri="$(perl -ne 'print "$1\n" if /^GOOGLE_REDIRECT_URI=(.*)$/' "$ENV_FILE" | tail -n 1)"
+client_id="$(read_env_value GOOGLE_CLIENT_ID)"
+client_secret="$(read_env_value GOOGLE_CLIENT_SECRET)"
+redirect_uri="$(read_env_value GOOGLE_REDIRECT_URI)"
 
 if [ -z "$client_id" ] || [ -z "$client_secret" ] || [ -z "$redirect_uri" ]; then
   printf 'GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET e GOOGLE_REDIRECT_URI precisam estar preenchidos no .env.\n' >&2
