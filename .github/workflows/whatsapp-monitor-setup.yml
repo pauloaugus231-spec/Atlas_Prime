@@ -216,9 +216,14 @@ jobs:
                   "number": number,
                   "groupsIgnore": True,
               }
-              create_response = request("POST", "/instance/create", create_body)
-              created = True
-              existing = (create_response or {}).get("instance") if isinstance(create_response, dict) else None
+              try:
+                  create_response = request("POST", "/instance/create", create_body)
+                  created = True
+                  existing = (create_response or {}).get("instance") if isinstance(create_response, dict) else None
+              except ApiError as error:
+                  if error.status != 403:
+                      raise
+                  existing = {"instanceName": instance}
 
           state = None
           for _ in range(10):
