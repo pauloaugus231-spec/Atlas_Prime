@@ -1,0 +1,139 @@
+name: Ops Diagnose
+
+on:
+  workflow_dispatch:
+    inputs:
+      lines:
+        description: Number of recent log lines per container
+        required: false
+        default: "200"
+
+jobs:
+  diagnose:
+    runs-on:
+      - self-hosted
+      - atlas-ec2
+    timeout-minutes: 10
+    env:
+      DEPLOY_PATH: /srv/atlas/app
+      LOG_LINES: ${{ github.event.inputs.lines || '200' }}
+    steps:
+      - name: Validate target
+        run: |
+          set -euo pipefail
+          test -d "$DEPLOY_PATH" || { echo "Diretorio ausente: $DEPLOY_PATH"; exit 1; }
+          test -f "$DEPLOY_PATH/.env.production" || { echo ".env.production ausente em $DEPLOY_PATH"; exit 1; }
+
+      - name: Print redacted config snapshot
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          env_path = Path("/srv/atlas/app/.env.production")
+          values = {}
+          for line in env_path.read_text(encoding="utf-8").splitlines():
+              stripped = line.strip()
+              if not stripped or stripped.startswith("#") or "=" not in stripped:
+                  continue
+              key, value = stripped.split("=", 1)
+              values[key] = value
+
+          def present(key: str):
+              value = values.get(key, "")
+              return {
+                  "present": bool(value),
+                  "value": value if key in {
+                      "OPERATOR_ID",
+                      "OPERATOR_NAME",
+                      "OPERATOR_ALERT_CHANNEL",
+                      "TELEGRAM_OPERATOR_CHAT_ID",
+                      "TELEGRAM_ALLOWED_USER_IDS",
+                      "WHATSAPP_MONITORED_INSTANCES",
+                      "WHATSAPP_DEFAULT_ACCOUNT",
+                      "WHATSAPP_INSTANCE_ACCOUNTS",
+                      "EVOLUTION_INSTANCE_NAME",
+                      "WHATSAPP_CONVERSATION_ENABLED",
+                      "WHATSAPP_SIDECAR_ENABLED",
+                      "WHATSAPP_ENABLED",
+                  } else "***",
+              }
+
+          snapshot = {
+              key: present(key)
+              for key in [
+                  "OPERATOR_ID",
+                  "OPERATOR_NAME",
+                  "OPERATOR_ALERT_CHANNEL",
+                  "TELEGRAM_OPERATOR_CHAT_ID",
+                  "TELEGRAM_ALLOWED_USER_IDS",
+                  "WHATSAPP_MONITORED_INSTANCES",
+                  "WHATSAPP_DEFAULT_ACCOUNT",
+                  "WHATSAPP_INSTANCE_ACCOUNTS",
+                  "EVOLUTION_INSTANCE_NAME",
+                  "WHATSAPP_CONVERSATION_ENABLED",
+                  "WHATSAPP_SIDECAR_ENABLED",
+                  "WHATSAPP_ENABLED",
+                  "EVOLUTION_API_KEY",
+                  "TELEGRAM_BOT_TOKEN",
+              ]
+          }
+          print(json.dumps(snapshot, ensure_ascii=False, indent=2))
+          PY
+
+      - name: Docker status
+        run: |
+          set -euo pipefail
+          cd "$DEPLOY_PATH"
+          sudo docker compose ps
+
+      - name: Recent logs
+        run: |
+          set -euo pipefail
+          cd "$DEPLOY_PATH"
+          for service in atlas-whatsapp-sidecar atlas-core atlas-evolution-api; do
+            echo "===== ${service} (last ${LOG_LINES}) ====="
+            sudo docker logs --tail "$LOG_LINES" "$service" 2>&1 || true
+            echo
+          done
+
+      - name: Recent WhatsApp and approval records
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import sqlite3
+          from pathlib import Path
+
+          base = Path("/srv/atlas/app/app/workspace/.agent-state")
+          outputs = {}
+
+          db_specs = {
+              "whatsapp_messages": (
+                  base / "whatsapp-messages.sqlite",
+                  "select id, instance_name, number, push_name, direction, substr(text, 1, 160) as text, created_at from whatsapp_messages order by id desc limit 10",
+              ),
+              "approval_inbox": (
+                  base / "approval-inbox.sqlite",
+                  "select id, channel, action_kind, subject, status, created_at from approvals order by id desc limit 10",
+              ),
+          }
+
+          for name, (path, query) in db_specs.items():
+              if not path.exists():
+                  outputs[name] = {"exists": False}
+                  continue
+              conn = sqlite3.connect(path)
+              conn.row_factory = sqlite3.Row
+              try:
+                  rows = [dict(row) for row in conn.execute(query).fetchall()]
+              finally:
+                  conn.close()
+              outputs[name] = {
+                  "exists": True,
+                  "rows": rows,
+              }
+
+          print(json.dumps(outputs, ensure_ascii=False, indent=2))
+          PY
