@@ -44,6 +44,7 @@ import {
   resolvePendingChoiceReply,
   type PendingChoiceState,
 } from "./pending-choice.js";
+import { resolveMonitoredAlertTurnBehavior } from "./monitored-alert-continuation.js";
 import type { ApprovalEngine } from "../../core/approval-engine.js";
 import type { ClarificationEngine } from "../../core/clarification-engine.js";
 import type { WhatsAppMessageStore } from "../../core/whatsapp-message-store.js";
@@ -4170,7 +4171,12 @@ export class TelegramService {
     normalizedText: string,
     pendingDraft: PendingMonitoredChannelAlertDraft,
   ): Promise<boolean> {
-    if (isClearlyNewTopLevelIntent(normalizedText)) {
+    const turnBehavior = resolveMonitoredAlertTurnBehavior(normalizedText);
+    if (turnBehavior === "interrupt") {
+      this.logger.info("Monitored alert interrupted by new top-level Telegram request", {
+        chatId: message.chat.id,
+        classification: pendingDraft.classification,
+      });
       this.clearPendingActionDraft(message.chat.id, "superseded");
       return false;
     }
