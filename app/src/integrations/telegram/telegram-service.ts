@@ -864,9 +864,37 @@ function isClearlyNewTopLevelIntent(text: string): boolean {
     "clima em",
     "previsao do tempo",
     "previsão do tempo",
+    "qual o clima",
+    "clima hoje",
+    "tempo hoje",
     "liste meus compromissos",
+    "briefing da manha",
+    "briefing da manhã",
+    "brief diario",
+    "brief diário",
+    "resumo da manha",
+    "resumo da manhã",
+    "organize meu dia",
+    "organizar meu dia",
     "morning briefing",
     "liste minhas tarefas",
+    "mostre meu perfil",
+    "mostrar meu perfil",
+    "meu perfil operacional",
+    "perfil operacional",
+    "meu estado operacional",
+    "estado operacional",
+    "o que voce aprendeu sobre mim",
+    "o que você aprendeu sobre mim",
+    "aprendizados sobre mim",
+    "minha memoria pessoal",
+    "minha memória pessoal",
+    "memoria pessoal",
+    "memória pessoal",
+    "minhas preferencias aprendidas",
+    "minhas preferências aprendidas",
+    "minhas preferencias",
+    "minhas preferências",
     "procure o contato",
   ].some((token) => normalized.includes(token));
 }
@@ -2759,18 +2787,26 @@ export class TelegramService {
         );
         return;
       }
-      await this.sendText(
-        message.chat.id,
-        [
-          "Há uma importação de agenda pendente neste chat.",
-          "Responda `1`, `2` ou `3` para ajustar o modo; use `2 e agendar`, `agendar modo 2` ou `importar 2` para seguir; descarte com `cancelar rascunho`; ou envie novo PDF/print para substituir o lote atual.",
-        ].join("\n"),
-        {
-          reply_to_message_id: message.message_id,
-          disable_web_page_preview: true,
-        },
-      );
-      return;
+      if (isClearlyNewTopLevelIntent(normalizedText)) {
+        this.logger.info("Discarding pending schedule import draft for new top-level Telegram intent", {
+          chatId: message.chat.id,
+          draftKind: pendingDraft.kind,
+        });
+        this.clearPendingActionDraft(message.chat.id, "superseded");
+      } else {
+        await this.sendText(
+          message.chat.id,
+          [
+            "Há uma importação de agenda pendente neste chat.",
+            "Responda `1`, `2` ou `3` para ajustar o modo; use `2 e agendar`, `agendar modo 2` ou `importar 2` para seguir; descarte com `cancelar rascunho`; ou envie novo PDF/print para substituir o lote atual.",
+          ].join("\n"),
+          {
+            reply_to_message_id: message.message_id,
+            disable_web_page_preview: true,
+          },
+        );
+        return;
+      }
     }
 
     if (pendingDraft?.kind === "whatsapp_reply" && !isClearlyNewTopLevelIntent(normalizedText)) {

@@ -1301,6 +1301,23 @@ function isPersonalOperationalProfileDeletePrompt(prompt: string): boolean {
   ]);
 }
 
+function isDirectLocalContextCommandPrompt(prompt: string): boolean {
+  return (
+    isPersonalOperationalProfileShowPrompt(prompt) ||
+    isPersonalOperationalProfileUpdatePrompt(prompt) ||
+    isPersonalOperationalProfileDeletePrompt(prompt) ||
+    isOperationalStateShowPrompt(prompt) ||
+    isLearnedPreferencesListPrompt(prompt) ||
+    isLearnedPreferencesDeletePrompt(prompt) ||
+    isPersonalMemoryListPrompt(prompt) ||
+    isPersonalMemorySavePrompt(prompt) ||
+    isPersonalMemoryUpdatePrompt(prompt) ||
+    isPersonalMemoryDeletePrompt(prompt) ||
+    isUserPreferencesPrompt(prompt) ||
+    isAgentIdentityPrompt(prompt)
+  );
+}
+
 function extractPersonalOperationalProfileRemoveQuery(prompt: string): string | undefined {
   const cleaned = prompt
     .replace(/^\s*(?:remova|remove|remover|apague|tire|exclua)\s+do\s+meu\s+perfil\s*(?:a|o)?\s*/i, "")
@@ -9550,15 +9567,24 @@ export class AgentCore {
       autonomyLevel: orchestration.policy.autonomyLevel,
     });
 
-    const externalReasoningPreLocalResult = await this.tryRunExternalReasoning(
-      activeUserPrompt,
-      requestId,
-      requestLogger,
-      intent,
-      preferences,
-      options,
-      "pre_local",
-    );
+    const shouldBypassPreLocalExternalReasoning = isDirectLocalContextCommandPrompt(activeUserPrompt);
+    if (shouldBypassPreLocalExternalReasoning) {
+      requestLogger.info("Skipping external reasoning for direct local context command", {
+        mode: this.config.externalReasoning.mode,
+      });
+    }
+
+    const externalReasoningPreLocalResult = shouldBypassPreLocalExternalReasoning
+      ? null
+      : await this.tryRunExternalReasoning(
+          activeUserPrompt,
+          requestId,
+          requestLogger,
+          intent,
+          preferences,
+          options,
+          "pre_local",
+        );
     if (externalReasoningPreLocalResult) {
       return externalReasoningPreLocalResult;
     }
