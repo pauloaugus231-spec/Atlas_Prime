@@ -498,8 +498,8 @@ Estado atual:
 - o brief diario agora segue um formato operacional mais consistente: visao do dia, atencao principal, rua/clima/deslocamento, agenda limpa, prioridade do dia e mensagem final
 - existe politica explicita de autonomia por intencao: leituras simples rodam direto; escrita e acoes destrutivas continuam confirmadas
 - o Telegram suporta modo operacional de rua/plantao por chat, e esse modo agora afeta briefing, agenda do dia/amanha, conflitos e proximas acoes com respostas mais compactas
-- o Telegram aceita voz assincrona quando `VOICE_ENABLED=true`: o Atlas baixa o audio, transcreve para texto, processa pelo fluxo normal e responde em texto; resposta em audio/TTS fica para uma etapa futura
-- o Atlas agora distingue canais diretos do operador e canais monitorados: Telegram continua como operador/admin maduro, e o WhatsApp institucional pode operar como canal monitorado que gera alertas curtos no canal pessoal do operador antes de qualquer ação
+- o Telegram aceita voz assincrona quando `VOICE_ENABLED=true`: o Atlas baixa o audio, transcreve para texto, passa por uma camada de normalizacao semantica antes do roteamento e responde em texto; resposta em audio/TTS fica para uma etapa futura
+- o Atlas agora distingue canais diretos do operador e canais monitorados: Telegram continua como operador/admin maduro, e o WhatsApp institucional pode operar como canal monitorado que gera alertas curtos, mais humanos e operacionais no canal pessoal do operador antes de qualquer ação
 - o Atlas consegue revisar conflitos, duplicidades e nomes inconsistentes na agenda sem alterar nada sozinho
 - a memoria pessoal operacional agora fica separada da memoria operacional geral para guardar foco salvo, rotina e regras praticas; alem dos itens livres, existe um perfil operacional base editavel explicitamente pelo Telegram
 - provider externo opcional de raciocinio: suporta `EXTERNAL_REASONING_MODE=off|smart|always`; em `off` fica desligado, em `smart` segue a politica por intencao e em `always` tenta o provider em toda mensagem antes do fluxo local; ele pode devolver texto normal ou `assistant_decision`, e o Atlas continua como executor local controlado de operacoes estruturadas sob whitelist; se o provider falhar, expirar ou devolver resposta invalida, cai em fallback local automaticamente
@@ -584,7 +584,7 @@ Comportamento:
 - o `brief diário` cruza agenda, tarefas, foco salvo, clima, deslocamento e alertas de conflito
 - a integração pode operar em modo leitura ou escrita, conforme os scopes concedidos no OAuth
 - a agenda `abordagem` é tratada como calendário operacional de primeira classe, com resolução explícita para `abordagem`, `agenda da abordagem`, `calendário da abordagem` e `ambos`
-- no Telegram, respostas curtas em fluxo pendente de agenda, como `às 8h da manhã`, `amanhã`, `na abordagem`, `esse` e `o da tarde`, são interpretadas como continuação contextual antes do roteamento genérico
+- no Telegram, respostas curtas em fluxo pendente de agenda, como `às 8h da manhã`, `amanhã`, `na abordagem`, `esse` e `o da tarde`, são interpretadas como continuação contextual antes do roteamento genérico; isso também vale para áudio curto depois de transcrever
 - leitura e escrita simples de agenda usam defaults seguros; leituras de período listam os eventos encontrados nos calendários consultados sem ocultar itens por heurística de relevância, e quando falta dado crítico real o Atlas faz clarificação curta
 - no Telegram, uma camada externa de raciocínio pode devolver `assistant_decision` em JSON
 - o Atlas valida esse formato localmente e, por enquanto, só aceita execução estruturada com `execute_calendar_operation` e `execute_task_operation`
@@ -594,7 +594,7 @@ Comportamento:
 
 ## Voz assincrona no Telegram
 
-Nesta etapa, voz e entrada de texto transcrita. O Telegram aceita mensagens de voz e arquivos de audio curtos, aplica limites de duracao/tamanho e encaminha a transcricao para o mesmo fluxo seguro do Atlas. A resposta ainda e em texto.
+Nesta etapa, voz e entrada de texto transcrita. O Telegram aceita mensagens de voz e arquivos de audio curtos, aplica limites de duracao/tamanho e encaminha a transcricao para o mesmo fluxo seguro do Atlas. Antes do roteamento, o texto passa por uma normalizacao semantica leve para limpar comandos falados, separar melhor titulo/conteudo e preservar respostas curtas contextuais como continuacao de fluxos pendentes. A resposta ainda e em texto.
 
 Configuracao minima:
 

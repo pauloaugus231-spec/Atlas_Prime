@@ -1,4 +1,5 @@
 import process from "node:process";
+import { normalizeVoiceTranscriptForTelegram } from "../src/core/voice-semantic-normalizer.js";
 import { extractTelegramVoiceAttachment } from "../src/integrations/voice/telegram-voice.js";
 import { buildVoiceUserErrorMessage, VoiceMessageHandler } from "../src/integrations/voice/voice-message-handler.js";
 import type { SpeechToTextInput, SpeechToTextProvider, TelegramVoiceDownloadApi } from "../src/integrations/voice/voice-types.js";
@@ -120,6 +121,63 @@ async function run() {
     name: "voice_audio_transcribes_to_normal_text_input",
     passed: result.text === "qual minha agenda amanhã?" && provider.calls === 1,
     detail: JSON.stringify(result, null, 2),
+  });
+
+  const normalizedEvent = normalizeVoiceTranscriptForTelegram(
+    "marca na agenda provas da faculdade dia 15 de junho às 8 da manhã",
+    "America/Sao_Paulo",
+  );
+  results.push({
+    name: "voice_semantics_build_clean_event_draft",
+    passed: normalizedEvent.intentHint === "calendar_create"
+      && normalizedEvent.eventDraftPreview?.summary === "Provas da faculdade"
+      && normalizedEvent.eventDraftPreview?.start.includes("T08:00:00"),
+    detail: JSON.stringify(normalizedEvent, null, 2),
+  });
+
+  const normalizedTask = normalizeVoiceTranscriptForTelegram(
+    "anota uma tarefa comprar pilhas amanhã às 8",
+    "America/Sao_Paulo",
+  );
+  results.push({
+    name: "voice_semantics_build_clean_task_draft",
+    passed: normalizedTask.intentHint === "task_create"
+      && normalizedTask.taskDraftPreview?.title === "Comprar pilhas"
+      && typeof normalizedTask.taskDraftPreview?.due === "string",
+    detail: JSON.stringify(normalizedTask, null, 2),
+  });
+
+  const normalizedMemory = normalizeVoiceTranscriptForTelegram(
+    "salva que em plantão quero respostas curtas",
+    "America/Sao_Paulo",
+  );
+  results.push({
+    name: "voice_semantics_canonicalize_memory_save",
+    passed: normalizedMemory.intentHint === "memory_save"
+      && normalizedMemory.text === "salve na minha memória pessoal que em plantão quero respostas curtas",
+    detail: JSON.stringify(normalizedMemory, null, 2),
+  });
+
+  const contextualReply = normalizeVoiceTranscriptForTelegram(
+    "às 8 da manhã",
+    "America/Sao_Paulo",
+  );
+  results.push({
+    name: "voice_semantics_preserve_contextual_short_reply",
+    passed: contextualReply.intentHint === "contextual_reply"
+      && contextualReply.text === "às 8 da manhã",
+    detail: JSON.stringify(contextualReply, null, 2),
+  });
+
+  const alertReplyAudio = normalizeVoiceTranscriptForTelegram(
+    "cria o evento",
+    "America/Sao_Paulo",
+  );
+  results.push({
+    name: "voice_semantics_keep_short_alert_followup_contextual",
+    passed: alertReplyAudio.intentHint === "contextual_reply"
+      && alertReplyAudio.text === "cria o evento",
+    detail: JSON.stringify(alertReplyAudio, null, 2),
   });
 
   const failingHandler = new VoiceMessageHandler(

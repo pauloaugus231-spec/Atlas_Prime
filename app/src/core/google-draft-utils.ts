@@ -397,10 +397,22 @@ function extractLocation(value: string): string | undefined {
 
 function cleanupDraftTitle(value: string): string {
   const cleaned = normalize(value)
+    .replace(/\b(?:crie|cria|criar|adicione|adiciona|adicionar|registre|registra|salve|salva|anote|anota|marque|marca|coloque|coloca)\b/g, " ")
+    .replace(/\b(?:uma|um|a)\s+(?:tarefa|task|lembrete)\b/g, " ")
+    .replace(/\b(?:tarefa|task|lembrete)\b/g, " ")
+    .replace(/\b(?:no\s+google(?:\s+tasks)?)\b/g, " ")
+    .replace(/^\s*(?:para|pra)\s+/g, " ")
+    .replace(/\b(?:para|pra)\s+(?=(?:amanha|hoje|segunda(?:-feira)?|terca(?:-feira)?|quarta(?:-feira)?|quinta(?:-feira)?|sexta(?:-feira)?|sabado|domingo|dia\s+\d{1,2}|\d{1,2}\/\d{1,2}))/g, " ")
+    .replace(/\b(?:ate|até|prazo)\s+(?=(?:amanha|hoje|segunda(?:-feira)?|terca(?:-feira)?|quarta(?:-feira)?|quinta(?:-feira)?|sexta(?:-feira)?|sabado|domingo|dia\s+\d{1,2}|\d{1,2}\/\d{1,2}))/g, " ")
     .replace(/\b(?:para|com prazo|prazo|no dia|dia|amanha|hoje|segunda(?:-feira)?|terca(?:-feira)?|quarta(?:-feira)?|quinta(?:-feira)?|sexta(?:-feira)?|sabado|domingo)\b/g, " ")
     .replace(/\b\d{1,2}\/\d{1,2}(?:\/\d{2,4})?\b/g, " ")
+    .replace(/\b(?:dia\s+)?\d{1,2}\s+(?:de\s+)?(?:janeiro|fevereiro|marco|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro)(?:\s+(?:de\s+)?\d{2,4})?\b/g, " ")
     .replace(/\bdas?\s+\d{1,2}(?::\d{2})?\s*(?:h)?\s+(?:as|a|ate)\s+\d{1,2}(?::\d{2})?\s*(?:h)?\b/g, " ")
-    .replace(/\bas?\s+\d{1,2}(?::\d{2})?\s*(?:h)?\b/g, " ")
+    .replace(/\bas?\s+\d{1,2}(?::\d{2})?\s*(?:h|horas?)?\b/g, " ")
+    .replace(/\bas?\s+(?:uma|um|duas|dois|tres|quatro|cinco|seis|sete|oito|nove|dez|onze|doze)(?:\s+horas?)?\b/g, " ")
+    .replace(/\b(?:uma|um|duas|dois|tres|quatro|cinco|seis|sete|oito|nove|dez|onze|doze)(?:\s+horas?)?\s+(?:da|de|pela)\s+(?:manha|tarde|noite)\b/g, " ")
+    .replace(/\b\d{1,2}h(?:\d{2})?\b/g, " ")
+    .replace(/\b(?:da|de|pela)\s+(?:manha|tarde|noite)\b/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 
@@ -410,7 +422,7 @@ function cleanupDraftTitle(value: string): string {
     return value.trim();
   }
 
-  return withoutTrailingPunctuation.charAt(0).toUpperCase() + withoutTrailingPunctuation.slice(1);
+  return formatEventTitle(withoutTrailingPunctuation);
 }
 
 const EVENT_TITLE_ACRONYMS = new Map([
@@ -428,6 +440,15 @@ function restoreCommonTitleWord(value: string): string {
   const lower = value.toLowerCase();
   if (lower === "reuniao") {
     return "reunião";
+  }
+  if (lower === "relatorio") {
+    return "relatório";
+  }
+  if (lower === "acao") {
+    return "ação";
+  }
+  if (lower === "memoria") {
+    return "memória";
   }
   return lower;
 }
@@ -576,10 +597,20 @@ export function isGoogleTaskCreatePrompt(prompt: string): boolean {
   const normalized = normalize(prompt);
   return includesAny(normalized, [
     "crie uma tarefa",
+    "cria uma tarefa",
+    "crie tarefa",
+    "cria tarefa",
     "criar uma tarefa",
     "adicione uma tarefa",
     "adicionar tarefa",
+    "anota uma tarefa",
+    "anote uma tarefa",
+    "marca uma tarefa",
+    "marque uma tarefa",
     "crie um lembrete",
+    "cria um lembrete",
+    "anota um lembrete",
+    "anote um lembrete",
     "adicionar lembrete",
   ]);
 }
@@ -632,8 +663,15 @@ export function isGoogleEventCreatePrompt(prompt: string): boolean {
 
 export function buildTaskDraftFromPrompt(prompt: string, timeZone: string): { draft?: PendingGoogleTaskDraft; reason?: string } {
   const normalizedPrompt = normalize(prompt);
-  const match = prompt.match(/(?:crie|criar|adicione|adicionar|registre|salve)\s+(?:uma\s+)?(?:tarefa|lembrete)(?:\s+no\s+google(?:\s+tasks)?)?(?:\s+para|\s*:)?\s+([\s\S]+)/i);
-  const rawTitle = match?.[1]?.trim() || "";
+  const patterns = [
+    /(?:crie|cria|criar|adicione|adiciona|adicionar|registre|registra|salve|salva|anote|anota|marque|marca|coloque|coloca)\s+(?:uma\s+)?(?:tarefa|task|lembrete)(?:\s+no\s+google(?:\s+tasks)?)?(?:\s+para|\s*:)?\s+([\s\S]+)/i,
+    /(?:preciso|precisamos|favor|por favor)\s+(entregar|enviar|fazer|providenciar|preparar|retornar|ligar|confirmar|revisar|comprar|resolver|ajustar)\s+([\s\S]+)/i,
+    /^(?:paulo[,:\-\s]+)?(entregar|enviar|fazer|providenciar|preparar|retornar|ligar|confirmar|revisar|comprar|resolver|ajustar)\s+([\s\S]+)/i,
+  ];
+  const match = patterns.map((pattern) => prompt.match(pattern)).find(Boolean);
+  const rawTitle = match
+    ? (match.length >= 3 ? `${match[1]} ${match[2]}` : match[1])?.trim() || ""
+    : (isGoogleTaskCreatePrompt(prompt) ? prompt.trim() : "");
   const title = cleanupDraftTitle(rawTitle);
   if (!title) {
     return {

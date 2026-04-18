@@ -7,6 +7,7 @@ import {
 import {
   buildMonitoredChannelAlertReply,
   classifyMonitoredWhatsAppMessage,
+  type MonitoredAlertSuggestedAction,
   type MonitoredWhatsAppReplyDraft,
   type PendingMonitoredChannelAlertDraft,
 } from "../../core/monitored-channel-alerts.js";
@@ -35,6 +36,33 @@ export interface MonitoredWhatsAppResult {
   ignored?: boolean;
   reason?: string;
   approvalId?: number;
+}
+
+function resolveSuggestedAction(input: {
+  suggestedAction: MonitoredAlertSuggestedAction;
+  eventDraft?: PendingGoogleEventDraft;
+  taskDraft?: PendingGoogleTaskDraft;
+  replyDraft?: MonitoredWhatsAppReplyDraft;
+}): MonitoredAlertSuggestedAction {
+  if (input.suggestedAction === "event" && input.eventDraft) {
+    return "event";
+  }
+  if (input.suggestedAction === "task" && input.taskDraft) {
+    return "task";
+  }
+  if (input.suggestedAction === "reply" && input.replyDraft) {
+    return "reply";
+  }
+  if (input.eventDraft) {
+    return "event";
+  }
+  if (input.taskDraft) {
+    return "task";
+  }
+  if (input.replyDraft) {
+    return "reply";
+  }
+  return input.suggestedAction === "summary" ? "summary" : "register";
 }
 
 function normalizeDraftText(value: string): string {
@@ -130,6 +158,10 @@ export class WhatsAppMonitorService {
       number: input.number,
       classification: classification.classification,
       shouldAlert: classification.shouldAlert,
+      suggestedAction: classification.suggestedAction,
+      operationalScore: classification.operationalScore,
+      urgency: classification.urgency,
+      timeSignal: classification.timeSignal,
     });
 
     if (!classification.shouldAlert) {
@@ -159,6 +191,12 @@ export class WhatsAppMonitorService {
       actionPolicy: routing.actionPolicy,
       classification: classification.classification,
     });
+    const suggestedAction = resolveSuggestedAction({
+      suggestedAction: classification.suggestedAction,
+      eventDraft,
+      taskDraft,
+      replyDraft,
+    });
 
     const draft: PendingMonitoredChannelAlertDraft = {
       kind: "monitored_channel_alert",
@@ -175,12 +213,27 @@ export class WhatsAppMonitorService {
       classification: classification.classification,
       summary: classification.summary,
       reasons: classification.reasons,
-      suggestedAction: classification.suggestedAction,
+      suggestedAction,
+      operationalScore: classification.operationalScore,
+      urgency: classification.urgency,
+      timeSignal: classification.timeSignal,
       ...(eventDraft ? { eventDraft } : {}),
       ...(taskDraft ? { taskDraft } : {}),
       ...(replyDraft ? { replyDraft } : {}),
       createdAt: input.createdAt ?? new Date().toISOString(),
     };
+    this.logger.info("Monitored WhatsApp alert draft prepared", {
+      instanceName: input.instanceName,
+      account: input.accountAlias,
+      number: input.number,
+      classification: draft.classification,
+      suggestedAction: draft.suggestedAction,
+      operationalScore: draft.operationalScore,
+      urgency: draft.urgency,
+      hasEventDraft: Boolean(eventDraft),
+      hasTaskDraft: Boolean(taskDraft),
+      hasReplyDraft: Boolean(replyDraft),
+    });
 
     const alertChannel = this.config.operator.preferredAlertChannelId
       ? this.config.operator.channels.find((item) => item.channelId === this.config.operator.preferredAlertChannelId)

@@ -22,10 +22,12 @@ import {
 } from "../../core/google-draft-utils.js";
 import {
   buildMonitoredChannelAlertReply,
+  buildMonitoredChannelAlertSummaryReply,
   resolveMonitoredAlertReplyAction,
   type MonitoredWhatsAppReplyDraft,
   type PendingMonitoredChannelAlertDraft,
 } from "../../core/monitored-channel-alerts.js";
+import { normalizeVoiceTranscriptForTelegram } from "../../core/voice-semantic-normalizer.js";
 import { extractLatestShortPackage, type ParsedShortPackage } from "../../core/short-video-package.js";
 import { parseAssistantDecisionReply } from "../../core/assistant-decision.js";
 import type { AppConfig } from "../../types/config.js";
@@ -2361,7 +2363,11 @@ export class TelegramService {
           attachment: audioAttachment,
           telegram: this.api,
         });
-        text = transcription.text;
+        const voiceNormalization = normalizeVoiceTranscriptForTelegram(
+          transcription.text,
+          this.config.google.defaultTimezone,
+        );
+        text = voiceNormalization.text;
         this.logger.info("Telegram audio accepted as text input", {
           chatId: message.chat.id,
           userId,
@@ -2369,6 +2375,11 @@ export class TelegramService {
           provider: transcription.provider,
           model: transcription.model,
           sizeBytes: transcription.sizeBytes,
+          semanticIntent: voiceNormalization.intentHint,
+          normalized: voiceNormalization.changed,
+          contextualReply: voiceNormalization.intentHint === "contextual_reply",
+          hasEventDraftPreview: Boolean(voiceNormalization.eventDraftPreview),
+          hasTaskDraftPreview: Boolean(voiceNormalization.taskDraftPreview),
         });
       } catch (error) {
         this.logger.warn("Telegram audio processing failed", {
@@ -4193,17 +4204,7 @@ export class TelegramService {
     if (resolution.kind === "summary") {
       await this.sendText(
         message.chat.id,
-        [
-          "Resumo do alerta monitorado:",
-          `- Canal: ${pendingDraft.sourceDisplayName}`,
-          `- Contato: ${pendingDraft.sourcePushName ?? pendingDraft.sourceNumber}`,
-          `- Classificação: ${pendingDraft.classification}`,
-          ...(pendingDraft.reasons.length > 0 ? [`- Sinais: ${pendingDraft.reasons.join(" | ")}`] : []),
-          "",
-          pendingDraft.sourceText,
-          "",
-          "Se quiser agir, responda com `agenda`, `cria tarefa`, `responda`, `registrar` ou `ignora`.",
-        ].join("\n"),
+        buildMonitoredChannelAlertSummaryReply(pendingDraft),
         {
           reply_to_message_id: message.message_id,
           disable_web_page_preview: true,

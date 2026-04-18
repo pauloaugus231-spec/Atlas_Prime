@@ -1,5 +1,6 @@
 import {
   buildMonitoredChannelAlertReply,
+  buildMonitoredChannelAlertSummaryReply,
   classifyMonitoredWhatsAppMessage,
   resolveMonitoredAlertReplyAction,
   type PendingMonitoredChannelAlertDraft,
@@ -249,7 +250,7 @@ async function run(): Promise<void> {
 
     results.push(assert(result.ok && result.alertSent === true, "important_monitored_message_generates_alert"));
     results.push(assert(approvals.items.length === 1, "alert_is_persisted_as_pending_item"));
-    results.push(assert(alerts.sent.length === 1 && alerts.sent[0]?.includes("Responda com"), "alert_is_sent_to_operator_channel"));
+    results.push(assert(alerts.sent.length === 1 && alerts.sent[0]?.includes("Possível reunião no institucional"), "alert_is_sent_to_operator_channel_with_operational_copy"));
     results.push(assert(messages.messages.length === 1, "monitored_channel_does_not_auto_reply"));
   }
 
@@ -270,6 +271,9 @@ async function run(): Promise<void> {
       summary: "Paulo, reunião amanhã às 9h no CREAS",
       reasons: ["menção direta ao operador", "sinal de compromisso com data/horário"],
       suggestedAction: "event",
+      operationalScore: 7,
+      urgency: "medium",
+      timeSignal: "tomorrow",
       eventDraft: {
         kind: "google_event",
         summary: "Reunião no CREAS",
@@ -281,11 +285,15 @@ async function run(): Promise<void> {
       createdAt: new Date().toISOString(),
     };
     const alertText = buildMonitoredChannelAlertReply(draft);
+    const summaryText = buildMonitoredChannelAlertSummaryReply(draft);
     const sim = resolveMonitoredAlertReplyAction(draft, "sim");
     const ignore = resolveMonitoredAlertReplyAction(draft, "ignora");
-    results.push(assert(alertText.includes("agenda") && alertText.includes("cria tarefa"), "alert_reply_lists_short_actions"));
+    const register = resolveMonitoredAlertReplyAction(draft, "só registra");
+    results.push(assert(alertText.includes("Possível reunião no institucional") && alertText.includes("crie evento"), "alert_reply_is_operational_and_actionable"));
+    results.push(assert(summaryText.includes("urgência") && summaryText.includes("Se quiser agir"), "summary_reply_is_short_and_operational"));
     results.push(assert(sim.kind === "event", "short_followup_sim_continues_with_suggested_action"));
     results.push(assert(ignore.kind === "ignore", "ignore_closes_monitored_alert_flow"));
+    results.push(assert(register.kind === "register", "register_synonym_closes_without_external_action"));
   }
 
   const failed = results.filter((item) => !item.passed);
