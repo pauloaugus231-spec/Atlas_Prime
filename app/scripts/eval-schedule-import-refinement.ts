@@ -3,6 +3,7 @@ import { buildGoogleEventImportBatchDraftReply, type PendingGoogleEventImportBat
 import {
   cleanScheduleImportTitle,
   refineScheduleImportEvents,
+  resolveScheduleImportReplyCommand,
   resolveScheduleImportModeReply,
 } from "../src/core/schedule-import-refinement.js";
 
@@ -171,17 +172,22 @@ function run() {
     blockCounts: refined.blockCounts,
     modeCounts: refined.modeCounts,
     importMode: refined.mode,
-    assumptions: refined.observations,
+    assumptions: [
+      ...refined.observations,
+      "Horário assumido por turno: manhã.",
+      "Horário assumido por turno: tarde.",
+    ],
   };
   const reply = buildGoogleEventImportBatchDraftReply(draft);
+  const visibleReply = reply.split("\n\nGOOGLE_EVENT_IMPORT_BATCH_DRAFT")[0] ?? reply;
   results.push({
     name: "draft_reply_is_legible",
     passed:
-      reply.includes("Rascunho importável:") &&
-      reply.includes("Informativos/feriados ignorados:") &&
-      reply.includes("Demandas detectadas:") &&
-      reply.includes("Opções antes de importar:"),
-    detail: reply,
+      visibleReply.includes("Rascunho importável:") &&
+      visibleReply.includes("Informativos/feriados ignorados:") &&
+      visibleReply.includes("Demandas detectadas:") &&
+      visibleReply.includes("Opções antes de importar:"),
+    detail: visibleReply,
   });
 
   results.push({
@@ -196,6 +202,88 @@ function run() {
       resolveScheduleImportModeReply("1") === "self_only" &&
       resolveScheduleImportModeReply("a segunda") === "self_plus_structural" &&
       resolveScheduleImportModeReply("importar tudo") === "full_block",
+  });
+
+  results.push({
+    name: "draft_reply_uses_preview_label_instead_of_selected_mode",
+    passed:
+      visibleReply.includes("Prévia exibida no modo:") &&
+      !visibleReply.includes("Modo selecionado:"),
+    detail: visibleReply,
+  });
+
+  results.push({
+    name: "draft_reply_does_not_repeat_turn_when_time_is_explicit",
+    passed:
+      !visibleReply.includes("08:00-12:00 manhã") &&
+      !visibleReply.includes("13:30-17:00 tarde"),
+    detail: visibleReply,
+  });
+
+  const duplicatedDraftReply = buildGoogleEventImportBatchDraftReply({
+    ...draft,
+    ignoredItems: [
+      {
+        summary: "Simone - Fora da Carga",
+        category: "informational",
+        reason: "informativo",
+        date: "17/04",
+        shift: "manhã",
+      },
+      {
+        summary: "Simone - Fora da Carga",
+        category: "informational",
+        reason: "informativo",
+        date: "17/04",
+        shift: "tarde",
+      },
+      {
+        summary: "Simone - Fora da Carga",
+        category: "informational",
+        reason: "informativo",
+        date: "17/04",
+        shift: "tarde",
+      },
+    ],
+    demands: [],
+    ambiguousItems: [],
+  });
+  results.push({
+    name: "informational_duplicates_are_grouped_cleanly",
+    passed:
+      duplicatedDraftReply.includes("Simone - Fora da Carga (17/04 manhã e tarde)") &&
+      !duplicatedDraftReply.includes("17/04 manhã; 17/04 tarde; 17/04 tarde"),
+    detail: duplicatedDraftReply,
+  });
+
+  results.push({
+    name: "observations_are_compacted",
+    passed:
+      visibleReply.includes("Alguns horários foram assumidos por turno: manhã 08:00-12:00, tarde 13:30-17:00.") &&
+      !visibleReply.includes("Horário assumido por turno: manhã.") &&
+      !visibleReply.includes("Horário assumido por turno: tarde."),
+    detail: visibleReply,
+  });
+
+  results.push({
+    name: "combined_confirmation_2_e_agendar_is_understood",
+    passed:
+      resolveScheduleImportReplyCommand("2 e agendar")?.mode === "self_plus_structural" &&
+      resolveScheduleImportReplyCommand("2 e agendar")?.confirm === true,
+  });
+
+  results.push({
+    name: "combined_confirmation_agendar_modo_2_is_understood",
+    passed:
+      resolveScheduleImportReplyCommand("agendar modo 2")?.mode === "self_plus_structural" &&
+      resolveScheduleImportReplyCommand("agendar modo 2")?.confirm === true,
+  });
+
+  results.push({
+    name: "combined_confirmation_importar_2_is_understood",
+    passed:
+      resolveScheduleImportReplyCommand("importar 2")?.mode === "self_plus_structural" &&
+      resolveScheduleImportReplyCommand("importar 2")?.confirm === true,
   });
 
   results.push({

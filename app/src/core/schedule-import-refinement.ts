@@ -127,6 +127,18 @@ function getLocalTime(value: string, timezone: string): string | undefined {
   }).format(date);
 }
 
+function getLocalDayMonth(value: string, timezone: string): string | undefined {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return undefined;
+  }
+  return new Intl.DateTimeFormat("pt-BR", {
+    timeZone: timezone,
+    day: "2-digit",
+    month: "2-digit",
+  }).format(date);
+}
+
 function inferShift(event: ScheduleImportRefinementInputEvent): "manhã" | "tarde" | "integral" | undefined {
   const source = normalize(`${event.sourceLabel ?? ""} ${event.summary} ${event.rawText ?? ""}`);
   if (source.includes("manha")) {
@@ -265,6 +277,7 @@ function toIgnoredItem(event: ScheduleImportRefinementInputEvent, category: Excl
     summary: cleanScheduleImportTitle(event.summary),
     category,
     reason: ignoredReason(category),
+    date: getLocalDayMonth(event.start, event.timezone),
     shift,
     sourceLabel: event.sourceLabel,
     relevanceLevel: relevanceFor(event, false, category),
@@ -292,16 +305,52 @@ export function selectScheduleImportEvents(
 
 export function resolveScheduleImportModeReply(text: string): ScheduleImportMode | undefined {
   const normalized = normalize(text);
-  if (/^(1|primeira|a primeira|so os meus|só os meus|meus|apenas paulo|self_only)$/.test(normalized)) {
+  const shortReply = normalized.split(/\s+/).length <= 6;
+  if (
+    (/(\b|^)(1|primeira|a primeira)(\b|$)/.test(normalized) && shortReply) ||
+    /\b(so os meus|só os meus|meus|apenas paulo|self_only)\b/.test(normalized)
+  ) {
     return "self_only";
   }
-  if (/^(2|segunda|a segunda|meus eventos|reunioes importantes|reuniões importantes|self_plus_structural)$/.test(normalized)) {
+  if (
+    (/(\b|^)(2|segunda|a segunda)(\b|$)/.test(normalized) && shortReply) ||
+    /\b(meus eventos|reunioes importantes|reuniões importantes|self_plus_structural)\b/.test(normalized)
+  ) {
     return "self_plus_structural";
   }
-  if (/^(3|terceira|a terceira|tudo|importar tudo|full_block)$/.test(normalized)) {
+  if (
+    (/(\b|^)(3|terceira|a terceira)(\b|$)/.test(normalized) && shortReply) ||
+    /\b(tudo|importar tudo|full_block)\b/.test(normalized)
+  ) {
     return "full_block";
   }
   return undefined;
+}
+
+export interface ScheduleImportReplyCommand {
+  mode?: ScheduleImportMode;
+  confirm: boolean;
+}
+
+export function resolveScheduleImportReplyCommand(text: string): ScheduleImportReplyCommand | undefined {
+  const normalized = normalize(text);
+  if (!normalized) {
+    return undefined;
+  }
+
+  const mode = resolveScheduleImportModeReply(text);
+  const confirm =
+    /^agendar\b/.test(normalized) ||
+    /^agende\b/.test(normalized) ||
+    /^importar\b/.test(normalized) ||
+    /\be agendar\b/.test(normalized) ||
+    /\be seguir\b/.test(normalized);
+
+  if (!mode && !confirm) {
+    return undefined;
+  }
+
+  return { mode, confirm };
 }
 
 export function refineScheduleImportEvents(

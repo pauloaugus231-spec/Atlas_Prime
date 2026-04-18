@@ -1091,15 +1091,89 @@ export function buildGoogleEventDeleteBatchDraftReply(draft: PendingGoogleEventD
 function formatImportEventLine(event: PendingGoogleEventImportBatchItem, timezone: string): string {
   const start = formatDraftDateTime(event.start, timezone);
   const endTime = formatDraftDateTime(event.end, timezone).split(" ").pop();
-  const shift = event.shift ? ` ${event.shift}` : "";
-  const assumed = event.assumedTime ? " (horário por turno)" : "";
   const location = event.location ? ` | ${event.location}` : "";
-  return `- ${start}${endTime ? `-${endTime}` : ""}${shift} - ${event.summary}${location}${assumed}`;
+  return `- ${start}${endTime ? `-${endTime}` : ""} - ${event.summary}${location}`;
 }
 
-function formatImportIgnoredLine(item: PendingGoogleEventImportBatchIgnoredItem): string {
-  const prefix = item.shift ? `${item.shift} - ` : "";
-  return `- ${prefix}${item.summary} (${item.reason})`;
+function formatImportDateShiftContext(items: PendingGoogleEventImportBatchIgnoredItem[]): string | undefined {
+  const grouped = new Map<string, Set<string>>();
+  for (const item of items) {
+    const dateKey = item.date?.trim() || "";
+    const shifts = grouped.get(dateKey) ?? new Set<string>();
+    if (item.shift?.trim()) {
+      shifts.add(item.shift.trim());
+    }
+    grouped.set(dateKey, shifts);
+  }
+
+  const parts = Array.from(grouped.entries())
+    .map(([date, shifts]) => {
+      const orderedShifts = ["manhã", "tarde", "integral"].filter((shift) => shifts.has(shift));
+      if (!date && orderedShifts.length === 0) {
+        return "";
+      }
+      if (!date) {
+        return orderedShifts.join(" e ");
+      }
+      if (orderedShifts.length === 0) {
+        return date;
+      }
+      return `${date} ${orderedShifts.join(" e ")}`;
+    })
+    .filter(Boolean);
+
+  if (parts.length === 0) {
+    return undefined;
+  }
+  return parts.join("; ");
+}
+
+function formatGroupedImportIgnoredLines(items: PendingGoogleEventImportBatchIgnoredItem[]): string[] {
+  const groups = new Map<string, PendingGoogleEventImportBatchIgnoredItem[]>();
+  for (const item of items) {
+    const key = `${item.category}|${normalize(item.summary)}`;
+    const list = groups.get(key) ?? [];
+    const duplicate = list.some((entry) =>
+      normalize(entry.date ?? "") === normalize(item.date ?? "") &&
+      normalize(entry.shift ?? "") === normalize(item.shift ?? ""));
+    if (!duplicate) {
+      list.push(item);
+    }
+    groups.set(key, list);
+  }
+
+  return Array.from(groups.values()).map((group) => {
+    const [first] = group;
+    const context = formatImportDateShiftContext(group);
+    return context ? `- ${first.summary} (${context})` : `- ${first.summary}`;
+  });
+}
+
+function compactImportAssumptions(assumptions: string[]): string[] {
+  const unique = assumptions.filter((item, index, list) => list.indexOf(item) === index);
+  const shiftAssumptions = unique.filter((item) => /^Horário assumido por turno:/i.test(item));
+  const remaining = unique.filter((item) => !/^Horário assumido por turno:/i.test(item));
+
+  if (shiftAssumptions.length === 0) {
+    return remaining;
+  }
+
+  const normalized = shiftAssumptions.map((item) => normalize(item));
+  const shiftLabels: string[] = [];
+  if (normalized.some((item) => item.includes("manha"))) {
+    shiftLabels.push("manhã 08:00-12:00");
+  }
+  if (normalized.some((item) => item.includes("tarde"))) {
+    shiftLabels.push("tarde 13:30-17:00");
+  }
+  if (normalized.some((item) => item.includes("integral"))) {
+    shiftLabels.push("integral 08:00-17:00");
+  }
+
+  return [
+    `Alguns horários foram assumidos por turno: ${shiftLabels.join(", ")}.`,
+    ...remaining,
+  ];
 }
 
 function formatImportModeLabel(mode: PendingGoogleEventImportBatchDraft["importMode"]): string {
@@ -1118,7 +1192,7 @@ export function buildGoogleEventImportBatchDraftReply(draft: PendingGoogleEventI
   const ignored = draft.ignoredItems?.filter((item) => item.category === "informational" || item.category === "holiday") ?? [];
   const demands = draft.demands ?? draft.ignoredItems?.filter((item) => item.category === "demand") ?? [];
   const ambiguous = draft.ambiguousItems ?? draft.ignoredItems?.filter((item) => item.category === "ambiguous") ?? [];
-  const assumptions = draft.assumptions ?? [];
+  const assumptions = compactImportAssumptions(draft.assumptions ?? []);
 
   return [
     "Rascunho de importação pronto.",
@@ -1126,7 +1200,7 @@ export function buildGoogleEventImportBatchDraftReply(draft: PendingGoogleEventI
     counts
       ? `Identifiquei ${counts.total} bloco(s): ${counts.event_importable} importável(is), ${counts.informational} informativo(s), ${counts.demand} demanda(s), ${counts.holiday} feriado(s) e ${counts.ambiguous} ambíguo(s).`
       : `Eventos importáveis no rascunho: ${draft.events.length}.`,
-    `Modo selecionado: ${formatImportModeLabel(draft.importMode)}.`,
+    `Prévia exibida no modo: ${formatImportModeLabel(draft.importMode)}.`,
     ...(typeof draft.relevantCount === "number" ? [`Relevantes para você: ${draft.relevantCount}.`] : []),
     "",
     "Rascunho importável:",
@@ -1137,21 +1211,21 @@ export function buildGoogleEventImportBatchDraftReply(draft: PendingGoogleEventI
       ? [
           "",
           "Informativos/feriados ignorados:",
-          ...ignored.map((item) => formatImportIgnoredLine(item)),
+          ...formatGroupedImportIgnoredLines(ignored),
         ]
       : []),
     ...(demands.length
       ? [
           "",
           "Demandas detectadas:",
-          ...demands.map((item) => formatImportIgnoredLine(item)),
+          ...formatGroupedImportIgnoredLines(demands),
         ]
       : []),
     ...(ambiguous.length
       ? [
           "",
           "Blocos ambíguos para revisão:",
-          ...ambiguous.map((item) => formatImportIgnoredLine(item)),
+          ...formatGroupedImportIgnoredLines(ambiguous),
         ]
       : []),
     ...(assumptions.length
@@ -1167,7 +1241,7 @@ export function buildGoogleEventImportBatchDraftReply(draft: PendingGoogleEventI
     `2. importar meus eventos + reuniões importantes${modeCounts ? ` (${modeCounts.self_plus_structural})` : ""}`,
     `3. importar tudo que parece evento real${modeCounts ? ` (${modeCounts.full_block})` : ""}`,
     "",
-    "Responda `1`, `2` ou `3` para ajustar o lote. Confirme com `agendar`. Para descartar, use `cancelar rascunho`.",
+    "Responda `1`, `2` ou `3` para ajustar o lote. Para já seguir, você pode usar `2 e agendar`, `agendar modo 2` ou `importar 2`. Para descartar, use `cancelar rascunho`.",
     "",
     "GOOGLE_EVENT_IMPORT_BATCH_DRAFT",
     JSON.stringify(draft),

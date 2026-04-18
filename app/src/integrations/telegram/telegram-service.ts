@@ -22,6 +22,7 @@ import {
 } from "../../core/google-draft-utils.js";
 import {
   refineScheduleImportEvents,
+  resolveScheduleImportReplyCommand,
   resolveScheduleImportModeReply,
   selectScheduleImportEvents,
   type ScheduleImportIgnoredItem,
@@ -2512,6 +2513,37 @@ export class TelegramService {
       return;
     }
 
+    const importBatchCandidate = this.pendingActionDrafts.get(message.chat.id)
+      ?? this.tryHydrateContinuablePendingDraft(message.chat.id);
+    const importBatchDraft = importBatchCandidate?.kind === "google_event_import_batch"
+      ? importBatchCandidate
+      : undefined;
+    const importBatchCommand = importBatchDraft
+      ? resolveScheduleImportReplyCommand(normalizedText)
+      : undefined;
+    if (importBatchDraft && importBatchCommand) {
+      const workingDraft = importBatchCommand.mode
+        ? this.applyScheduleImportMode(importBatchDraft, importBatchCommand.mode)
+        : importBatchDraft;
+      if (importBatchCommand.mode) {
+        this.pendingActionDrafts.set(message.chat.id, workingDraft);
+        this.persistPendingApproval(message.chat.id, workingDraft);
+      }
+      if (importBatchCommand.confirm) {
+        await this.handlePendingActionConfirmation(message, normalizedText, workingDraft);
+        return;
+      }
+      await this.sendText(
+        message.chat.id,
+        this.buildScheduleImportModeChangedReply(workingDraft),
+        {
+          reply_to_message_id: message.message_id,
+          disable_web_page_preview: true,
+        },
+      );
+      return;
+    }
+
     if (isExplicitDeleteConfirmation(normalizedText)) {
       const pendingDraft = this.tryHydratePendingDraftForConfirmation(message.chat.id)
         ?? this.tryHydrateDeleteDraftFromRecentAssistantTurn(message.chat.id);
@@ -2703,7 +2735,7 @@ export class TelegramService {
         message.chat.id,
         [
           "Há uma importação de agenda pendente neste chat.",
-          "Responda `1`, `2` ou `3` para ajustar o modo; confirme com `agendar`; descarte com `cancelar rascunho`; ou envie novo PDF/print para substituir o lote atual.",
+          "Responda `1`, `2` ou `3` para ajustar o modo; use `2 e agendar`, `agendar modo 2` ou `importar 2` para seguir; descarte com `cancelar rascunho`; ou envie novo PDF/print para substituir o lote atual.",
         ].join("\n"),
         {
           reply_to_message_id: message.message_id,
