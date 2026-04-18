@@ -287,6 +287,11 @@ jobs:
                           import time
                           time.sleep(3)
                           continue
+                      if error.status == 404 and isinstance(error.payload, dict) and (
+                          error.payload.get("pairingCode") or error.payload.get("code")
+                      ):
+                          connect_response = error.payload
+                          break
                       last_error = error
                       import time
                       time.sleep(2)
