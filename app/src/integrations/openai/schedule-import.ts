@@ -18,6 +18,13 @@ interface OpenAIChatCompletionResponse {
   }>;
 }
 
+export type ScheduleImportCategory =
+  | "event_importable"
+  | "informational"
+  | "demand"
+  | "holiday"
+  | "ambiguous";
+
 interface ScheduleImportEvent {
   date: string;
   startTime: string;
@@ -27,10 +34,23 @@ interface ScheduleImportEvent {
   location?: string;
   shift?: string;
   confidence?: number;
+  category?: ScheduleImportCategory;
+  rawText?: string;
+  assumedTime?: boolean;
+}
+
+export interface ScheduleImportNonEvent {
+  summary: string;
+  category: Exclude<ScheduleImportCategory, "event_importable">;
+  reason?: string;
+  date?: string;
+  shift?: string;
+  rawText?: string;
 }
 
 interface ScheduleImportModelResponse {
   events?: ScheduleImportEvent[];
+  nonEvents?: ScheduleImportNonEvent[];
   assumptions?: string[];
   uncertainties?: string[];
 }
@@ -45,10 +65,14 @@ export interface ScheduleImportDraftSeed {
   reminderMinutes: number;
   confidence?: number;
   sourceLabel?: string;
+  category?: ScheduleImportCategory;
+  rawText?: string;
+  assumedTime?: boolean;
 }
 
 export interface ScheduleImportParseResult {
   events: ScheduleImportDraftSeed[];
+  nonEvents: ScheduleImportNonEvent[];
   assumptions: string[];
   uncertainties: string[];
 }
@@ -126,6 +150,14 @@ function validateTime(value: string): boolean {
   return /^\d{2}:\d{2}$/.test(value);
 }
 
+function isScheduleImportCategory(value: unknown): value is ScheduleImportCategory {
+  return value === "event_importable" ||
+    value === "informational" ||
+    value === "demand" ||
+    value === "holiday" ||
+    value === "ambiguous";
+}
+
 function sanitizeEvent(event: ScheduleImportEvent, timeZone: string): ScheduleImportDraftSeed | null {
   const summary = normalizeText(event.summary);
   if (!summary || !validateDate(event.date) || !validateTime(event.startTime) || !validateTime(event.endTime)) {
@@ -142,6 +174,25 @@ function sanitizeEvent(event: ScheduleImportEvent, timeZone: string): ScheduleIm
     reminderMinutes: 30,
     confidence: typeof event.confidence === "number" ? event.confidence : undefined,
     sourceLabel: normalizeText(event.shift),
+    category: isScheduleImportCategory(event.category) ? event.category : undefined,
+    rawText: normalizeText(event.rawText),
+    assumedTime: event.assumedTime === true,
+  };
+}
+
+function sanitizeNonEvent(item: ScheduleImportNonEvent): ScheduleImportNonEvent | null {
+  const summary = normalizeText(item.summary);
+  const category = item.category as ScheduleImportCategory;
+  if (!summary || category === "event_importable" || !isScheduleImportCategory(category)) {
+    return null;
+  }
+  return {
+    summary,
+    category,
+    reason: normalizeText(item.reason),
+    date: item.date && validateDate(item.date) ? item.date : undefined,
+    shift: normalizeText(item.shift),
+    rawText: normalizeText(item.rawText),
   };
 }
 
@@ -267,6 +318,17 @@ export class OpenAiScheduleImportService {
             location: "Casa da Sopa",
             shift: "manhã",
             confidence: 0.96,
+            category: "event_importable",
+            rawText: "linha original lida no documento",
+            assumedTime: true,
+          },
+        ],
+        nonEvents: [
+          {
+            summary: "Joacy e Luiz Eduardo: ver questão do RG",
+            category: "demand",
+            reason: "item estava na seção Demandas",
+            rawText: "Demandas: Joacy e Luiz Eduardo: ver questão do RG",
           },
         ],
         assumptions: ["..."],
@@ -280,7 +342,16 @@ export class OpenAiScheduleImportService {
       "- Se houver turno 'manhã' e não houver horário explícito, use 08:00-12:00.",
       "- Se houver turno 'tarde' e não houver horário explícito, use 13:30-17:00.",
       "- Se houver turno integral e não houver horário explícito, use 08:00-17:00.",
+      "- Se houver horário explícito no material, use o horário explícito em vez do padrão por turno.",
+      "- Marque `assumedTime=true` quando o horário veio do padrão do turno.",
+      "- Não junte linhas de pessoas diferentes em um único evento se isso misturar atividades distintas.",
+      "- Use `category=event_importable` para compromisso real, reunião ou atividade de agenda.",
+      "- Use `nonEvents` para `FERIADO`, itens de seção `Demandas:`, informativos e blocos ambíguos que não devem virar evento direto.",
+      "- `FERIADO` deve ser `category=holiday`, não evento comum.",
+      "- Itens de `Demandas:` devem ser `category=demand`, não evento comum.",
+      "- Informativos como `Fora da carga`, `TI`, folga ou observações soltas devem ser `category=informational`.",
       "- Quando houver atividade + local, coloque o local em `location` e o restante em `summary`.",
+      "- Em `summary`, prefira título curto e operacional; não cole blocos inteiros.",
       "- Preserve o texto em português.",
       ...(input.caption?.trim() ? [`- Contexto adicional do usuário: ${input.caption.trim()}`] : []),
       input.text
@@ -346,6 +417,9 @@ export class OpenAiScheduleImportService {
     const events = (parsed.events ?? [])
       .map((event) => sanitizeEvent(event, timeZone))
       .filter((event): event is ScheduleImportDraftSeed => Boolean(event));
+    const nonEvents = (parsed.nonEvents ?? [])
+      .map((item) => sanitizeNonEvent(item))
+      .filter((item): item is ScheduleImportNonEvent => Boolean(item));
 
     if (events.length === 0) {
       this.logger.warn("Schedule import produced no valid events", {
@@ -356,6 +430,7 @@ export class OpenAiScheduleImportService {
 
     return {
       events,
+      nonEvents,
       assumptions: Array.isArray(parsed.assumptions)
         ? parsed.assumptions.map((item) => String(item).trim()).filter(Boolean)
         : [],

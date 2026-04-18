@@ -69,6 +69,22 @@ export interface PendingGoogleEventImportBatchItem extends PendingGoogleEventDra
   matchedTerms?: string[];
   sourceLabel?: string;
   confidence?: number;
+  originalSummary?: string;
+  importCategory?: "event_importable" | "informational" | "demand" | "holiday" | "ambiguous";
+  relevanceLevel?: "high" | "medium" | "low";
+  shift?: "manhã" | "tarde" | "integral";
+  assumedTime?: boolean;
+  structuralEvent?: boolean;
+}
+
+export interface PendingGoogleEventImportBatchIgnoredItem {
+  summary: string;
+  category: "informational" | "demand" | "holiday" | "ambiguous";
+  reason: string;
+  date?: string;
+  shift?: string;
+  sourceLabel?: string;
+  relevanceLevel?: "high" | "medium" | "low";
 }
 
 export interface PendingGoogleEventImportBatchDraft {
@@ -81,6 +97,24 @@ export interface PendingGoogleEventImportBatchDraft {
   relevantCount?: number;
   skippedCount?: number;
   assumptions?: string[];
+  importMode?: "self_only" | "self_plus_structural" | "full_block";
+  allImportableEvents?: PendingGoogleEventImportBatchItem[];
+  ignoredItems?: PendingGoogleEventImportBatchIgnoredItem[];
+  demands?: PendingGoogleEventImportBatchIgnoredItem[];
+  ambiguousItems?: PendingGoogleEventImportBatchIgnoredItem[];
+  blockCounts?: {
+    total: number;
+    event_importable: number;
+    informational: number;
+    demand: number;
+    holiday: number;
+    ambiguous: number;
+  };
+  modeCounts?: {
+    self_only: number;
+    self_plus_structural: number;
+    full_block: number;
+  };
   events: PendingGoogleEventImportBatchItem[];
 }
 
@@ -1054,16 +1088,86 @@ export function buildGoogleEventDeleteBatchDraftReply(draft: PendingGoogleEventD
   ].join("\n");
 }
 
+function formatImportEventLine(event: PendingGoogleEventImportBatchItem, timezone: string): string {
+  const start = formatDraftDateTime(event.start, timezone);
+  const endTime = formatDraftDateTime(event.end, timezone).split(" ").pop();
+  const shift = event.shift ? ` ${event.shift}` : "";
+  const assumed = event.assumedTime ? " (horário por turno)" : "";
+  const location = event.location ? ` | ${event.location}` : "";
+  return `- ${start}${endTime ? `-${endTime}` : ""}${shift} - ${event.summary}${location}${assumed}`;
+}
+
+function formatImportIgnoredLine(item: PendingGoogleEventImportBatchIgnoredItem): string {
+  const prefix = item.shift ? `${item.shift} - ` : "";
+  return `- ${prefix}${item.summary} (${item.reason})`;
+}
+
+function formatImportModeLabel(mode: PendingGoogleEventImportBatchDraft["importMode"]): string {
+  if (mode === "self_only") {
+    return "só eventos com Paulo";
+  }
+  if (mode === "full_block") {
+    return "todos os eventos importáveis";
+  }
+  return "Paulo + reuniões importantes";
+}
+
 export function buildGoogleEventImportBatchDraftReply(draft: PendingGoogleEventImportBatchDraft): string {
+  const counts = draft.blockCounts;
+  const modeCounts = draft.modeCounts;
+  const ignored = draft.ignoredItems?.filter((item) => item.category === "informational" || item.category === "holiday") ?? [];
+  const demands = draft.demands ?? draft.ignoredItems?.filter((item) => item.category === "demand") ?? [];
+  const ambiguous = draft.ambiguousItems ?? draft.ignoredItems?.filter((item) => item.category === "ambiguous") ?? [];
+  const assumptions = draft.assumptions ?? [];
+
   return [
-    `Rascunho de importação pronto. Eventos extraídos: ${draft.events.length}.`,
-    ...(typeof draft.relevantCount === "number" ? [`- Relevantes para você: ${draft.relevantCount}`] : []),
-    ...(draft.sourceLabel ? [`- Origem: ${draft.sourceLabel}`] : []),
-    ...draft.events.map((event) =>
-      `- ${event.personallyRelevant ? "*" : ""}${event.summary} | ${formatDraftDateTime(event.start, draft.timezone)}${event.location ? ` | ${event.location}` : ""}`
-    ),
-    ...(draft.assumptions?.length ? ["- Observações: " + draft.assumptions.join(" | ")] : []),
-    "Confirme com `sim, quero` ou `agendar`. Para descartar, use `cancelar rascunho`.",
+    "Rascunho de importação pronto.",
+    ...(draft.sourceLabel ? [`Origem: ${draft.sourceLabel}`] : []),
+    counts
+      ? `Identifiquei ${counts.total} bloco(s): ${counts.event_importable} importável(is), ${counts.informational} informativo(s), ${counts.demand} demanda(s), ${counts.holiday} feriado(s) e ${counts.ambiguous} ambíguo(s).`
+      : `Eventos importáveis no rascunho: ${draft.events.length}.`,
+    `Modo selecionado: ${formatImportModeLabel(draft.importMode)}.`,
+    ...(typeof draft.relevantCount === "number" ? [`Relevantes para você: ${draft.relevantCount}.`] : []),
+    "",
+    "Rascunho importável:",
+    ...(draft.events.length > 0
+      ? draft.events.map((event) => formatImportEventLine(event, draft.timezone))
+      : ["- Nenhum evento selecionado neste modo."]),
+    ...(ignored.length
+      ? [
+          "",
+          "Informativos/feriados ignorados:",
+          ...ignored.map((item) => formatImportIgnoredLine(item)),
+        ]
+      : []),
+    ...(demands.length
+      ? [
+          "",
+          "Demandas detectadas:",
+          ...demands.map((item) => formatImportIgnoredLine(item)),
+        ]
+      : []),
+    ...(ambiguous.length
+      ? [
+          "",
+          "Blocos ambíguos para revisão:",
+          ...ambiguous.map((item) => formatImportIgnoredLine(item)),
+        ]
+      : []),
+    ...(assumptions.length
+      ? [
+          "",
+          "Observações:",
+          ...assumptions.map((item) => `- ${item}`),
+        ]
+      : []),
+    "",
+    "Opções antes de importar:",
+    `1. importar só os que têm Paulo${modeCounts ? ` (${modeCounts.self_only})` : ""}`,
+    `2. importar meus eventos + reuniões importantes${modeCounts ? ` (${modeCounts.self_plus_structural})` : ""}`,
+    `3. importar tudo que parece evento real${modeCounts ? ` (${modeCounts.full_block})` : ""}`,
+    "",
+    "Responda `1`, `2` ou `3` para ajustar o lote. Confirme com `agendar`. Para descartar, use `cancelar rascunho`.",
     "",
     "GOOGLE_EVENT_IMPORT_BATCH_DRAFT",
     JSON.stringify(draft),

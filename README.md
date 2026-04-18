@@ -510,6 +510,8 @@ Estado atual:
 - existe politica explicita de autonomia por intencao: leituras simples rodam direto; escrita e acoes destrutivas continuam confirmadas
 - o Telegram suporta modo operacional de rua/plantao por chat, e esse modo agora afeta briefing, agenda do dia/amanha, conflitos e proximas acoes com respostas mais compactas
 - o Telegram aceita voz assincrona quando `VOICE_ENABLED=true`: o Atlas baixa o audio, transcreve para texto, passa por uma camada de normalizacao semantica antes do roteamento e responde em texto; resposta em audio/TTS fica para uma etapa futura
+- tarefas com imagem, print, foto ou PDF passam por um fluxo visual/documental guiado: o Atlas explica o que vai tentar extrair, guarda o contexto da tarefa, sugere o melhor formato alternativo se a leitura falhar e continua a missão quando novos arquivos chegam
+- importação de agenda por print/PDF agora aplica regras operacionais para a abordagem: `manhã` = 08:00-12:00, `tarde` = 13:30-17:00, títulos limpos, demandas/feriados separados e modos de importação `só Paulo`, `Paulo + reuniões importantes` ou `tudo importável`
 - o Atlas agora distingue canais diretos do operador e canais monitorados: Telegram continua como operador/admin maduro, e o WhatsApp institucional pode operar como canal monitorado que gera alertas curtos, mais humanos e operacionais no canal pessoal do operador antes de qualquer ação
 - quando existe um alerta monitorado pendente no Telegram, apenas respostas curtas do próprio alerta continuam esse fluxo; se o usuário mandar um pedido novo completo, o Atlas abandona o alerta pendente silenciosamente e segue com o novo pedido normal
 - o Atlas consegue revisar conflitos, duplicidades e nomes inconsistentes na agenda sem alterar nada sozinho
@@ -619,6 +621,26 @@ VOICE_TEMP_DIR=/workspace/.agent-state/voice-temp
 VOICE_STT_TIMEOUT_MS=120000
 VOICE_OPENAI_MODEL=gpt-4o-mini-transcribe
 ```
+
+## Tarefas Visuais e Documentais
+
+Quando o Telegram recebe imagem, print, foto ou PDF, o Atlas cria uma tarefa visual/documental leve antes de tentar qualquer extração. Esse fluxo identifica o objetivo provável, como agenda por print/PDF, análise de perfil/social, extração de tarefas ou revisão de documento, e responde com:
+
+- o que será tentado
+- arquivo ou imagem usada como origem
+- dados esperados
+- melhor formato alternativo se a leitura falhar
+- continuidade da tarefa para próximos arquivos
+
+Hoje, a extração automática estruturada continua focada em agenda por PDF/print. Para outros domínios visuais, o Atlas mantém o contexto aberto e conduz o próximo passo sem fingir uma análise completa. Se a extração falhar, a missão não é encerrada: o Atlas explica o motivo curto, sugere o próximo melhor formato e continua aguardando novo material no mesmo contexto.
+
+Para agendas semanais da abordagem, o rascunho de importação é refinado antes da confirmação:
+
+- se o material trouxer apenas turno, `manhã` vira 08:00-12:00 e `tarde` vira 13:30-17:00; horários explícitos continuam prevalecendo
+- blocos importáveis, informativos, demandas, feriados e ambíguos aparecem separados para revisão
+- títulos são normalizados para ficarem curtos e operacionais, evitando blocos crus como título do evento
+- o usuário pode alternar o lote antes de gravar: `1` importa só eventos com Paulo, `2` importa Paulo + reuniões importantes e `3` importa tudo que parece evento real
+- falhas parciais não bloqueiam o restante: o Atlas mantém os eventos claros e pede apenas o recorte complementar do trecho duvidoso
 
 Para um caminho local/open, use `VOICE_STT_PROVIDER=command` com `VOICE_STT_COMMAND` e `VOICE_STT_ARGS`; o comando deve devolver texto no stdout ou JSON simples com `{ "text": "..." }`. Em falha de download, limite ou transcricao, o Atlas responde com erro curto e nao quebra o fluxo normal do Telegram.
 
