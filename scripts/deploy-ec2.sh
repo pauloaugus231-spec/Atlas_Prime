@@ -99,6 +99,11 @@ profile_enabled() {
 }
 
 stop_inactive_profile_containers() {
+  if ! profile_enabled "ollama"; then
+    log "Parando container opcional do Ollama fora do profile ativo"
+    sudo docker stop atlas-ollama >/dev/null 2>&1 || true
+  fi
+
   if profile_enabled "whatsapp"; then
     return
   fi
@@ -109,6 +114,31 @@ stop_inactive_profile_containers() {
     atlas-evolution-api \
     atlas-evolution-postgres \
     atlas-evolution-redis >/dev/null 2>&1 || true
+}
+
+pull_ollama_model_if_enabled() {
+  if ! profile_enabled "ollama"; then
+    return
+  fi
+
+  local pull_on_deploy
+  pull_on_deploy="$(read_env_file_value "OLLAMA_PULL_ON_DEPLOY")"
+  if [[ "$pull_on_deploy" == "false" || "$pull_on_deploy" == "0" ]]; then
+    log "Pull do modelo Ollama ignorado por OLLAMA_PULL_ON_DEPLOY=$pull_on_deploy"
+    return
+  fi
+
+  local model
+  model="$(read_env_file_value "OLLAMA_MODEL")"
+  model="${model:-qwen3:8b}"
+  log "Garantindo modelo Ollama local: $model"
+  for _ in $(seq 1 30); do
+    if docker_compose exec -T ollama ollama list >/dev/null 2>&1; then
+      break
+    fi
+    sleep 2
+  done
+  docker_compose exec -T ollama ollama pull "$model"
 }
 
 if grep -Eq '^OPENAI_API_KEY=.+$' ".env.production"; then
@@ -153,6 +183,7 @@ fi
 
 log "Subindo stack de producao com lock exclusivo"
 docker_compose up -d --build --remove-orphans
+pull_ollama_model_if_enabled
 stop_inactive_profile_containers
 
 deadline=$((SECONDS + HEALTH_TIMEOUT_SECONDS))

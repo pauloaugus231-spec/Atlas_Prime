@@ -162,14 +162,15 @@ function createSpeechToTextProvider(config: AppConfig): SpeechToTextProvider {
     });
   }
 
-  if (!config.llm.apiKey) {
+  const openai = config.llm.openai ?? (config.llm.provider === "openai" ? config.llm : undefined);
+  if (!openai?.apiKey) {
     return new UnavailableSpeechToTextProvider("OpenAI STT requires OPENAI_API_KEY.");
   }
 
   return new OpenAiSpeechToTextProvider(
     new OpenAiAudioTranscriptionService(
-      config.llm.apiKey,
-      config.llm.baseUrl,
+      openai.apiKey,
+      openai.baseUrl,
       config.voice.openAiModel,
       config.voice.sttTimeoutMs,
     ),

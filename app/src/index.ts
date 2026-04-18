@@ -56,6 +56,12 @@ async function main(): Promise<void> {
           provider: config.llm.provider,
           model: config.llm.model,
           llmBaseUrl: config.llm.baseUrl,
+          llmFallback: config.llm.fallback
+            ? {
+                primary: `${config.llm.fallback.primary.provider}:${config.llm.fallback.primary.model}`,
+                secondary: `${config.llm.fallback.secondary.provider}:${config.llm.fallback.secondary.model}`,
+              }
+            : undefined,
           loadedPlugins: loadedPlugins.map((item) => ({
             name: item.plugin.name,
             origin: item.origin,

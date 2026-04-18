@@ -20,12 +20,29 @@ export interface AppPathsConfig {
   whatsappMessagesDbPath: string;
 }
 
-export interface LlmConfig {
-  provider: "ollama" | "openai";
+export type LlmProvider = "ollama" | "openai";
+export type LlmProviderMode = LlmProvider | "fallback";
+
+export interface LlmProviderConfig {
+  provider: LlmProvider;
   baseUrl: string;
   model: string;
   timeoutMs: number;
   apiKey?: string;
+}
+
+export interface LlmConfig {
+  provider: LlmProviderMode;
+  baseUrl: string;
+  model: string;
+  timeoutMs: number;
+  apiKey?: string;
+  ollama?: LlmProviderConfig;
+  openai?: LlmProviderConfig;
+  fallback?: {
+    primary: LlmProviderConfig;
+    secondary: LlmProviderConfig;
+  };
 }
 
 export interface TelegramConfig {

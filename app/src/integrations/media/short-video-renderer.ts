@@ -314,10 +314,11 @@ export class ShortVideoRenderService {
     private readonly config: AppConfig,
     private readonly logger: Logger,
   ) {
-    if (this.config.llm.provider === "openai" && this.config.llm.apiKey) {
+    const openai = this.config.llm.openai ?? (this.config.llm.provider === "openai" ? this.config.llm : undefined);
+    if (openai?.apiKey) {
       this.speech = new OpenAiAudioSpeechService(
-        this.config.llm.apiKey,
-        this.config.llm.baseUrl,
+        openai.apiKey,
+        openai.baseUrl,
       );
     }
     this.fontPath = findFontPath();

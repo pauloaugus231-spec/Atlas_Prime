@@ -27,6 +27,7 @@
     "eval:whatsapp-conversation": "tsx scripts/eval-whatsapp-conversation.ts",
     "eval:monitored-whatsapp": "tsx scripts/eval-monitored-whatsapp.ts",
     "eval:monitored-alert-continuity": "tsx scripts/eval-monitored-alert-continuity.ts",
+    "eval:llm-fallback": "tsx scripts/eval-llm-fallback.ts",
     "eval:morning-brief": "tsx scripts/eval-morning-brief-format.ts",
     "eval:personal-memory": "tsx scripts/eval-personal-memory.ts",
     "dev": "tsx src/index.ts",

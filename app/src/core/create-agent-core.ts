@@ -17,6 +17,7 @@ import { FounderOpsService } from "./founder-ops.js";
 import { GrowthOpsStore } from "./growth-ops.js";
 import { OpenAIClient } from "./openai-client.js";
 import { OllamaClient } from "./ollama-client.js";
+import { FallbackLlmClient } from "./fallback-llm-client.js";
 import { OperationalMemoryStore } from "./operational-memory.js";
 import { PersonalOSService } from "./personal-os.js";
 import { loadToolPlugins } from "./plugin-loader.js";
@@ -28,6 +29,7 @@ import { UserPreferencesStore } from "./user-preferences.js";
 import { WhatsAppMessageStore } from "./whatsapp-message-store.js";
 import { WorkflowOrchestratorStore } from "./workflow-orchestrator.js";
 import type { LlmClient } from "../types/llm.js";
+import type { AppConfig, LlmProviderConfig } from "../types/config.js";
 import { ApprovalPolicyService } from "./approval-policy.js";
 import { ApprovalEngine } from "./approval-engine.js";
 import { WorkflowExecutionRuntime } from "./execution-runtime.js";
@@ -43,6 +45,63 @@ import { ResponseOS } from "./response-os.js";
 import { ContextPackService } from "./context-pack.js";
 import { ContextMemoryService } from "./context-memory.js";
 import { PersonalOperationalMemoryStore } from "./personal-operational-memory.js";
+
+function withLlmProviderConfig(config: AppConfig, providerConfig: LlmProviderConfig): AppConfig {
+  return {
+    ...config,
+    llm: {
+      ...config.llm,
+      provider: providerConfig.provider,
+      baseUrl: providerConfig.baseUrl,
+      model: providerConfig.model,
+      timeoutMs: providerConfig.timeoutMs,
+      apiKey: providerConfig.apiKey,
+    },
+  };
+}
+
+function createSingleLlmClient(
+  config: AppConfig,
+  logger: ReturnType<typeof createLogger>,
+  providerConfig: LlmProviderConfig,
+): LlmClient {
+  const scopedConfig = withLlmProviderConfig(config, providerConfig);
+  return providerConfig.provider === "openai"
+    ? new OpenAIClient(scopedConfig, logger.child({ scope: "openai" }))
+    : new OllamaClient(scopedConfig, logger.child({ scope: "ollama" }));
+}
+
+function createConfiguredLlmClient(config: AppConfig, logger: ReturnType<typeof createLogger>): LlmClient {
+  if (config.llm.provider === "fallback" && config.llm.fallback) {
+    const primary = createSingleLlmClient(config, logger, config.llm.fallback.primary);
+    const secondary = createSingleLlmClient(config, logger, config.llm.fallback.secondary);
+    return new FallbackLlmClient(
+      primary,
+      secondary,
+      logger.child({ scope: "llm-fallback" }),
+      {
+        primaryLabel: `${config.llm.fallback.primary.provider}:${config.llm.fallback.primary.model}`,
+        secondaryLabel: `${config.llm.fallback.secondary.provider}:${config.llm.fallback.secondary.model}`,
+      },
+    );
+  }
+
+  const singleProvider = config.llm.provider === "openai"
+    ? config.llm.openai ?? {
+        provider: "openai" as const,
+        baseUrl: config.llm.baseUrl,
+        model: config.llm.model,
+        timeoutMs: config.llm.timeoutMs,
+        apiKey: config.llm.apiKey,
+      }
+    : config.llm.ollama ?? {
+        provider: "ollama" as const,
+        baseUrl: config.llm.baseUrl,
+        model: config.llm.model,
+        timeoutMs: config.llm.timeoutMs,
+      };
+  return createSingleLlmClient(config, logger, singleProvider);
+}
 
 export async function createAgentCore() {
   const config = loadConfig();
@@ -203,9 +262,7 @@ export async function createAgentCore() {
     createBuiltInCapabilities(),
     logger.child({ scope: "capability-registry" }),
   );
-  const client: LlmClient = config.llm.provider === "openai"
-    ? new OpenAIClient(config, logger.child({ scope: "openai" }))
-    : new OllamaClient(config, logger.child({ scope: "ollama" }));
+  const client: LlmClient = createConfiguredLlmClient(config, logger);
   const intentRouter = new IntentRouter();
   const clarificationEngine = new ClarificationEngine(
     clarifications,

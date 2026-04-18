@@ -33,6 +33,17 @@ services:
       - /srv/atlas/logs:/logs:rw
       - /srv/atlas/state/authorized-projects:/authorized-projects:ro
 
+  ollama:
+    profiles:
+      - ollama
+    image: ollama/ollama:latest
+    container_name: atlas-ollama
+    restart: unless-stopped
+    environment:
+      OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-30m}
+    volumes:
+      - ollama_data:/root/.ollama
+
   whatsapp-sidecar:
     profiles:
       - whatsapp
@@ -128,6 +139,7 @@ services:
       - evolution_instances:/evolution/instances
 
 volumes:
+  ollama_data:
   evolution_postgres_data:
   evolution_redis_data:
   evolution_instances:

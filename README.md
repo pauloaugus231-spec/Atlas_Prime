@@ -124,8 +124,11 @@ HOST_AUTHORIZED_PROJECTS_DIR=/Users/SEU_USUARIO/Agente_Autorizados
 HOST_USER_DOCUMENTS_DIR=/Users/SEU_USUARIO/Documents
 
 OLLAMA_BASE_URL=http://host.docker.internal:11434
-OLLAMA_MODEL=qwen2.5-coder:3b
+OLLAMA_MODEL=qwen3:8b
 OLLAMA_TIMEOUT_SECONDS=60
+LLM_PROVIDER=fallback
+LLM_PRIMARY_PROVIDER=ollama
+LLM_FALLBACK_PROVIDER=openai
 
 TELEGRAM_BOT_TOKEN=seu_token
 TELEGRAM_ALLOWED_USER_IDS=seu_user_id
@@ -170,6 +173,9 @@ GOOGLE_MAX_CONTACTS=10
 Observacoes:
 
 - `OLLAMA_BASE_URL` deve apontar para `http://host.docker.internal:11434`, sem `/v1`
+- `LLM_PROVIDER=fallback` usa Ollama primeiro e cai para OpenAI quando o modelo local falhar ou devolver resposta vazia
+- `LLM_PRIMARY_PROVIDER=ollama` e `LLM_FALLBACK_PROVIDER=openai` mantem custo baixo sem remover a robustez da OpenAI
+- recursos que dependem de OpenAI, como STT, TTS e importacao de agenda por PDF/print, continuam usando `OPENAI_API_KEY` quando configurado
 - `HOST_AUTHORIZED_PROJECTS_DIR` pode ser uma pasta com varios projetos ou um projeto especifico montado em modo somente leitura
 - `HOST_USER_DOCUMENTS_DIR` monta o seu `/Users/.../Documents` dentro do container para que os symlinks de `Agente_Autorizados` resolvam corretamente
 - `TELEGRAM_ALLOWED_USER_IDS` aceita mais de um id separado por virgula
@@ -193,17 +199,20 @@ O segundo script monta os atalhos por dominio dentro de:
 
 ## Baixar modelo no Ollama
 
-Modelo atual recomendado para esta V1:
+Modelo atual recomendado:
 
 ```bash
-ollama pull qwen2.5-coder:3b
+ollama pull qwen3:8b
 ```
+
+Ele passa a ser o primario para reduzir custo de uso diario. A OpenAI fica como fallback quando configurada.
 
 Ele foi escolhido por equilibrio entre:
 
 - velocidade
 - consumo de memoria
-- suporte razoavel a ferramentas
+- qualidade melhor que os modelos locais menores
+- suporte razoavel a ferramentas e respostas operacionais
 
 ## Subir o agente
 
@@ -239,6 +248,8 @@ O compose de producao sobe apenas o core do Atlas por padrao:
 - O deploy cria backup local de `/srv/atlas/state/workspace/.agent-state` em `/srv/atlas/backups` antes de recriar containers.
 
 WhatsApp/Evolution ficam fora do boot padrao para reduzir consumo e evitar concorrencia desnecessaria nos bancos locais. Quando o profile `whatsapp` nao esta ativo, o deploy tambem para containers antigos desse bloco sem apagar volumes. Para ativar esse bloco na nuvem, defina `ATLAS_COMPOSE_PROFILES=whatsapp` ou `COMPOSE_PROFILES=whatsapp` no ambiente de deploy/`.env.production` e rode o deploy novamente.
+
+Ollama na EC2 tambem fica em profile opcional. Para usar `qwen3:8b` na nuvem, habilite o profile `ollama`, aponte `OLLAMA_BASE_URL=http://ollama:11434`, use `LLM_PROVIDER=fallback`, `LLM_PRIMARY_PROVIDER=ollama` e `LLM_FALLBACK_PROVIDER=openai`. Se WhatsApp e Ollama estiverem ativos juntos, use `ATLAS_COMPOSE_PROFILES=whatsapp,ollama`. O deploy executa `ollama pull` para `OLLAMA_MODEL` quando `OLLAMA_PULL_ON_DEPLOY` nao estiver desativado. Antes de ativar, valide RAM livre da EC2 porque modelos 8B podem exigir memoria relevante. O workflow manual `Ollama Fallback Setup` aplica essas variaveis na EC2 e faz redeploy controlado.
 
 Se alterar `.env`, recrie o container:
 
@@ -944,9 +955,10 @@ Comportamento:
 2. adapter do Telegram normaliza a entrada
 3. core monta o prompt do agente
 4. Ollama responde diretamente ou chama ferramenta
-5. registry executa o plugin
-6. core consolida a resposta final
-7. Telegram envia a resposta ao usuario
+5. se o Ollama falhar, o cliente de fallback tenta OpenAI
+6. registry executa o plugin
+7. core consolida a resposta final
+8. Telegram envia a resposta ao usuario
 
 Arquivos principais desse fluxo:
 
@@ -954,6 +966,7 @@ Arquivos principais desse fluxo:
 - [agent-core.ts](/Users/user/Documents/agente_ai/app/src/core/agent-core.ts)
 - [plugin-registry.ts](/Users/user/Documents/agente_ai/app/src/core/plugin-registry.ts)
 - [ollama-client.ts](/Users/user/Documents/agente_ai/app/src/core/ollama-client.ts)
+- [fallback-llm-client.ts](/Users/user/Documents/agente_ai/app/src/core/fallback-llm-client.ts)
 
 ## Troubleshooting
 
@@ -979,6 +992,13 @@ No host:
 ```bash
 curl http://localhost:11434/api/tags
 ollama list
+```
+
+Na EC2 com profile `ollama`:
+
+```bash
+docker compose -f docker-compose.prod.yml logs -f ollama
+docker compose -f docker-compose.prod.yml exec ollama ollama list
 ```
 
 Se necessario:

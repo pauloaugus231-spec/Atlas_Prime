@@ -1,0 +1,107 @@
+name: Ollama Fallback Setup
+
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: Ollama model to run as primary
+        required: false
+        default: qwen3:8b
+
+jobs:
+  setup:
+    runs-on:
+      - self-hosted
+      - atlas-ec2
+    timeout-minutes: 30
+    env:
+      DEPLOY_PATH: /srv/atlas/app
+      OLLAMA_MODEL_NAME: ${{ github.event.inputs.model || 'qwen3:8b' }}
+    steps:
+      - name: Validate target
+        run: |
+          set -euo pipefail
+          test -d "$DEPLOY_PATH" || { echo "Diretorio ausente: $DEPLOY_PATH"; exit 1; }
+          test -f "$DEPLOY_PATH/.env.production" || { echo ".env.production ausente em $DEPLOY_PATH"; exit 1; }
+
+      - name: Enable Ollama-first fallback
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          path = Path(os.environ["DEPLOY_PATH"]) / ".env.production"
+          model = os.environ["OLLAMA_MODEL_NAME"]
+          content = path.read_text(encoding="utf-8")
+          lines = content.splitlines()
+          values = {}
+          for line in lines:
+              stripped = line.strip()
+              if not stripped or stripped.startswith("#") or "=" not in line:
+                  continue
+              key, value = line.split("=", 1)
+              values[key] = value
+
+          profiles = [
+              item.strip()
+              for item in values.get("ATLAS_COMPOSE_PROFILES", values.get("COMPOSE_PROFILES", "")).split(",")
+              if item.strip()
+          ]
+          if "ollama" not in profiles:
+              profiles.append("ollama")
+
+          updates = {
+              "ATLAS_COMPOSE_PROFILES": ",".join(profiles),
+              "LLM_PROVIDER": "fallback",
+              "LLM_PRIMARY_PROVIDER": "ollama",
+              "LLM_FALLBACK_PROVIDER": "openai",
+              "OLLAMA_BASE_URL": "http://ollama:11434",
+              "OLLAMA_MODEL": model,
+              "OLLAMA_TIMEOUT_SECONDS": "30",
+              "OLLAMA_PULL_ON_DEPLOY": "true",
+          }
+
+          out = []
+          seen = set()
+          for line in lines:
+              stripped = line.strip()
+              if not stripped or stripped.startswith("#") or "=" not in line:
+                  out.append(line)
+                  continue
+              key, _ = line.split("=", 1)
+              if key in updates:
+                  out.append(f"{key}={updates[key]}")
+                  seen.add(key)
+              else:
+                  out.append(line)
+
+          for key, value in updates.items():
+              if key not in seen:
+                  out.append(f"{key}={value}")
+
+          path.write_text("\n".join(out).rstrip() + "\n", encoding="utf-8")
+          print("Updated .env.production for Ollama-first fallback")
+          print(f"ATLAS_COMPOSE_PROFILES={updates['ATLAS_COMPOSE_PROFILES']}")
+          print(f"OLLAMA_MODEL={model}")
+          PY
+
+      - name: Redeploy stack
+        run: |
+          set -euo pipefail
+          cd "$DEPLOY_PATH"
+          chmod +x scripts/deploy-ec2.sh
+          ATLAS_APP_DIR="$DEPLOY_PATH" scripts/deploy-ec2.sh
+
+      - name: Verify Ollama
+        run: |
+          set -euo pipefail
+          cd "$DEPLOY_PATH"
+          sudo env COMPOSE_PROFILES="$(grep -E '^ATLAS_COMPOSE_PROFILES=' .env.production | tail -n 1 | cut -d= -f2-)" \
+            docker compose -f docker-compose.prod.yml exec -T ollama ollama list
+
+      - name: Docker status
+        run: |
+          set -euo pipefail
+          cd "$DEPLOY_PATH"
+          sudo docker compose -f docker-compose.prod.yml ps

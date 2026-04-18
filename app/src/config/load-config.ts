@@ -9,6 +9,9 @@ import type {
   ExternalReasoningMode,
   GoogleMapsConfig,
   GoogleWorkspaceConfig,
+  LlmConfig,
+  LlmProvider,
+  LlmProviderConfig,
   MediaConfig,
   OperatorChannelBinding,
   OperatorChannelMode,
@@ -19,7 +22,7 @@ import type {
 import type { LogLevel } from "../types/logger.js";
 
 const DEFAULT_OLLAMA_BASE_URL = "http://host.docker.internal:11434";
-const DEFAULT_OLLAMA_MODEL = "qwen2.5-coder:3b";
+const DEFAULT_OLLAMA_MODEL = "qwen3:8b";
 const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
 const DEFAULT_OPENAI_MODEL = "gpt-5-mini";
 const DEFAULT_MAX_TOOL_ITERATIONS = 6;
@@ -119,6 +122,76 @@ function parseLogLevel(value: string | undefined): LogLevel {
     return value;
   }
   return "info";
+}
+
+function parseLlmProvider(value: string | undefined): LlmProvider | undefined {
+  const normalized = value?.trim().toLowerCase();
+  if (normalized === "ollama" || normalized === "openai") {
+    return normalized;
+  }
+  return undefined;
+}
+
+function buildOllamaLlmConfig(env: NodeJS.ProcessEnv): LlmProviderConfig {
+  return {
+    provider: "ollama",
+    baseUrl: normalizeOllamaBaseUrl(env.OLLAMA_BASE_URL ?? DEFAULT_OLLAMA_BASE_URL),
+    model: env.OLLAMA_MODEL?.trim() || DEFAULT_OLLAMA_MODEL,
+    timeoutMs: parsePositiveInteger(env.OLLAMA_TIMEOUT_SECONDS, 60) * 1000,
+  };
+}
+
+function buildOpenAiLlmConfig(env: NodeJS.ProcessEnv): LlmProviderConfig {
+  return {
+    provider: "openai",
+    baseUrl: normalizeBaseUrl(env.OPENAI_BASE_URL ?? DEFAULT_OPENAI_BASE_URL),
+    model: env.OPENAI_MODEL?.trim() || DEFAULT_OPENAI_MODEL,
+    timeoutMs: parsePositiveInteger(env.OPENAI_TIMEOUT_SECONDS, 60) * 1000,
+    apiKey: env.OPENAI_API_KEY?.trim() || undefined,
+  };
+}
+
+function buildLlmConfig(env: NodeJS.ProcessEnv): LlmConfig {
+  const ollama = buildOllamaLlmConfig(env);
+  const openai = buildOpenAiLlmConfig(env);
+  const requestedProvider = env.LLM_PROVIDER?.trim().toLowerCase();
+
+  if (requestedProvider === "fallback") {
+    const primaryProvider = parseLlmProvider(env.LLM_PRIMARY_PROVIDER) ?? "ollama";
+    const secondaryProvider = parseLlmProvider(env.LLM_FALLBACK_PROVIDER) ?? (
+      primaryProvider === "ollama" ? "openai" : "ollama"
+    );
+    const primary = primaryProvider === "openai" ? openai : ollama;
+    const secondary = secondaryProvider === "openai" ? openai : ollama;
+
+    return {
+      provider: "fallback",
+      baseUrl: primary.baseUrl,
+      model: primary.model,
+      timeoutMs: primary.timeoutMs,
+      apiKey: primary.apiKey,
+      ollama,
+      openai,
+      fallback: {
+        primary,
+        secondary,
+      },
+    };
+  }
+
+  const explicitProvider = parseLlmProvider(requestedProvider);
+  const selectedProvider = explicitProvider ?? (env.OPENAI_API_KEY?.trim() ? "openai" : "ollama");
+  const selected = selectedProvider === "openai" ? openai : ollama;
+
+  return {
+    provider: selected.provider,
+    baseUrl: selected.baseUrl,
+    model: selected.model,
+    timeoutMs: selected.timeoutMs,
+    apiKey: selected.apiKey,
+    ollama,
+    openai,
+  };
 }
 
 function parseWhatsAppUnauthorizedMode(value: string | undefined): WhatsAppUnauthorizedMode {
@@ -533,12 +606,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     ? path.join(appHome, "dist", "plugins")
     : path.join(appHome, "src", "plugins");
   const googleOauthPort = parsePositiveInteger(env.GOOGLE_OAUTH_PORT, 8787);
-  const requestedProvider = env.LLM_PROVIDER?.trim().toLowerCase();
-  const llmProvider = (
-    requestedProvider === "openai" || (!requestedProvider && env.OPENAI_API_KEY?.trim())
-      ? "openai"
-      : "ollama"
-  ) as "ollama" | "openai";
   const defaultSafeExecCommands = [
     ["git", "status", "--short"],
     ["git", "branch", "--show-current"],
@@ -693,22 +760,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       clarificationInboxDbPath: path.join(workspaceDir, ".agent-state", "clarification-inbox.sqlite"),
       whatsappMessagesDbPath: path.join(workspaceDir, ".agent-state", "whatsapp-messages.sqlite"),
     },
-    llm: {
-      provider: llmProvider,
-      baseUrl:
-        llmProvider === "openai"
-          ? normalizeBaseUrl(env.OPENAI_BASE_URL ?? DEFAULT_OPENAI_BASE_URL)
-          : normalizeOllamaBaseUrl(env.OLLAMA_BASE_URL ?? DEFAULT_OLLAMA_BASE_URL),
-      model: llmProvider === "openai"
-        ? env.OPENAI_MODEL?.trim() || DEFAULT_OPENAI_MODEL
-        : env.OLLAMA_MODEL?.trim() || DEFAULT_OLLAMA_MODEL,
-      timeoutMs:
-        parsePositiveInteger(
-          llmProvider === "openai" ? env.OPENAI_TIMEOUT_SECONDS : env.OLLAMA_TIMEOUT_SECONDS,
-          60,
-        ) * 1000,
-      apiKey: llmProvider === "openai" ? env.OPENAI_API_KEY?.trim() || undefined : undefined,
-    },
+    llm: buildLlmConfig(env),
     telegram: {
       botToken: env.TELEGRAM_BOT_TOKEN?.trim() || undefined,
       allowedUserIds: telegramAllowedUserIds,
