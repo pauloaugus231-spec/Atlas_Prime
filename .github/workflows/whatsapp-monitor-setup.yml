@@ -250,14 +250,29 @@ jobs:
                   "number": number,
                   "groupsIgnore": True,
               }
-              try:
-                  create_response = request("POST", "/instance/create", create_body)
-                  created = True
-                  existing = (create_response or {}).get("instance") if isinstance(create_response, dict) else None
-              except ApiError as error:
-                  if error.status != 403:
+              last_create_error = None
+              for _ in range(10):
+                  try:
+                      create_response = request("POST", "/instance/create", create_body)
+                      created = True
+                      existing = (create_response or {}).get("instance") if isinstance(create_response, dict) else None
+                      break
+                  except ApiError as error:
+                      last_create_error = error
+                      if error.status == 403:
+                          import time
+                          time.sleep(3)
+                          continue
                       raise
-                  existing = {"instanceName": instance}
+              if existing is None and last_create_error is not None:
+                  if isinstance(last_create_error, ApiError):
+                      print(json.dumps({
+                          "instance": instance,
+                          "hardReset": hard_reset,
+                          "createErrorStatus": last_create_error.status,
+                          "createErrorPayload": last_create_error.payload,
+                      }, ensure_ascii=False))
+                  raise last_create_error
 
           state = None
           for _ in range(10):
