@@ -86,6 +86,7 @@ jobs:
               "WHATSAPP_DEFAULT_ACCOUNT": os.environ["DEFAULT_ACCOUNT"],
               "WHATSAPP_INSTANCE_ACCOUNTS": f"{os.environ['MONITORED_INSTANCE']}:{os.environ['DEFAULT_ACCOUNT']}",
               "EVOLUTION_INSTANCE_NAME": os.environ["MONITORED_INSTANCE"],
+              "EVOLUTION_WEBHOOK_BY_EVENTS": "true",
               "ATLAS_COMPOSE_PROFILES": "whatsapp",
           }
           defaults = {
