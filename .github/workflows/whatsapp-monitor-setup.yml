@@ -236,6 +236,11 @@ jobs:
                       existing = payload
                       break
 
+          # After a forced reset, fetchInstances may briefly return a stale ghost entry.
+          # Force a fresh create attempt instead of trusting that cached record.
+          if hard_reset:
+              existing = None
+
           created = False
           if existing is None:
               create_body = {
