@@ -75,6 +75,7 @@ export interface PendingGoogleEventImportBatchItem extends PendingGoogleEventDra
   shift?: "manhã" | "tarde" | "integral";
   assumedTime?: boolean;
   structuralEvent?: boolean;
+  reviewWarning?: string;
 }
 
 export interface PendingGoogleEventImportBatchIgnoredItem {
@@ -1092,7 +1093,8 @@ function formatImportEventLine(event: PendingGoogleEventImportBatchItem, timezon
   const start = formatDraftDateTime(event.start, timezone);
   const endTime = formatDraftDateTime(event.end, timezone).split(" ").pop();
   const location = event.location ? ` | ${event.location}` : "";
-  return `- ${start}${endTime ? `-${endTime}` : ""} - ${event.summary}${location}`;
+  const warning = event.reviewWarning ? ` | atenção: ${event.reviewWarning}` : "";
+  return `- ${start}${endTime ? `-${endTime}` : ""} - ${event.summary}${location}${warning}`;
 }
 
 function formatImportDateShiftContext(items: PendingGoogleEventImportBatchIgnoredItem[]): string | undefined {
@@ -1171,7 +1173,7 @@ function compactImportAssumptions(assumptions: string[]): string[] {
   }
 
   return [
-    `Alguns horários foram assumidos por turno: ${shiftLabels.join(", ")}.`,
+    `Quando o horário não apareceu no material, usei o padrão: ${shiftLabels.join(" e ")}.`,
     ...remaining,
   ];
 }

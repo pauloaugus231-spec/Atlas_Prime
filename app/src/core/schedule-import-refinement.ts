@@ -37,6 +37,7 @@ export interface ScheduleImportRefinedEvent extends ScheduleImportRefinementInpu
   shift?: "manhã" | "tarde" | "integral";
   assumedTime?: boolean;
   structuralEvent?: boolean;
+  reviewWarning?: string;
 }
 
 export interface ScheduleImportIgnoredItem {
@@ -177,6 +178,64 @@ function isDefaultShiftTime(event: ScheduleImportRefinementInputEvent, shift: st
     return start === "08:00" && end === "17:00";
   }
   return false;
+}
+
+function isPseudoLocation(location: string | undefined): boolean {
+  const normalized = normalize(location).replace(/[?!.,;:]/g, "").trim();
+  return normalized === "rua" || normalized === "na rua";
+}
+
+function sanitizeImportLocation(location: string | undefined): string | undefined {
+  const cleaned = cleanSpaces(location ?? "");
+  if (!cleaned || isPseudoLocation(cleaned)) {
+    return undefined;
+  }
+  return cleaned;
+}
+
+function extractExplicitTimesFromRawText(text: string | undefined): string[] {
+  if (!text) {
+    return [];
+  }
+
+  const matches = new Set<string>();
+  for (const match of text.matchAll(/\b(\d{1,2})(?::|h)(\d{2})\b/gi)) {
+    const hour = match[1]?.padStart(2, "0");
+    const minute = match[2]?.padStart(2, "0");
+    if (hour && minute) {
+      matches.add(`${hour}:${minute}`);
+    }
+  }
+  for (const match of text.matchAll(/\b(\d{1,2})h\b/gi)) {
+    const hour = match[1]?.padStart(2, "0");
+    if (hour) {
+      matches.add(`${hour}:00`);
+    }
+  }
+  return Array.from(matches);
+}
+
+function detectReviewWarning(
+  event: ScheduleImportRefinementInputEvent,
+  assumedTime: boolean,
+): string | undefined {
+  if (!assumedTime) {
+    return undefined;
+  }
+
+  const explicitTimes = extractExplicitTimesFromRawText(event.rawText);
+  if (explicitTimes.length === 0) {
+    return undefined;
+  }
+
+  const currentStart = getLocalTime(event.start, event.timezone);
+  const currentEnd = getLocalTime(event.end, event.timezone);
+  const currentTimes = new Set([currentStart, currentEnd].filter(Boolean));
+  if (explicitTimes.every((time) => currentTimes.has(time))) {
+    return undefined;
+  }
+
+  return "horário original parecia inconsistente";
 }
 
 export function cleanScheduleImportTitle(summary: string): string {
@@ -375,16 +434,20 @@ export function refineScheduleImportEvents(
     if (assumedTime && shift) {
       observations.add(`Horário assumido por turno: ${shift}.`);
     }
+    const cleanedLocation = sanitizeImportLocation(event.location);
+    const reviewWarning = detectReviewWarning(event, assumedTime);
 
     refined.push({
       ...event,
       summary: cleanedTitle,
+      location: cleanedLocation,
       originalSummary: event.summary !== cleanedTitle ? event.summary : event.rawText,
       importCategory: "event_importable",
       relevanceLevel: relevanceFor(event, structuralEvent, category),
       shift,
       assumedTime,
       structuralEvent,
+      reviewWarning,
     });
   }
 

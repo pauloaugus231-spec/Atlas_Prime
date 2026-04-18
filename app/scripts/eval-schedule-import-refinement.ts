@@ -75,6 +75,24 @@ function run() {
         sourceLabel: "tarde",
       },
       {
+        summary: "Paulo e Simone: Juntos na Rua",
+        start: iso("2026-04-25", "13:30"),
+        end: iso("2026-04-25", "17:00"),
+        timezone,
+        sourceLabel: "tarde",
+        personallyRelevant: true,
+        location: "Rua",
+      },
+      {
+        summary: "David e Paulo: Sistemática Restinga - Lisandro",
+        start: iso("2026-04-26", "08:00"),
+        end: iso("2026-04-26", "12:00"),
+        timezone,
+        sourceLabel: "manhã",
+        personallyRelevant: true,
+        rawText: "David e Paulo: Sistemática até às 7:00 (entrada Restinga)",
+      },
+      {
         summary: "Bloco pouco legível",
         start: iso("2026-04-24", "08:00"),
         end: iso("2026-04-24", "12:00"),
@@ -141,7 +159,7 @@ function run() {
 
   results.push({
     name: "self_only_selects_only_paulo_events",
-    passed: selfOnly.selectedEvents.length === 2 &&
+    passed: selfOnly.selectedEvents.length === 4 &&
       selfOnly.selectedEvents.every((event) => event.summary.toLowerCase().includes("paulo")),
     detail: JSON.stringify(selfOnly.selectedEvents, null, 2),
   });
@@ -158,6 +176,22 @@ function run() {
     passed: refined.ignoredItems.some((item) => item.summary === "Simone - Fora da Carga") &&
       refined.ignoredItems.some((item) => item.summary === "Juliana - TI"),
     detail: JSON.stringify(refined.ignoredItems, null, 2),
+  });
+
+  results.push({
+    name: "pseudo_location_rua_is_removed",
+    passed: refined.allImportableEvents.some((event) =>
+      event.summary === "Paulo e Simone - Juntos na Rua" &&
+      !event.location),
+    detail: JSON.stringify(refined.allImportableEvents, null, 2),
+  });
+
+  results.push({
+    name: "suspicious_original_time_is_flagged",
+    passed: refined.allImportableEvents.some((event) =>
+      event.summary === "David e Paulo - Sistemática Restinga - Lisandro" &&
+      event.reviewWarning === "horário original parecia inconsistente"),
+    detail: JSON.stringify(refined.allImportableEvents, null, 2),
   });
 
   const draft: PendingGoogleEventImportBatchDraft = {
@@ -259,9 +293,15 @@ function run() {
   results.push({
     name: "observations_are_compacted",
     passed:
-      visibleReply.includes("Alguns horários foram assumidos por turno: manhã 08:00-12:00, tarde 13:30-17:00.") &&
+      visibleReply.includes("Quando o horário não apareceu no material, usei o padrão: manhã 08:00-12:00 e tarde 13:30-17:00.") &&
       !visibleReply.includes("Horário assumido por turno: manhã.") &&
       !visibleReply.includes("Horário assumido por turno: tarde."),
+    detail: visibleReply,
+  });
+
+  results.push({
+    name: "suspicious_time_warning_appears_in_visible_draft",
+    passed: visibleReply.includes("atenção: horário original parecia inconsistente"),
     detail: visibleReply,
   });
 
@@ -288,7 +328,7 @@ function run() {
 
   results.push({
     name: "full_block_keeps_all_real_events_only",
-    passed: fullBlock.selectedEvents.length === 4 &&
+    passed: fullBlock.selectedEvents.length === 6 &&
       fullBlock.selectedEvents.every((event) => event.importCategory === "event_importable"),
     detail: JSON.stringify(fullBlock.selectedEvents, null, 2),
   });
