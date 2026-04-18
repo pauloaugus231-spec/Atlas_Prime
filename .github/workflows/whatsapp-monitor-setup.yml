@@ -309,6 +309,15 @@ jobs:
                       import time
                       time.sleep(2)
               if connect_response is None and last_error is not None:
+                  if isinstance(last_error, ApiError):
+                      print(json.dumps({
+                          "instance": instance,
+                          "state": state or "unknown",
+                          "created": created,
+                          "hardReset": hard_reset,
+                          "connectErrorStatus": last_error.status,
+                          "connectErrorPayload": last_error.payload,
+                      }, ensure_ascii=False))
                   raise last_error
               pairing_code = connect_response.get("pairingCode") if isinstance(connect_response, dict) else None
               qr_payload = connect_response.get("code") if isinstance(connect_response, dict) else None
