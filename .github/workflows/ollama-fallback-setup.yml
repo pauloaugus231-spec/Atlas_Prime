@@ -104,8 +104,26 @@ jobs:
         run: |
           set -euo pipefail
           cd "$DEPLOY_PATH"
-          timeout 120 sudo env COMPOSE_PROFILES="$(grep -E '^ATLAS_COMPOSE_PROFILES=' .env.production | tail -n 1 | cut -d= -f2-)" \
-            docker compose -f docker-compose.prod.yml exec -T ollama ollama run "$OLLAMA_MODEL_NAME" "Responda apenas: OK"
+          sudo docker exec -e OLLAMA_MODEL_NAME="$OLLAMA_MODEL_NAME" atlas-core node --input-type=module - <<'JS'
+          const response = await fetch("http://ollama:11434/api/chat", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              model: process.env.OLLAMA_MODEL_NAME,
+              stream: false,
+              messages: [{ role: "user", content: "Responda apenas OK." }],
+              options: { num_predict: 8 },
+            }),
+            signal: AbortSignal.timeout(120000),
+          });
+          if (!response.ok) {
+            console.error(await response.text());
+            process.exit(1);
+          }
+          const data = await response.json();
+          const content = data?.message?.content ?? "";
+          console.log(content.trim() || JSON.stringify(data).slice(0, 200));
+          JS
 
       - name: Docker status
         run: |
