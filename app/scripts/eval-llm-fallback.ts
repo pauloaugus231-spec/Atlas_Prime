@@ -63,10 +63,10 @@ async function run() {
 
   {
     const logger = new MemoryLogger();
-    const primary = new FakeLlmClient(response("resposta local", "qwen3:8b"));
+    const primary = new FakeLlmClient(response("resposta local", "qwen3:1.7b"));
     const secondary = new FakeLlmClient(response("fallback openai", "gpt-5-mini"));
     const client = new FallbackLlmClient(primary, secondary, logger, {
-      primaryLabel: "ollama:qwen3:8b",
+      primaryLabel: "ollama:qwen3:1.7b",
       secondaryLabel: "openai:gpt-5-mini",
     });
     const result = await client.chat({ messages: [{ role: "user", content: "oi" }] });
@@ -81,7 +81,7 @@ async function run() {
     const primary = new FakeLlmClient(new Error("ollama offline"));
     const secondary = new FakeLlmClient(response("fallback openai", "gpt-5-mini"));
     const client = new FallbackLlmClient(primary, secondary, logger, {
-      primaryLabel: "ollama:qwen3:8b",
+      primaryLabel: "ollama:qwen3:1.7b",
       secondaryLabel: "openai:gpt-5-mini",
     });
     const result = await client.chat({ messages: [{ role: "user", content: "oi" }] });
@@ -93,10 +93,10 @@ async function run() {
 
   {
     const logger = new MemoryLogger();
-    const primary = new FakeLlmClient(response("", "qwen3:8b"));
+    const primary = new FakeLlmClient(response("", "qwen3:1.7b"));
     const secondary = new FakeLlmClient(response("fallback openai", "gpt-5-mini"));
     const client = new FallbackLlmClient(primary, secondary, logger, {
-      primaryLabel: "ollama:qwen3:8b",
+      primaryLabel: "ollama:qwen3:1.7b",
       secondaryLabel: "openai:gpt-5-mini",
     });
     const result = await client.chat({ messages: [{ role: "user", content: "oi" }] });
@@ -111,7 +111,7 @@ async function run() {
       LLM_PROVIDER: "fallback",
       LLM_PRIMARY_PROVIDER: "ollama",
       LLM_FALLBACK_PROVIDER: "openai",
-      OLLAMA_MODEL: "qwen3:8b",
+      OLLAMA_MODEL: "qwen3:1.7b",
       OPENAI_API_KEY: "test-key",
     });
     results.push({
@@ -119,7 +119,7 @@ async function run() {
       passed:
         config.llm.provider === "fallback" &&
         config.llm.fallback?.primary.provider === "ollama" &&
-        config.llm.fallback.primary.model === "qwen3:8b" &&
+        config.llm.fallback.primary.model === "qwen3:1.7b" &&
         config.llm.fallback.secondary.provider === "openai" &&
         Boolean(config.llm.openai?.apiKey),
     });

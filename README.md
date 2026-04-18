@@ -124,7 +124,7 @@ HOST_AUTHORIZED_PROJECTS_DIR=/Users/SEU_USUARIO/Agente_Autorizados
 HOST_USER_DOCUMENTS_DIR=/Users/SEU_USUARIO/Documents
 
 OLLAMA_BASE_URL=http://host.docker.internal:11434
-OLLAMA_MODEL=qwen3:8b
+OLLAMA_MODEL=qwen3:1.7b
 OLLAMA_TIMEOUT_SECONDS=60
 LLM_PROVIDER=fallback
 LLM_PRIMARY_PROVIDER=ollama
@@ -202,16 +202,16 @@ O segundo script monta os atalhos por dominio dentro de:
 Modelo atual recomendado:
 
 ```bash
-ollama pull qwen3:8b
+ollama pull qwen3:1.7b
 ```
 
-Ele passa a ser o primario para reduzir custo de uso diario. A OpenAI fica como fallback quando configurada.
+Ele passa a ser o primario para reduzir custo de uso diario em instancias pequenas. A OpenAI fica como fallback quando configurada.
 
 Ele foi escolhido por equilibrio entre:
 
 - velocidade
 - consumo de memoria
-- qualidade melhor que os modelos locais menores
+- uso de memoria baixo o suficiente para a EC2 atual
 - suporte razoavel a ferramentas e respostas operacionais
 
 ## Subir o agente
@@ -249,7 +249,7 @@ O compose de producao sobe apenas o core do Atlas por padrao:
 
 WhatsApp/Evolution ficam fora do boot padrao para reduzir consumo e evitar concorrencia desnecessaria nos bancos locais. Quando o profile `whatsapp` nao esta ativo, o deploy tambem para containers antigos desse bloco sem apagar volumes. Para ativar esse bloco na nuvem, defina `ATLAS_COMPOSE_PROFILES=whatsapp` ou `COMPOSE_PROFILES=whatsapp` no ambiente de deploy/`.env.production` e rode o deploy novamente.
 
-Ollama na EC2 tambem fica em profile opcional. Para usar `qwen3:8b` na nuvem, habilite o profile `ollama`, aponte `OLLAMA_BASE_URL=http://ollama:11434`, use `LLM_PROVIDER=fallback`, `LLM_PRIMARY_PROVIDER=ollama` e `LLM_FALLBACK_PROVIDER=openai`. Se WhatsApp e Ollama estiverem ativos juntos, use `ATLAS_COMPOSE_PROFILES=whatsapp,ollama`. O deploy executa `ollama pull` para `OLLAMA_MODEL` quando `OLLAMA_PULL_ON_DEPLOY` nao estiver desativado. Antes de ativar, valide RAM livre da EC2 porque modelos 8B podem exigir memoria relevante. O workflow manual `Ollama Fallback Setup` aplica essas variaveis na EC2 e faz redeploy controlado.
+Ollama na EC2 tambem fica em profile opcional. Para usar `qwen3:1.7b` na nuvem, habilite o profile `ollama`, aponte `OLLAMA_BASE_URL=http://ollama:11434`, use `LLM_PROVIDER=fallback`, `LLM_PRIMARY_PROVIDER=ollama` e `LLM_FALLBACK_PROVIDER=openai`. Se WhatsApp e Ollama estiverem ativos juntos, use `ATLAS_COMPOSE_PROFILES=whatsapp,ollama`. O deploy executa `ollama pull` para `OLLAMA_MODEL` quando `OLLAMA_PULL_ON_DEPLOY` nao estiver desativado. O workflow manual `Ollama Fallback Setup` aplica essas variaveis na EC2 e faz redeploy controlado.
 
 Se alterar `.env`, recrie o container:
 

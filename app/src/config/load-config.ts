@@ -22,7 +22,7 @@ import type {
 import type { LogLevel } from "../types/logger.js";
 
 const DEFAULT_OLLAMA_BASE_URL = "http://host.docker.internal:11434";
-const DEFAULT_OLLAMA_MODEL = "qwen3:8b";
+const DEFAULT_OLLAMA_MODEL = "qwen3:1.7b";
 const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
 const DEFAULT_OPENAI_MODEL = "gpt-5-mini";
 const DEFAULT_MAX_TOOL_ITERATIONS = 6;

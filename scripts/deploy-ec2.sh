@@ -130,7 +130,7 @@ pull_ollama_model_if_enabled() {
 
   local model
   model="$(read_env_file_value "OLLAMA_MODEL")"
-  model="${model:-qwen3:8b}"
+  model="${model:-qwen3:1.7b}"
   log "Garantindo modelo Ollama local: $model"
   for _ in $(seq 1 30); do
     if docker_compose exec -T ollama ollama list >/dev/null 2>&1; then

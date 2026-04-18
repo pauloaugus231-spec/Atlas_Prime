@@ -6,7 +6,7 @@ on:
       model:
         description: Ollama model to run as primary
         required: false
-        default: qwen3:8b
+        default: qwen3:1.7b
 
 jobs:
   setup:
@@ -16,7 +16,7 @@ jobs:
     timeout-minutes: 30
     env:
       DEPLOY_PATH: /srv/atlas/app
-      OLLAMA_MODEL_NAME: ${{ github.event.inputs.model || 'qwen3:8b' }}
+      OLLAMA_MODEL_NAME: ${{ github.event.inputs.model || 'qwen3:1.7b' }}
     steps:
       - name: Validate target
         run: |
