@@ -59,6 +59,17 @@ function normalizePhoneNumber(value: string): string {
   return value.replace(/\D+/g, "");
 }
 
+function readStringLike(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed || undefined;
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return String(value);
+  }
+  return undefined;
+}
+
 function extractTextFromMessage(data: Record<string, unknown>): string | undefined {
   const message = data.message;
   if (!message || typeof message !== "object") {
@@ -128,6 +139,27 @@ function resolveWebhookEnvelope(payload: EvolutionWebhookPayload): Record<string
   return undefined;
 }
 
+function resolveWebhookRemoteJid(payload: EvolutionWebhookPayload): string | undefined {
+  const envelope = resolveWebhookEnvelope(payload);
+  const envelopeKey = asRecord(envelope?.key);
+  const rootPayload = asRecord(payload);
+  const rootKey = asRecord(rootPayload?.key);
+  const nestedData = asRecord(rootPayload?.data);
+  const nestedKey = asRecord(nestedData?.key);
+
+  const candidates = [
+    readStringLike(envelopeKey?.remoteJid),
+    readStringLike(rootKey?.remoteJid),
+    readStringLike(nestedKey?.remoteJid),
+    readStringLike(rootPayload?.remoteJid),
+    readStringLike(nestedData?.remoteJid),
+    readStringLike(rootPayload?.sender),
+    readStringLike(nestedData?.sender),
+  ];
+
+  return candidates.find(Boolean);
+}
+
 export function looksLikeEvolutionMessageWebhook(payload: EvolutionWebhookPayload): boolean {
   return Boolean(resolveWebhookEnvelope(payload));
 }
@@ -138,12 +170,11 @@ export function parseEvolutionWebhookMessage(payload: EvolutionWebhookPayload): 
     return null;
   }
 
-  const key = data.key;
-  const keyRecord = key && typeof key === "object" ? (key as Record<string, unknown>) : undefined;
-  const remoteJid = typeof keyRecord?.remoteJid === "string" ? keyRecord.remoteJid : undefined;
+  const keyRecord = asRecord(data.key);
+  const remoteJid = resolveWebhookRemoteJid(payload);
   const fromMe = keyRecord?.fromMe === true;
-  const pushName = typeof data.pushName === "string" ? data.pushName : undefined;
-  const messageType = typeof data.messageType === "string" ? data.messageType : undefined;
+  const pushName = readStringLike(data.pushName) ?? readStringLike(payload.pushName);
+  const messageType = readStringLike(data.messageType) ?? readStringLike(payload.messageType);
   const text = extractTextFromMessage(data);
 
   return {

@@ -199,6 +199,8 @@ async function main(): Promise<void> {
           instanceName: payload.instance,
           event: payload.event,
           hasNumber: Boolean(number),
+          remoteJid: message.remoteJid,
+          textLength: inboundText?.length ?? 0,
           messageType: message.messageType,
         });
         response.writeHead(202, { "Content-Type": "application/json" });
