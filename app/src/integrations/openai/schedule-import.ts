@@ -77,6 +77,12 @@ export interface ScheduleImportParseResult {
   uncertainties: string[];
 }
 
+export interface VisualAgendaDetectionResult {
+  likelyAgendaImport: boolean;
+  confidence: number;
+  signals: string[];
+}
+
 function normalizeJsonBlock(value: string): string {
   const trimmed = value.trim();
   if (trimmed.startsWith("```")) {
@@ -150,6 +156,10 @@ function validateTime(value: string): boolean {
   return /^\d{2}:\d{2}$/.test(value);
 }
 
+function clampConfidence(value: number): number {
+  return Math.max(0, Math.min(1, value));
+}
+
 function isScheduleImportCategory(value: unknown): value is ScheduleImportCategory {
   return value === "event_importable" ||
     value === "informational" ||
@@ -193,6 +203,58 @@ function sanitizeNonEvent(item: ScheduleImportNonEvent): ScheduleImportNonEvent 
     date: item.date && validateDate(item.date) ? item.date : undefined,
     shift: normalizeText(item.shift),
     rawText: normalizeText(item.rawText),
+  };
+}
+
+function collectAgendaSignalsFromText(text: string): string[] {
+  const normalized = normalizeText(text)?.normalize("NFD").replace(/\p{Diacritic}/gu, "").toLowerCase() ?? "";
+  const signals: string[] = [];
+  if (/\b\d{1,2}\/\d{1,2}\b/.test(normalized)) {
+    signals.push("datas dd/mm");
+  }
+  if (/\b(segunda|terca|terça|quarta|quinta|sexta|sabado|sábado|domingo)\b/.test(normalized)) {
+    signals.push("dias da semana");
+  }
+  if (/\b(manha|manhã|tarde|noite|integral)\b/.test(normalized)) {
+    signals.push("turnos");
+  }
+  if (/\b(reuniao|reunião|agenda semanal|cronograma|escala)\b/.test(normalized)) {
+    signals.push("agenda/reuniões");
+  }
+  if (/\bferiado\b/.test(normalized)) {
+    signals.push("feriado");
+  }
+  if (/\b(demandas?|micro|ampliada|creas|caps|cras)\b/.test(normalized)) {
+    signals.push("vocabulário operacional");
+  }
+  return signals;
+}
+
+function buildTextAgendaDetectionResult(text: string): VisualAgendaDetectionResult {
+  const signals = collectAgendaSignalsFromText(text);
+  let confidence = 0;
+  if (signals.includes("datas dd/mm")) {
+    confidence += 0.3;
+  }
+  if (signals.includes("dias da semana")) {
+    confidence += 0.2;
+  }
+  if (signals.includes("turnos")) {
+    confidence += 0.2;
+  }
+  if (signals.includes("agenda/reuniões")) {
+    confidence += 0.2;
+  }
+  if (signals.includes("feriado")) {
+    confidence += 0.05;
+  }
+  if (signals.includes("vocabulário operacional")) {
+    confidence += 0.05;
+  }
+  return {
+    likelyAgendaImport: confidence >= 0.72,
+    confidence: clampConfidence(confidence),
+    signals,
   };
 }
 
@@ -265,6 +327,65 @@ export class OpenAiScheduleImportService {
     ], "gpt-4.1-mini");
 
     return this.parseModelResponse(content, input.timezone);
+  }
+
+  async detectAgendaCandidateFromPdf(input: {
+    pdf: Buffer;
+    caption?: string;
+  }): Promise<VisualAgendaDetectionResult> {
+    const extractedText = await extractPdfText(input.pdf);
+    const combined = [input.caption?.trim(), extractedText.trim()].filter(Boolean).join("\n");
+    if (!combined) {
+      return {
+        likelyAgendaImport: false,
+        confidence: 0,
+        signals: [],
+      };
+    }
+    return buildTextAgendaDetectionResult(combined);
+  }
+
+  async detectAgendaCandidateFromImage(input: {
+    image: Buffer;
+    mimeType: string;
+    caption?: string;
+  }): Promise<VisualAgendaDetectionResult> {
+    const prompt = [
+      "Classifique se esta imagem parece uma agenda semanal operacional em português.",
+      "Considere como sinais fortes: datas como 16/04, dias da semana, manhã/tarde/noite, reunião, feriado, grade semanal, tabela/lista por dia/período.",
+      "Responda somente JSON no formato:",
+      JSON.stringify({
+        likelyAgendaImport: true,
+        confidence: 0.84,
+        signals: ["datas dd/mm", "turnos", "grade semanal"],
+      }),
+      "Use `confidence` de 0 a 1.",
+      ...(input.caption?.trim() ? [`Contexto do usuário: ${input.caption.trim()}`] : []),
+    ].join("\n");
+
+    const imageUrl = `data:${input.mimeType};base64,${input.image.toString("base64")}`;
+    const content = await this.request([
+      {
+        role: "system",
+        content: "Você classifica rapidamente se uma imagem parece uma agenda semanal. Responda somente JSON válido.",
+      },
+      {
+        role: "user",
+        content: [
+          { type: "text", text: prompt },
+          { type: "image_url", image_url: { url: imageUrl } },
+        ],
+      },
+    ], "gpt-4.1-mini");
+
+    const parsed = JSON.parse(extractJsonObject(content)) as Partial<VisualAgendaDetectionResult>;
+    return {
+      likelyAgendaImport: parsed.likelyAgendaImport === true,
+      confidence: clampConfidence(typeof parsed.confidence === "number" ? parsed.confidence : 0),
+      signals: Array.isArray(parsed.signals)
+        ? parsed.signals.map((item) => String(item).trim()).filter(Boolean).slice(0, 6)
+        : [],
+    };
   }
 
   private async extractFromText(input: {

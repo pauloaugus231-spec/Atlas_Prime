@@ -144,6 +144,95 @@ function run() {
     detail: JSON.stringify(nonVisualPlan, null, 2),
   });
 
+  const strongAgendaVisualPlan = detectVisualTaskPlan({
+    text: "",
+    attachmentKind: "image",
+    agendaEvidence: {
+      confidence: 0.84,
+      signals: ["datas dd/mm", "turnos", "grade semanal"],
+    },
+  });
+  results.push({
+    name: "single_print_with_strong_visual_agenda_signal_routes_to_agenda_import",
+    passed: strongAgendaVisualPlan.kind === "agenda_import" && shouldAttemptScheduleImport(strongAgendaVisualPlan),
+    detail: JSON.stringify(strongAgendaVisualPlan, null, 2),
+  });
+
+  const priorGenericState = buildVisualTaskState({
+    plan: nonVisualPlan,
+    attachment: {
+      fileId: "generic-1",
+      fileName: "print-1.jpg",
+      mimeType: "image/jpeg",
+      kind: "image",
+    },
+    now: 5,
+  });
+  const secondAgendaLikePlan = detectVisualTaskPlan({
+    text: "",
+    attachmentKind: "image",
+    previous: priorGenericState,
+    agendaEvidence: {
+      confidence: 0.58,
+      signals: ["datas dd/mm", "manhã/tarde"],
+    },
+  });
+  results.push({
+    name: "second_print_of_same_batch_upgrades_to_agenda_import",
+    passed: secondAgendaLikePlan.kind === "agenda_import" && shouldAttemptScheduleImport(secondAgendaLikePlan),
+    detail: JSON.stringify(secondAgendaLikePlan, null, 2),
+  });
+
+  const ambiguousAgendaPlan = detectVisualTaskPlan({
+    text: "",
+    attachmentKind: "image",
+    agendaEvidence: {
+      confidence: 0.46,
+      signals: ["datas dd/mm", "turnos"],
+    },
+  });
+  const ambiguousState = buildVisualTaskState({
+    plan: ambiguousAgendaPlan,
+    attachment: {
+      fileId: "amb-1",
+      fileName: "ambiguous.jpg",
+      mimeType: "image/jpeg",
+      kind: "image",
+    },
+    now: 6,
+  });
+  const ambiguousReply = buildVisualTaskStrategyReply(ambiguousState, ambiguousAgendaPlan);
+  results.push({
+    name: "ambiguous_print_asks_short_question",
+    passed:
+      ambiguousAgendaPlan.kind === "general_visual" &&
+      !shouldAttemptScheduleImport(ambiguousAgendaPlan) &&
+      ambiguousReply.includes("Isso parece uma agenda semanal"),
+    detail: ambiguousReply,
+  });
+
+  const genericThenEvidenceReply = buildVisualTaskStrategyReply(
+    buildVisualTaskState({
+      previous: priorGenericState,
+      plan: secondAgendaLikePlan,
+      attachment: {
+        fileId: "generic-2",
+        fileName: "print-2.jpg",
+        mimeType: "image/jpeg",
+        kind: "image",
+      },
+      now: 7,
+    }),
+    secondAgendaLikePlan,
+  );
+  results.push({
+    name: "generic_batch_with_more_evidence_does_not_repeat_generic_waiting_reply",
+    passed:
+      !genericThenEvidenceReply.includes("Posso trabalhar com:") &&
+      genericThenEvidenceReply.includes("Vou tentar extrair"),
+    detail: genericThenEvidenceReply,
+  });
+
   const failures = results.filter((item) => !item.passed);
   for (const item of results.filter((entry) => entry.passed)) {
     console.log(`PASS ${item.name}`);

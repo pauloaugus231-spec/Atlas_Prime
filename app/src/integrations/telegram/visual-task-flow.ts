@@ -22,6 +22,9 @@ export interface VisualTaskPlan {
   acceptedModes: string[];
   preferredMode: string;
   shouldAttemptExtraction: boolean;
+  confidence?: number;
+  signals?: string[];
+  shortClarification?: string;
 }
 
 export interface VisualTaskState {
@@ -41,6 +44,11 @@ interface BuildStateInput {
   plan: VisualTaskPlan;
   attachment: Omit<VisualTaskAttachment, "receivedAt">;
   now?: number;
+}
+
+export interface VisualAgendaEvidence {
+  confidence: number;
+  signals: string[];
 }
 
 const AGENDA_TERMS = [
@@ -182,10 +190,13 @@ export function detectVisualTaskPlan(input: {
   text?: string;
   attachmentKind: VisualAttachmentKind;
   previous?: VisualTaskState;
+  agendaEvidence?: VisualAgendaEvidence;
 }): VisualTaskPlan {
   const normalized = normalize(input.text ?? "");
   if (!normalized && input.previous) {
-    return buildPlanForKind(input.previous.kind, input.attachmentKind);
+    if (input.previous.kind === "agenda_import") {
+      return buildPlanForKind("agenda_import", input.attachmentKind);
+    }
   }
 
   if (hasAny(normalized, AGENDA_TERMS)) {
@@ -199,6 +210,32 @@ export function detectVisualTaskPlan(input: {
   }
   if (hasAny(normalized, DOCUMENT_TERMS)) {
     return buildPlanForKind("document_review", input.attachmentKind);
+  }
+
+  const evidence = input.agendaEvidence;
+  const previousFileCount = input.previous?.files.length ?? 0;
+  const autoAgendaThreshold = previousFileCount >= 1 ? 0.55 : 0.72;
+  const clarificationThreshold = previousFileCount >= 1 ? 0.3 : 0.45;
+
+  if (evidence && evidence.confidence >= autoAgendaThreshold) {
+    return {
+      ...buildPlanForKind("agenda_import", input.attachmentKind),
+      confidence: evidence.confidence,
+      signals: evidence.signals,
+    };
+  }
+
+  if (evidence && (
+    evidence.confidence >= clarificationThreshold ||
+    evidence.signals.length >= 2 ||
+    (previousFileCount >= 1 && evidence.signals.length >= 1)
+  )) {
+    return {
+      ...buildPlanForKind("general_visual", input.attachmentKind),
+      confidence: evidence.confidence,
+      signals: evidence.signals,
+      shortClarification: "Isso parece uma agenda semanal. Quer que eu transforme em eventos da abordagem?",
+    };
   }
 
   return buildPlanForKind(input.previous?.kind ?? "general_visual", input.attachmentKind);
@@ -254,6 +291,13 @@ export function buildVisualTaskStrategyReply(state: VisualTaskState, plan: Visua
   const opening = fileCount > 1
     ? `Recebi ${fileCount} materiais desta tarefa visual. Vou tratar como a mesma missão.`
     : `Recebi ${latest ? labelAttachmentKind(latest.kind) : "material visual"} para uma tarefa visual.`;
+
+  if (plan.shortClarification) {
+    return [
+      opening,
+      plan.shortClarification,
+    ].join("\n");
+  }
 
   if (plan.shouldAttemptExtraction) {
     return [

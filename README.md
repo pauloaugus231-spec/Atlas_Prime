@@ -637,6 +637,7 @@ Hoje, a extração automática estruturada continua focada em agenda por PDF/pri
 Para agendas semanais da abordagem, o rascunho de importação é refinado antes da confirmação:
 
 - se o material trouxer apenas turno, `manhã` vira 08:00-12:00 e `tarde` vira 13:30-17:00; horários explícitos continuam prevalecendo
+- prints/PDFs com forte sinal visual de agenda semanal agora entram automaticamente em `agenda_import`, mesmo sem legenda perfeita; quando chega mais de um print coerente, a confiança sobe e o Atlas tenta consolidar em vez de repetir resposta genérica
 - blocos importáveis, informativos, demandas, feriados e ambíguos aparecem separados para revisão
 - títulos são normalizados para ficarem curtos e operacionais, evitando blocos crus como título do evento
 - o usuário pode alternar o lote antes de gravar: `1` importa só eventos com Paulo, `2` importa Paulo + reuniões importantes e `3` importa tudo que parece evento real

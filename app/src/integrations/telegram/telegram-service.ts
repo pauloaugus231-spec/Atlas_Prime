@@ -3178,16 +3178,55 @@ export class TelegramService {
     return extractExplicitGoogleAccountAlias(text, this.getGoogleAccountAliases());
   }
 
+  private async downloadImportAttachmentBuffer(attachment: TelegramImportAttachment): Promise<Buffer> {
+    const remoteFile = await this.api.getFile(attachment.fileId);
+    if (!remoteFile.file_path) {
+      throw new Error("Telegram não retornou file_path para o arquivo enviado.");
+    }
+    return this.api.downloadFile(remoteFile.file_path);
+  }
+
   private async handleVisualDocumentAttachment(
     message: TelegramMessage,
     attachment: TelegramImportAttachment,
     captionText?: string,
   ): Promise<void> {
     const previous = this.pendingVisualTasks.get(message.chat.id);
+    let prefetchedBuffer: Buffer | undefined;
+    let agendaEvidence:
+      | {
+          confidence: number;
+          signals: string[];
+        }
+      | undefined;
+
+    if (this.scheduleImport) {
+      try {
+        prefetchedBuffer = await this.downloadImportAttachmentBuffer(attachment);
+        agendaEvidence = attachment.kind === "pdf"
+          ? await this.scheduleImport.detectAgendaCandidateFromPdf({
+              pdf: prefetchedBuffer,
+              caption: captionText,
+            })
+          : await this.scheduleImport.detectAgendaCandidateFromImage({
+              image: prefetchedBuffer,
+              mimeType: attachment.mimeType,
+              caption: captionText,
+            });
+      } catch (error) {
+        this.logger.warn("Telegram visual agenda evidence detection failed", {
+          chatId: message.chat.id,
+          attachmentKind: attachment.kind,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
     const plan = detectVisualTaskPlan({
       text: captionText,
       attachmentKind: attachment.kind,
       previous,
+      agendaEvidence,
     });
     const state = buildVisualTaskState({
       previous,
@@ -3202,9 +3241,18 @@ export class TelegramService {
       fileCount: state.files.length,
       attachmentKind: attachment.kind,
       shouldAttemptExtraction: plan.shouldAttemptExtraction,
+      agendaSignalConfidence: agendaEvidence?.confidence,
+      agendaSignals: agendaEvidence?.signals,
     });
 
     const strategyReply = buildVisualTaskStrategyReply(state, plan);
+    if (plan.shortClarification) {
+      await this.sendText(message.chat.id, strategyReply, {
+        reply_to_message_id: message.message_id,
+        disable_web_page_preview: true,
+      });
+      return;
+    }
     if (!shouldAttemptScheduleImport(plan)) {
       const reply = [
         strategyReply,
@@ -3233,6 +3281,7 @@ export class TelegramService {
     await this.handleScheduleImportAttachment(message, attachment, captionText, {
       visualTask: state,
       skipInitialReply: true,
+      prefetchedBuffer,
     });
   }
 
@@ -3243,6 +3292,7 @@ export class TelegramService {
     options: {
       visualTask?: VisualTaskState;
       skipInitialReply?: boolean;
+      prefetchedBuffer?: Buffer;
     } = {},
   ): Promise<void> {
     if (!this.scheduleImport) {
@@ -3288,11 +3338,7 @@ export class TelegramService {
           },
         );
       }
-      const remoteFile = await this.api.getFile(attachment.fileId);
-      if (!remoteFile.file_path) {
-        throw new Error("Telegram não retornou file_path para o arquivo enviado.");
-      }
-      const buffer = await this.api.downloadFile(remoteFile.file_path);
+      const buffer = options.prefetchedBuffer ?? await this.downloadImportAttachmentBuffer(attachment);
       const extracted = attachment.kind === "pdf"
         ? await this.scheduleImport.extractFromPdf({
             pdf: buffer,
