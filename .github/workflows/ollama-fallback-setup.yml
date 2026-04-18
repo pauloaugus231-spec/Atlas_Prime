@@ -100,6 +100,13 @@ jobs:
           sudo env COMPOSE_PROFILES="$(grep -E '^ATLAS_COMPOSE_PROFILES=' .env.production | tail -n 1 | cut -d= -f2-)" \
             docker compose -f docker-compose.prod.yml exec -T ollama ollama list
 
+      - name: Smoke Ollama inference
+        run: |
+          set -euo pipefail
+          cd "$DEPLOY_PATH"
+          timeout 120 sudo env COMPOSE_PROFILES="$(grep -E '^ATLAS_COMPOSE_PROFILES=' .env.production | tail -n 1 | cut -d= -f2-)" \
+            docker compose -f docker-compose.prod.yml exec -T ollama ollama run "$OLLAMA_MODEL_NAME" "Responda apenas: OK"
+
       - name: Docker status
         run: |
           set -euo pipefail
