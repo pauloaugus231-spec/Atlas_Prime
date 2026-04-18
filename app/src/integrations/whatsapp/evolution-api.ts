@@ -318,11 +318,13 @@ export class EvolutionApiClient {
           apikey: this.config.apiKey,
         },
         body: JSON.stringify({
-          enabled: webhook.enabled,
-          url: webhook.url,
-          events: webhook.events,
-          webhook_by_events: webhook.webhookByEvents,
-          webhook_base64: webhook.webhookBase64,
+          webhook: {
+            enabled: webhook.enabled,
+            url: webhook.url,
+            events: webhook.events,
+            webhook_by_events: webhook.webhookByEvents,
+            webhook_base64: webhook.webhookBase64,
+          },
         }),
         signal: AbortSignal.timeout(15000),
       },
