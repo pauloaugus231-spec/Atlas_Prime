@@ -42,36 +42,43 @@ jobs:
       - name: Post synthetic webhook payload to sidecar
         run: |
           set -euo pipefail
-          python3 - <<'PY'
-          import json
-          import os
-          import urllib.request
+          export INSTANCE SENDER_NUMBER SENDER_NAME MESSAGE_TEXT
+          sudo docker exec \
+            -e INSTANCE \
+            -e SENDER_NUMBER \
+            -e SENDER_NAME \
+            -e MESSAGE_TEXT \
+            atlas-whatsapp-sidecar \
+            node --input-type=module - <<'NODE'
+          const payload = {
+            instance: process.env.INSTANCE,
+            key: {
+              remoteJid: `${process.env.SENDER_NUMBER}@s.whatsapp.net`,
+              fromMe: false,
+              id: "SMOKE-WHATSAPP-MONITOR",
+            },
+            pushName: process.env.SENDER_NAME,
+            messageType: "conversation",
+            message: {
+              conversation: process.env.MESSAGE_TEXT,
+            },
+            date_time: "2026-04-17T22:00:00.000Z",
+          };
 
-          payload = {
-              "instance": os.environ["INSTANCE"],
-              "key": {
-                  "remoteJid": f'{os.environ["SENDER_NUMBER"]}@s.whatsapp.net',
-                  "fromMe": False,
-                  "id": "SMOKE-WHATSAPP-MONITOR",
-              },
-              "pushName": os.environ["SENDER_NAME"],
-              "messageType": "conversation",
-              "message": {
-                  "conversation": os.environ["MESSAGE_TEXT"],
-              },
-              "date_time": "2026-04-17T22:00:00.000Z",
+          const response = await fetch("http://127.0.0.1:8790/webhooks/evolution", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify(payload),
+          });
+
+          const body = await response.text();
+          if (!response.ok) {
+            throw new Error(`Webhook smoke failed (${response.status}): ${body}`);
           }
-
-          req = urllib.request.Request(
-              "http://127.0.0.1:8790/webhooks/evolution",
-              data=json.dumps(payload).encode("utf-8"),
-              method="POST",
-              headers={"Content-Type": "application/json"},
-          )
-          with urllib.request.urlopen(req, timeout=20) as response:
-              body = response.read().decode("utf-8")
-              print(body)
-          PY
+          console.log(body);
+          NODE
 
       - name: Wait for side effects
         run: sleep 3
