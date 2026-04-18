@@ -88,6 +88,51 @@ jobs:
           cd "$DEPLOY_PATH"
           sudo docker compose ps
 
+      - name: Container network snapshot
+        run: |
+          set -euo pipefail
+          for container in atlas-whatsapp-sidecar atlas-evolution-api; do
+            echo "===== ${container} networks ====="
+            sudo docker inspect "$container" --format '{{json .NetworkSettings.Networks}}' || true
+            echo
+          done
+
+      - name: Evolution webhook and instance state
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import urllib.request
+          from pathlib import Path
+
+          env_path = Path("/srv/atlas/app/.env.production")
+          values = {}
+          for line in env_path.read_text(encoding="utf-8").splitlines():
+              stripped = line.strip()
+              if not stripped or stripped.startswith("#") or "=" not in stripped:
+                  continue
+              key, value = stripped.split("=", 1)
+              values[key] = value
+
+          api_key = values["EVOLUTION_API_KEY"]
+          instance = values.get("EVOLUTION_INSTANCE_NAME", "atlas_institucional")
+          base_url = "http://127.0.0.1:8080"
+
+          def get(path: str):
+              req = urllib.request.Request(f"{base_url}{path}", method="GET")
+              req.add_header("apikey", api_key)
+              with urllib.request.urlopen(req, timeout=15) as response:
+                  raw = response.read().decode("utf-8")
+                  return json.loads(raw) if raw else None
+
+          snapshot = {
+              "instance": instance,
+              "connectionState": get(f"/instance/connectionState/{instance}"),
+              "webhook": get(f"/webhook/find/{instance}"),
+          }
+          print(json.dumps(snapshot, ensure_ascii=False, indent=2))
+          PY
+
       - name: Recent logs
         run: |
           set -euo pipefail
@@ -106,7 +151,7 @@ jobs:
           import sqlite3
           from pathlib import Path
 
-          base = Path("/srv/atlas/app/app/workspace/.agent-state")
+          base = Path("/srv/atlas/state/workspace/.agent-state")
           outputs = {}
 
           db_specs = {
