@@ -2,30 +2,26 @@
 
 O fluxo de producao atual faz deploy do `atlas-core` na EC2 sempre que houver push na branch `main`.
 
-Ele roda em um `self-hosted runner` chamado `atlas-ec2`, instalado na propria instancia.
+Ele roda em um runner hospedado pelo GitHub e acessa a EC2 por SSH. Isso evita depender do runner interno da instancia quando ele estiver offline.
 
 ## O que o workflow faz
 
-1. faz checkout do repositorio no runner local da EC2
-2. valida `/srv/atlas/app/.env.production`
+1. faz checkout do repositorio no runner do GitHub
+2. valida a conexao SSH e `/srv/atlas/app/.env.production`
 3. sincroniza os arquivos do repositorio para `/srv/atlas/app`
 4. preserva `.env.production` e o estado local da instancia
-5. executa `scripts/deploy-ec2.sh`
+5. executa `scripts/deploy-ec2.sh` remotamente
 6. aguarda o container `atlas-core` ficar `healthy`
 
 ## Secrets no GitHub
 
-Para o fluxo atual por self-hosted runner, o workflow de deploy **nao depende de secrets de SSH**.
-
-Se voce ja criou secrets como:
+O workflow usa estes secrets:
 
 - `AWS_EC2_HOST`
 - `AWS_EC2_SSH_KEY`
 - `AWS_EC2_PORT`
 - `AWS_EC2_USER`
 - `AWS_EC2_DEPLOY_PATH`
-
-eles podem ficar cadastrados por enquanto, mas **nao sao mais necessarios** para este deploy.
 
 ## Notificacao no Telegram
 
@@ -63,11 +59,7 @@ Isso evita sobrescrever segredos, build local e estado operacional.
 
 ## Ajustes necessarios no servidor
 
-A EC2 precisa manter um runner registrado para o repositorio com a label:
-
-- `atlas-ec2`
-
-O servidor precisa manter estes arquivos/diretorios fora do Git:
+O servidor precisa manter SSH ativo e estes arquivos/diretorios fora do Git:
 
 - `/srv/atlas/app/.env.production`
 - `/srv/atlas/state/workspace/.agent-state`
