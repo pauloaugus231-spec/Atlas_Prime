@@ -10,6 +10,13 @@ interface EvalResult {
 }
 
 const profile: PersonalOperationalProfile = {
+  displayName: "Paulo",
+  primaryRole: "operador de rotina",
+  routineSummary: ["dois contextos de trabalho e rotina externa frequente"],
+  timezone: "America/Sao_Paulo",
+  preferredChannels: ["telegram", "whatsapp"],
+  preferredAlertChannel: "telegram",
+  priorityAreas: ["agenda", "deslocamento", "conflitos"],
   defaultAgendaScope: "both",
   workCalendarAliases: ["abordagem"],
   responseStyle: "direto e objetivo",

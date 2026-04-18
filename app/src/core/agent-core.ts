@@ -102,12 +102,19 @@ import {
 } from "./google-account-resolution.js";
 import { resolveActionAutonomyRule } from "./action-autonomy-policy.js";
 import { PersonalOperationalMemoryStore } from "./personal-operational-memory.js";
+import {
+  selectRelevantLearnedPreferences,
+  summarizeIdentityProfileForReasoning,
+  summarizeOperationalStateForReasoning,
+} from "./personal-context-summary.js";
 import type {
   PersonalOperationalMemoryItem,
   PersonalOperationalMemoryItemKind,
   PersonalOperationalProfile,
   UpdatePersonalOperationalProfileInput,
 } from "../types/personal-operational-memory.js";
+import type { LearnedPreference } from "../types/learned-preferences.js";
+import type { OperationalState } from "../types/operational-state.js";
 import { resolveStructuredTaskOperationPayload } from "./task-operation-resolution.js";
 import { shouldAttemptExternalReasoning, type ExternalReasoningStage } from "./external-reasoning-policy.js";
 
@@ -1067,6 +1074,64 @@ function isPersonalMemoryListPrompt(prompt: string): boolean {
   ]);
 }
 
+function isOperationalStateShowPrompt(prompt: string): boolean {
+  const normalized = normalizeEmailAnalysisText(prompt);
+  return includesAny(normalized, [
+    "mostre meu estado operacional",
+    "mostrar meu estado operacional",
+    "meu estado operacional",
+    "estado operacional atual",
+    "como esta meu estado operacional",
+    "como está meu estado operacional",
+  ]);
+}
+
+function isLearnedPreferencesListPrompt(prompt: string): boolean {
+  const normalized = normalizeEmailAnalysisText(prompt);
+  return includesAny(normalized, [
+    "o que voce aprendeu sobre mim",
+    "o que você aprendeu sobre mim",
+    "liste aprendizados",
+    "liste minhas preferencias aprendidas",
+    "liste minhas preferências aprendidas",
+    "mostre minhas preferencias aprendidas",
+    "mostre minhas preferências aprendidas",
+    "aprendizados sobre mim",
+  ]);
+}
+
+function isLearnedPreferencesDeletePrompt(prompt: string): boolean {
+  const normalized = normalizeEmailAnalysisText(prompt);
+  return includesAny(normalized, [
+    "remova essa preferencia",
+    "remova essa preferência",
+    "remova a preferencia aprendida",
+    "remova a preferência aprendida",
+    "desative a preferencia aprendida",
+    "desative a preferência aprendida",
+    "esqueca essa preferencia",
+    "esqueca essa preferência",
+  ]);
+}
+
+function extractLearnedPreferenceId(prompt: string): number | undefined {
+  const match = prompt.match(/#(\d{1,6})/);
+  if (!match?.[1]) {
+    return undefined;
+  }
+  const id = Number.parseInt(match[1], 10);
+  return Number.isFinite(id) ? id : undefined;
+}
+
+function extractLearnedPreferenceDeleteTarget(prompt: string): string | undefined {
+  const cleaned = prompt
+    .replace(/^\s*(?:remova|desative|esqueca|esqueça)\s+(?:essa\s+)?(?:a\s+)?prefer[eê]ncia\s+aprendida\s*/i, "")
+    .replace(/^\s*(?:remova|desative|esqueca|esqueça)\s+essa\s+prefer[eê]ncia\s*/i, "")
+    .replace(/[.;]+$/g, "")
+    .trim();
+  return cleaned || undefined;
+}
+
 function isPersonalMemorySavePrompt(prompt: string): boolean {
   const normalized = normalizeEmailAnalysisText(prompt);
   const explicitMemoryIntent = includesAny(normalized, [
@@ -1327,6 +1392,43 @@ function extractPersonalOperationalProfileUpdate(
   } else if (includesAny(normalized, ["direto e objetivo", "direto", "objetivo"])) {
     profile.responseStyle = "direto e objetivo";
     changeLabels.push(`estilo de resposta: ${profile.responseStyle}`);
+  }
+
+  const nameMatch = prompt.match(/(?:meu nome(?: no atlas)?(?: e| é)?|chame-me de)\s+["“]?(.+?)["”]?(?=(?:[?.!,;:]|$))/i);
+  if (nameMatch?.[1]?.trim()) {
+    profile.displayName = nameMatch[1].trim();
+    changeLabels.push(`nome: ${profile.displayName}`);
+  }
+
+  const roleMatch = prompt.match(/(?:meu papel principal(?: e| é)?|minha ocupacao(?: principal)?(?: e| é)?|minha ocupação(?: principal)?(?: e| é)?)\s+["“]?(.+?)["”]?(?=(?:[?.!,;:]|$))/i);
+  if (roleMatch?.[1]?.trim()) {
+    profile.primaryRole = roleMatch[1].trim();
+    changeLabels.push(`papel principal: ${profile.primaryRole}`);
+  }
+
+  const timezoneMatch = prompt.match(/(?:meu fuso(?: horario| horário)?(?: e| é)?|timezone(?: e| é)?)\s+([A-Za-z_\/+-]{3,64})/i);
+  if (timezoneMatch?.[1]?.trim()) {
+    profile.timezone = timezoneMatch[1].trim();
+    changeLabels.push(`fuso: ${profile.timezone}`);
+  }
+
+  if (normalized.includes("telegram")) {
+    profile.preferredChannels = uniqueAppend(current.preferredChannels, ["telegram"]);
+  }
+  if (normalized.includes("whatsapp")) {
+    profile.preferredChannels = uniqueAppend(profile.preferredChannels ?? current.preferredChannels, ["whatsapp"]);
+  }
+  if (profile.preferredChannels?.length) {
+    changeLabels.push(`canais preferidos: ${profile.preferredChannels.join(", ")}`);
+  }
+
+  const priorityAreasMatch = prompt.match(/(?:areas prioritarias|áreas prioritárias|prioridades principais)\s*(?::|sao|são|sao)\s+(.+?)(?=(?:[?.!,;:]|$))/i);
+  if (priorityAreasMatch?.[1]?.trim()) {
+    const areas = priorityAreasMatch[1].split(/,|\se\s/).map((item) => item.trim()).filter(Boolean);
+    if (areas.length > 0) {
+      profile.priorityAreas = uniqueAppend(current.priorityAreas, areas);
+      changeLabels.push(`áreas prioritárias: ${areas.join(", ")}`);
+    }
   }
 
   if (normalized.includes("briefing mais curto") || normalized.includes("briefing curto")) {
@@ -4629,12 +4731,19 @@ function buildUserPreferencesReply(preferences: UserPreferences): string {
 function buildPersonalOperationalProfileReply(profile: PersonalOperationalProfile): string {
   return [
     "Perfil operacional base:",
+    `- Nome: ${profile.displayName}`,
+    `- Papel principal: ${profile.primaryRole}`,
+    `- Fuso: ${profile.timezone}`,
+    `- Canais preferidos: ${profile.preferredChannels.join(" | ")}`,
+    `- Canal preferido de alerta: ${profile.preferredAlertChannel ?? "não definido"}`,
     `- Estilo de resposta: ${profile.responseStyle}`,
     `- Briefing da manhã: ${profile.briefingPreference}`,
     `- Nível de detalhe: ${profile.detailLevel}`,
     `- Tom: ${profile.tonePreference}`,
     `- Modo padrão: ${profile.defaultOperationalMode === "field" ? "plantão/rua" : "normal"}`,
     `- Escopo padrão de agenda: ${labelAgendaScope(profile.defaultAgendaScope)}`,
+    `- Áreas prioritárias: ${profile.priorityAreas.length > 0 ? profile.priorityAreas.slice(0, 3).join(" | ") : "não definidas"}`,
+    `- Rotina principal: ${profile.routineSummary.length > 0 ? profile.routineSummary.slice(0, 3).join(" | ") : "não definida"}`,
     `- Deslocamento: ${profile.mobilityPreferences.length > 0 ? profile.mobilityPreferences.slice(0, 3).join(" | ") : "nenhuma preferência extra"}`,
     `- Itens físicos: ${profile.attire.carryItems.join(" | ")}`,
     `- Regras fixas: ${profile.operationalRules.slice(0, 3).join(" | ")}`,
@@ -4663,6 +4772,85 @@ function buildPersonalOperationalProfileRemovedReply(
     ...removedLabels.map((item) => `- Removido: ${item}`),
     "",
     buildPersonalOperationalProfileReply(profile),
+  ].join("\n");
+}
+
+function buildOperationalStateReply(state: OperationalState): string {
+  const formatStateCommitment = (item: OperationalState["upcomingCommitments"][number]) =>
+    item.start
+      ? `${truncateBriefText(item.summary, 70)} (${stateDateTimeLabel(item.start) ?? item.start})`
+      : truncateBriefText(item.summary, 70);
+
+  return [
+    "Estado operacional atual:",
+    `- Modo: ${state.mode === "field" ? "plantão/rua" : "normal"}${state.modeReason ? ` | motivo: ${state.modeReason}` : ""}`,
+    `- Foco atual: ${state.focus.length > 0 ? state.focus.slice(0, 3).join(" | ") : "nenhum foco explícito"}`,
+    `- Prioridades da semana: ${state.weeklyPriorities.length > 0 ? state.weeklyPriorities.slice(0, 3).join(" | ") : "não definidas"}`,
+    `- Alertas pendentes: ${state.pendingAlerts.length > 0 ? state.pendingAlerts.slice(0, 3).join(" | ") : "nenhum alerta pendente"}`,
+    `- Tarefas críticas: ${state.criticalTasks.length > 0 ? state.criticalTasks.slice(0, 3).join(" | ") : "nenhuma tarefa crítica"}`,
+    `- Próximos compromissos: ${state.upcomingCommitments.length > 0 ? state.upcomingCommitments.slice(0, 3).map((item) => formatStateCommitment(item)).join(" | ") : "nenhum compromisso marcado"}`,
+    `- Risco principal: ${state.primaryRisk ?? "nenhum risco destacado"}`,
+    `- Briefing: ${state.briefing.nextAction ?? "sem próxima ação"}${state.briefing.overloadLevel ? ` | carga ${state.briefing.overloadLevel}` : ""}`,
+    `- Canal atual: ${state.activeChannel ?? "não registrado"}`,
+    `- Canal preferido de alerta: ${state.preferredAlertChannel ?? "não registrado"}`,
+    `- Aprovações pendentes: ${state.pendingApprovals}`,
+    `- Atualizado em: ${state.updatedAt}`,
+  ].join("\n");
+}
+
+function stateDateTimeLabel(value: string): string | undefined {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return undefined;
+  }
+  return new Intl.DateTimeFormat("pt-BR", {
+    day: "2-digit",
+    month: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(date);
+}
+
+function formatLearnedPreferenceTypeLabel(type: LearnedPreference["type"]): string {
+  switch (type) {
+    case "schedule_import_mode":
+      return "Importação de agenda";
+    case "agenda_scope":
+      return "Escopo de agenda";
+    case "response_style":
+      return "Estilo de resposta";
+    case "channel_preference":
+      return "Canal";
+    case "calendar_interpretation":
+      return "Interpretação de agenda";
+    case "visual_task":
+      return "Tarefa visual";
+    case "alert_action":
+      return "Ação de alerta";
+    case "other":
+    default:
+      return "Aprendizado";
+  }
+}
+
+function buildLearnedPreferencesReply(items: LearnedPreference[]): string {
+  if (items.length === 0) {
+    return "Ainda não encontrei aprendizados operacionais ativos sobre você.";
+  }
+
+  return [
+    `Aprendizados operacionais ativos: ${items.length}.`,
+    ...items.slice(0, 10).map((item) =>
+      `- #${item.id} | ${formatLearnedPreferenceTypeLabel(item.type)} | ${item.description} => ${item.value} | confiança ${Math.round(item.confidence * 100)}% | confirmações ${item.confirmations}`,
+    ),
+  ].join("\n");
+}
+
+function buildLearnedPreferenceDeactivatedReply(item: LearnedPreference): string {
+  return [
+    "Preferência aprendida desativada.",
+    `- #${item.id} | ${formatLearnedPreferenceTypeLabel(item.type)} | ${item.description} => ${item.value}`,
   ].join("\n");
 }
 
@@ -9401,6 +9589,33 @@ export class AgentCore {
     if (directPersonalProfileShowResult) {
       return directPersonalProfileShowResult;
     }
+    const directOperationalStateResult = await this.tryRunDirectOperationalStateShow(
+      activeUserPrompt,
+      requestId,
+      orchestration,
+      preferences,
+    );
+    if (directOperationalStateResult) {
+      return directOperationalStateResult;
+    }
+    const directLearnedPreferencesListResult = await this.tryRunDirectLearnedPreferencesList(
+      activeUserPrompt,
+      requestId,
+      orchestration,
+      preferences,
+    );
+    if (directLearnedPreferencesListResult) {
+      return directLearnedPreferencesListResult;
+    }
+    const directLearnedPreferencesDeleteResult = await this.tryRunDirectLearnedPreferencesDelete(
+      activeUserPrompt,
+      requestId,
+      orchestration,
+      preferences,
+    );
+    if (directLearnedPreferencesDeleteResult) {
+      return directLearnedPreferencesDeleteResult;
+    }
     const directPersonalProfileUpdateResult = await this.tryRunDirectPersonalOperationalProfileUpdate(
       activeUserPrompt,
       requestId,
@@ -10294,6 +10509,7 @@ export class AgentCore {
     options?: AgentRunOptions,
   ): Promise<ExternalReasoningRequest> {
     const personalProfile = this.personalMemory.getProfile();
+    const operationalState = this.personalMemory.getOperationalState();
     const briefEvents = (contextPack?.brief?.events ?? [])
       .slice(0, 6)
       .flatMap((event) => {
@@ -10316,6 +10532,14 @@ export class AgentCore {
       ...personalProfile.routineAnchors.map((item) => `rotina: ${item}`),
       ...personalProfile.operationalRules.map((item) => `regra operacional: ${item}`),
     ].slice(0, 8);
+    const relevantLearnedPreferences = selectRelevantLearnedPreferences(
+      userPrompt,
+      this.personalMemory.listLearnedPreferences({
+        activeOnly: true,
+        limit: 12,
+      }),
+      4,
+    );
     const tasksContext = await this.buildExternalReasoningTasksContext(userPrompt, intent, contextPack);
     const operationalMode = resolveEffectiveOperationalMode(userPrompt, personalProfile);
 
@@ -10342,17 +10566,19 @@ export class AgentCore {
           : {}),
         ...(memorySignals.length > 0 ? { memory: memorySignals } : {}),
         ...(personalSignals.length > 0 ? { personal: personalSignals } : {}),
-        personal_profile: {
-          response_style: personalProfile.responseStyle,
-          briefing_preference: personalProfile.briefingPreference,
-          detail_level: personalProfile.detailLevel,
-          tone_preference: personalProfile.tonePreference,
-          default_operational_mode: personalProfile.defaultOperationalMode,
-          default_agenda_scope: personalProfile.defaultAgendaScope,
-          mobility_preferences: personalProfile.mobilityPreferences.slice(0, 4),
-          autonomy_preferences: personalProfile.autonomyPreferences.slice(0, 4),
-          carry_items: personalProfile.attire.carryItems.slice(0, 6),
-        },
+        personal_profile: summarizeIdentityProfileForReasoning(personalProfile),
+        operational_state: summarizeOperationalStateForReasoning(operationalState),
+        ...(relevantLearnedPreferences.length > 0
+          ? {
+              learned_preferences: relevantLearnedPreferences.map((item) => ({
+                type: item.type,
+                description: item.description,
+                value: item.value,
+                confidence: item.confidence,
+                confirmations: item.confirmations,
+              })),
+            }
+          : {}),
         ...(operationalMode ? { operational_mode: operationalMode } : {}),
         ...(tasksContext ? { tasks: tasksContext } : {}),
         preferences: {
@@ -14631,6 +14857,135 @@ export class AgentCore {
     };
   }
 
+  private async tryRunDirectOperationalStateShow(
+    userPrompt: string,
+    requestId: string,
+    orchestration: OrchestrationContext,
+    preferences: UserPreferences,
+  ): Promise<AgentRunResult | null> {
+    if (!isOperationalStateShowPrompt(userPrompt)) {
+      return null;
+    }
+
+    const execution = await this.executeToolDirect("get_operational_state", {});
+    const rawResult = execution.rawResult as {
+      state?: OperationalState;
+    };
+
+    return {
+      requestId,
+      reply: buildOperationalStateReply(rawResult.state ?? this.personalMemory.getOperationalState()),
+      messages: buildBaseMessages(userPrompt, orchestration, preferences),
+      toolExecutions: [
+        {
+          toolName: "get_operational_state",
+          resultPreview: execution.content.slice(0, 240),
+        },
+      ],
+    };
+  }
+
+  private async tryRunDirectLearnedPreferencesList(
+    userPrompt: string,
+    requestId: string,
+    orchestration: OrchestrationContext,
+    preferences: UserPreferences,
+  ): Promise<AgentRunResult | null> {
+    if (!isLearnedPreferencesListPrompt(userPrompt)) {
+      return null;
+    }
+
+    const execution = await this.executeToolDirect("list_learned_preferences", {
+      limit: 12,
+    });
+    const rawResult = execution.rawResult as {
+      items?: LearnedPreference[];
+    };
+
+    return {
+      requestId,
+      reply: buildLearnedPreferencesReply(rawResult.items ?? []),
+      messages: buildBaseMessages(userPrompt, orchestration, preferences),
+      toolExecutions: [
+        {
+          toolName: "list_learned_preferences",
+          resultPreview: execution.content.slice(0, 240),
+        },
+      ],
+    };
+  }
+
+  private async tryRunDirectLearnedPreferencesDelete(
+    userPrompt: string,
+    requestId: string,
+    orchestration: OrchestrationContext,
+    preferences: UserPreferences,
+  ): Promise<AgentRunResult | null> {
+    if (!isLearnedPreferencesDeletePrompt(userPrompt)) {
+      return null;
+    }
+
+    let targetId = extractLearnedPreferenceId(userPrompt);
+    const query = extractLearnedPreferenceDeleteTarget(userPrompt);
+    if (!targetId && !query) {
+      return {
+        requestId,
+        reply: "Diga qual preferência aprendida devo desativar, por id ou por referência curta.",
+        messages: buildBaseMessages(userPrompt, orchestration, preferences),
+        toolExecutions: [],
+      };
+    }
+
+    if (!targetId && query) {
+      const matches = this.personalMemory.findLearnedPreferences(query, 5);
+      if (matches.length === 0) {
+        return {
+          requestId,
+          reply: `Não encontrei preferência aprendida para "${query}".`,
+          messages: buildBaseMessages(userPrompt, orchestration, preferences),
+          toolExecutions: [],
+        };
+      }
+      if (matches.length > 1) {
+        return {
+          requestId,
+          reply: buildLearnedPreferencesReply(matches),
+          messages: buildBaseMessages(userPrompt, orchestration, preferences),
+          toolExecutions: [],
+        };
+      }
+      targetId = matches[0]?.id;
+    }
+
+    if (!targetId) {
+      return null;
+    }
+
+    const execution = await this.executeToolDirect("deactivate_learned_preference", {
+      id: targetId,
+    });
+    const rawResult = execution.rawResult as {
+      item?: LearnedPreference;
+    };
+    const item = rawResult.item;
+
+    return {
+      requestId,
+      reply: item
+        ? buildLearnedPreferenceDeactivatedReply(item)
+        : "Não consegui desativar essa preferência aprendida.",
+      messages: buildBaseMessages(userPrompt, orchestration, preferences),
+      toolExecutions: item
+        ? [
+            {
+              toolName: "deactivate_learned_preference",
+              resultPreview: execution.content.slice(0, 240),
+            },
+          ]
+        : [],
+    };
+  }
+
   private async tryRunDirectPersonalOperationalProfileUpdate(
     userPrompt: string,
     requestId: string,
@@ -14653,6 +15008,13 @@ export class AgentCore {
     }
 
     const execution = await this.executeToolDirect("update_personal_operational_profile", {
+      ...(extracted.profile.displayName ? { displayName: extracted.profile.displayName } : {}),
+      ...(extracted.profile.primaryRole ? { primaryRole: extracted.profile.primaryRole } : {}),
+      ...(extracted.profile.routineSummary ? { routineSummary: extracted.profile.routineSummary } : {}),
+      ...(extracted.profile.timezone ? { timezone: extracted.profile.timezone } : {}),
+      ...(extracted.profile.preferredChannels ? { preferredChannels: extracted.profile.preferredChannels } : {}),
+      ...(extracted.profile.preferredAlertChannel ? { preferredAlertChannel: extracted.profile.preferredAlertChannel } : {}),
+      ...(extracted.profile.priorityAreas ? { priorityAreas: extracted.profile.priorityAreas } : {}),
       ...(extracted.profile.defaultAgendaScope ? { defaultAgendaScope: extracted.profile.defaultAgendaScope } : {}),
       ...(extracted.profile.responseStyle ? { responseStyle: extracted.profile.responseStyle } : {}),
       ...(extracted.profile.briefingPreference ? { briefingPreference: extracted.profile.briefingPreference } : {}),

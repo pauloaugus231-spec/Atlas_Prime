@@ -516,6 +516,7 @@ Estado atual:
 - quando existe um alerta monitorado pendente no Telegram, apenas respostas curtas do próprio alerta continuam esse fluxo; se o usuário mandar um pedido novo completo, o Atlas abandona o alerta pendente silenciosamente e segue com o novo pedido normal
 - o Atlas consegue revisar conflitos, duplicidades e nomes inconsistentes na agenda sem alterar nada sozinho
 - a memoria pessoal operacional agora fica separada da memoria operacional geral para guardar foco salvo, rotina e regras praticas; alem dos itens livres, existe um perfil operacional base editavel explicitamente pelo Telegram
+- o Atlas agora mantem tres camadas pessoais explicitas: `Identity Profile` (quem voce e e como prefere operar), `Operational State` (modo atual, foco, risco, pendencias e proxima acao) e `Learned Preferences` (correcoes e padroes confirmados com o tempo); isso melhora briefing, contexto e reasoning externo sem virar multi-tenant completo
 - provider externo opcional de raciocinio: suporta `EXTERNAL_REASONING_MODE=off|smart|always`; em `off` fica desligado, em `smart` segue a politica por intencao e em `always` tenta o provider em toda mensagem antes do fluxo local; ele pode devolver texto normal ou `assistant_decision`, e o Atlas continua como executor local controlado de operacoes estruturadas sob whitelist; se o provider falhar, expirar ou devolver resposta invalida, cai em fallback local automaticamente
 
 Plugins novos:
@@ -535,6 +536,11 @@ Plugins novos:
 - `execute_task_operation`
 - `get_personal_operational_profile`
 - `update_personal_operational_profile`
+- `get_operational_state`
+- `update_operational_state`
+- `list_learned_preferences`
+- `save_learned_preference`
+- `deactivate_learned_preference`
 
 Como configurar:
 

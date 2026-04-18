@@ -32,6 +32,7 @@
     "eval:llm-fallback": "tsx scripts/eval-llm-fallback.ts",
     "eval:morning-brief": "tsx scripts/eval-morning-brief-format.ts",
     "eval:personal-memory": "tsx scripts/eval-personal-memory.ts",
+    "eval:personal-context": "tsx scripts/eval-personal-context-layers.ts",
     "dev": "tsx src/index.ts",
     "core:doctor": "tsx src/index.ts doctor",
     "core:plugins": "tsx src/index.ts plugins:list",

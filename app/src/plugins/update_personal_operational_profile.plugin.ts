@@ -2,6 +2,13 @@ import { defineToolPlugin } from "../types/plugin.js";
 import type { PersonalOperationalProfile } from "../types/personal-operational-memory.js";
 
 interface UpdatePersonalOperationalProfileParameters {
+  displayName?: string;
+  primaryRole?: string;
+  routineSummary?: string[];
+  timezone?: string;
+  preferredChannels?: string[];
+  preferredAlertChannel?: string;
+  priorityAreas?: string[];
   defaultAgendaScope?: PersonalOperationalProfile["defaultAgendaScope"];
   responseStyle?: string;
   briefingPreference?: PersonalOperationalProfile["briefingPreference"];
@@ -24,6 +31,36 @@ export default defineToolPlugin<UpdatePersonalOperationalProfileParameters>({
   parameters: {
     type: "object",
     properties: {
+      displayName: {
+        type: "string",
+      },
+      primaryRole: {
+        type: "string",
+      },
+      routineSummary: {
+        type: "array",
+        items: {
+          type: "string",
+        },
+      },
+      timezone: {
+        type: "string",
+      },
+      preferredChannels: {
+        type: "array",
+        items: {
+          type: "string",
+        },
+      },
+      preferredAlertChannel: {
+        type: "string",
+      },
+      priorityAreas: {
+        type: "array",
+        items: {
+          type: "string",
+        },
+      },
       defaultAgendaScope: {
         type: "string",
         enum: ["primary", "work", "both"],
@@ -92,6 +129,13 @@ export default defineToolPlugin<UpdatePersonalOperationalProfileParameters>({
   },
   execute(parameters, context) {
     const profile = context.personalMemory.updateProfile({
+      displayName: parameters.displayName,
+      primaryRole: parameters.primaryRole,
+      routineSummary: parameters.routineSummary,
+      timezone: parameters.timezone,
+      preferredChannels: parameters.preferredChannels,
+      preferredAlertChannel: parameters.preferredAlertChannel,
+      priorityAreas: parameters.priorityAreas,
       defaultAgendaScope: parameters.defaultAgendaScope,
       responseStyle: parameters.responseStyle,
       briefingPreference: parameters.briefingPreference,

@@ -2443,6 +2443,12 @@ export class TelegramService {
     if (operationalModeIntent) {
       if (operationalModeIntent.action === "deactivate") {
         this.clearOperationalMode(message.chat.id);
+        await this.syncOperationalState({
+          chatId: message.chat.id,
+          mode: "normal",
+          modeReason: "modo normal",
+          recentContext: ["modo operacional normal retomado neste chat"],
+        });
         await this.sendText(
           message.chat.id,
           "Modo operacional de rua desativado. Voltei ao comportamento normal neste chat.",
@@ -2453,6 +2459,12 @@ export class TelegramService {
         );
       } else {
         const mode = this.activateOperationalMode(message.chat.id, operationalModeIntent.reason);
+        await this.syncOperationalState({
+          chatId: message.chat.id,
+          mode: "field",
+          modeReason: mode.reason,
+          recentContext: [`modo operacional ativo: ${mode.reason}`],
+        });
         await this.sendText(
           message.chat.id,
           [
@@ -2526,6 +2538,14 @@ export class TelegramService {
         ? this.applyScheduleImportMode(importBatchDraft, importBatchCommand.mode)
         : importBatchDraft;
       if (importBatchCommand.mode) {
+        await this.recordLearnedPreference({
+          type: "schedule_import_mode",
+          key: "default_mode",
+          description: "Modo preferido na importação de agenda por imagem/PDF",
+          value: importBatchCommand.mode,
+          source: "confirmation",
+          confidence: 0.78,
+        });
         this.pendingActionDrafts.set(message.chat.id, workingDraft);
         this.persistPendingApproval(message.chat.id, workingDraft);
       }
@@ -2717,6 +2737,14 @@ export class TelegramService {
     if (pendingDraft?.kind === "google_event_import_batch") {
       const mode = resolveScheduleImportModeReply(normalizedText);
       if (mode) {
+        await this.recordLearnedPreference({
+          type: "schedule_import_mode",
+          key: "default_mode",
+          description: "Modo preferido na importação de agenda por imagem/PDF",
+          value: mode,
+          source: "confirmation",
+          confidence: 0.78,
+        });
         const updatedDraft = this.applyScheduleImportMode(pendingDraft, mode);
         this.pendingActionDrafts.set(message.chat.id, updatedDraft);
         const approval = this.persistPendingApproval(message.chat.id, updatedDraft);
@@ -3160,6 +3188,73 @@ export class TelegramService {
     return "abordagem";
   }
 
+  private async syncOperationalState(input: {
+    chatId: number;
+    mode?: "normal" | "field";
+    modeReason?: string;
+    recentContext?: string[];
+  }): Promise<void> {
+    try {
+      await this.core.executeToolDirect("update_operational_state", {
+        activeChannel: `telegram:${input.chatId}`,
+        ...(input.mode ? { mode: input.mode } : {}),
+        ...(input.modeReason ? { modeReason: input.modeReason } : {}),
+        ...(input.recentContext ? { recentContext: input.recentContext } : {}),
+      });
+    } catch (error) {
+      this.logger.warn("Failed to sync Telegram operational state", {
+        chatId: input.chatId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  private async recordLearnedPreference(input: {
+    type: "schedule_import_mode" | "agenda_scope" | "response_style" | "channel_preference" | "calendar_interpretation" | "visual_task" | "alert_action" | "other";
+    key: string;
+    description: string;
+    value: string;
+    source: "explicit" | "observed" | "correction" | "confirmation" | "rejection" | "system";
+    confidence?: number;
+  }): Promise<void> {
+    try {
+      await this.core.executeToolDirect("save_learned_preference", {
+        ...input,
+        observe: true,
+      });
+    } catch (error) {
+      this.logger.warn("Failed to record learned preference from Telegram flow", {
+        type: input.type,
+        key: input.key,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  private async resolvePreferredScheduleImportMode(): Promise<ScheduleImportMode | undefined> {
+    try {
+      const execution = await this.core.executeToolDirect("list_learned_preferences", {
+        type: "schedule_import_mode",
+        limit: 1,
+      });
+      const record = execution.rawResult && typeof execution.rawResult === "object"
+        ? execution.rawResult as Record<string, unknown>
+        : undefined;
+      const items = Array.isArray(record?.items)
+        ? record.items as Array<Record<string, unknown>>
+        : [];
+      const value = typeof items[0]?.value === "string" ? items[0].value : undefined;
+      return value === "self_only" || value === "self_plus_structural" || value === "full_block"
+        ? value
+        : undefined;
+    } catch (error) {
+      this.logger.warn("Failed to resolve preferred schedule import mode", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return undefined;
+    }
+  }
+
   private applyScheduleImportMode(
     draft: PendingGoogleEventImportBatchDraft,
     mode: ScheduleImportMode,
@@ -3467,8 +3562,9 @@ export class TelegramService {
         ...extracted.assumptions,
         ...extracted.uncertainties.map((item) => `incerteza: ${item}`),
       ].filter((item, index, list) => list.indexOf(item) === index).slice(0, 8);
+      const preferredMode = previousImport?.importMode ?? await this.resolvePreferredScheduleImportMode();
       const refinedImport = refineScheduleImportEvents(dedupedEvents, {
-        mode: previousImport?.importMode,
+        mode: preferredMode,
         nonEvents: ignoredItems,
         assumptions,
       });

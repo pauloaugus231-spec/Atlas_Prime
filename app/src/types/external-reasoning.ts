@@ -45,6 +45,13 @@ export interface ExternalReasoningRequest {
     memory?: string[];
     personal?: string[];
     personal_profile?: {
+      display_name: string;
+      primary_role: string;
+      timezone: string;
+      preferred_channels: string[];
+      preferred_alert_channel?: string;
+      priority_areas: string[];
+      routine_summary: string[];
       response_style: string;
       briefing_preference: string;
       detail_level: string;
@@ -55,6 +62,37 @@ export interface ExternalReasoningRequest {
       autonomy_preferences: string[];
       carry_items: string[];
     };
+    operational_state?: {
+      mode: string;
+      mode_reason?: string;
+      focus: string[];
+      weekly_priorities: string[];
+      pending_alerts: string[];
+      critical_tasks: string[];
+      upcoming_commitments: Array<{
+        summary: string;
+        start?: string;
+        account?: string;
+        location?: string;
+      }>;
+      primary_risk?: string;
+      briefing: {
+        lastGeneratedAt?: string;
+        nextAction?: string;
+        overloadLevel?: string;
+      };
+      recent_context: string[];
+      active_channel?: string;
+      preferred_alert_channel?: string;
+      pending_approvals: number;
+    };
+    learned_preferences?: Array<{
+      type: string;
+      description: string;
+      value: string;
+      confidence: number;
+      confirmations: number;
+    }>;
     operational_mode?: "field";
     preferences: {
       response_style: ResponseStyle;

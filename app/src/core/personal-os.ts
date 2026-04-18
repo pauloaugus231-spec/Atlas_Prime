@@ -989,6 +989,38 @@ export class PersonalOSService {
       workflows: workflows.length,
     });
 
+    this.personalMemory.updateOperationalState({
+      focus: personalFocus,
+      weeklyPriorities: personalFocus,
+      pendingAlerts: approvals.slice(0, 4).map((item) => item.subject),
+      criticalTasks: [
+        ...taskBuckets.overdue.slice(0, 2).map((item) => item.title),
+        ...taskBuckets.today.slice(0, 2).map((item) => item.title),
+      ].slice(0, 4),
+      upcomingCommitments: annotatedEvents.slice(0, 4).map((event) => ({
+        summary: event.summary,
+        start: event.start ?? undefined,
+        account: event.account,
+        location: event.location,
+      })),
+      primaryRisk:
+        conflictSummary.overlaps > 0
+          ? `${conflictSummary.overlaps} conflito(s) de agenda`
+          : overloadLevel === "pesado"
+            ? "sobrecarga operacional"
+            : emails[0]?.subject,
+      briefing: {
+        lastGeneratedAt: new Date().toISOString(),
+        nextAction,
+        overloadLevel,
+      },
+      recentContext: [
+        ...(mobilityAlerts.slice(0, 2)),
+        ...(dayRecommendation ? [dayRecommendation] : []),
+      ].slice(0, 4),
+      pendingApprovals: approvals.length,
+    });
+
     return {
       timezone: this.timezone,
       events: annotatedEvents,
