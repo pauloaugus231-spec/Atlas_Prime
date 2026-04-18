@@ -5,6 +5,11 @@ import {
   type PendingMonitoredChannelAlertDraft,
 } from "../src/core/monitored-channel-alerts.js";
 import { resolveIncomingWhatsAppChannel } from "../src/core/operator-profile.js";
+import {
+  looksLikeEvolutionMessageWebhook,
+  parseEvolutionWebhookMessage,
+  type EvolutionWebhookPayload,
+} from "../src/integrations/whatsapp/evolution-api.js";
 import { WhatsAppMonitorService } from "../src/integrations/whatsapp/whatsapp-monitor-service.js";
 import type { AppConfig } from "../src/types/config.js";
 import type { Logger } from "../src/types/logger.js";
@@ -157,6 +162,39 @@ async function run(): Promise<void> {
     });
     results.push(assert(direct?.mode !== "direct_operator", "telegram_is_operator_no_direct_whatsapp_binding"));
     results.push(assert(monitored?.mode === "monitored", "institutional_instance_is_monitored_channel"));
+  }
+
+  {
+    const directPayload: EvolutionWebhookPayload = {
+      key: {
+        remoteJid: "5551888888888@s.whatsapp.net",
+        fromMe: false,
+      },
+      pushName: "Coordenação",
+      messageType: "conversation",
+      message: {
+        conversation: "Paulo, reunião amanhã às 9h no CREAS",
+      },
+    };
+    const wrappedPayload: EvolutionWebhookPayload = {
+      event: "messages.upsert",
+      data: {
+        key: {
+          remoteJid: "5551888888888@s.whatsapp.net",
+          fromMe: false,
+        },
+        pushName: "Coordenação",
+        messageType: "conversation",
+        message: {
+          conversation: "Paulo, reunião amanhã às 9h no CREAS",
+        },
+      },
+    };
+    const directParsed = parseEvolutionWebhookMessage(directPayload);
+    const wrappedParsed = parseEvolutionWebhookMessage(wrappedPayload);
+    results.push(assert(looksLikeEvolutionMessageWebhook(directPayload), "direct_evolution_payload_is_recognized"));
+    results.push(assert(directParsed?.text === "Paulo, reunião amanhã às 9h no CREAS", "direct_evolution_payload_extracts_text"));
+    results.push(assert(wrappedParsed?.remoteJid === "5551888888888@s.whatsapp.net", "wrapped_evolution_payload_extracts_remote_jid"));
   }
 
   {

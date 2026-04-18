@@ -14,6 +14,11 @@ export interface EvolutionWebhookPayload {
   date_time?: string;
   sender?: string;
   apikey?: string;
+  key?: Record<string, unknown>;
+  pushName?: string;
+  message?: Record<string, unknown>;
+  messageType?: string;
+  messages?: unknown[];
 }
 
 export interface EvolutionWebhookMessage {
@@ -98,9 +103,38 @@ function extractTextFromAnyMessage(message: unknown): string | undefined {
   return extractTextFromMessage({ message: message as Record<string, unknown> });
 }
 
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" ? value as Record<string, unknown> : undefined;
+}
+
+function resolveWebhookEnvelope(payload: EvolutionWebhookPayload): Record<string, unknown> | undefined {
+  const directPayload = asRecord(payload);
+  const nestedData = asRecord(payload.data);
+  if (nestedData) {
+    return nestedData;
+  }
+  if (directPayload) {
+    if (asRecord(directPayload.key) || asRecord(directPayload.message)) {
+      return directPayload;
+    }
+    const directMessages = Array.isArray(directPayload.messages) ? directPayload.messages : undefined;
+    if (directMessages?.length) {
+      const firstMessage = asRecord(directMessages[0]);
+      if (firstMessage) {
+        return firstMessage;
+      }
+    }
+  }
+  return undefined;
+}
+
+export function looksLikeEvolutionMessageWebhook(payload: EvolutionWebhookPayload): boolean {
+  return Boolean(resolveWebhookEnvelope(payload));
+}
+
 export function parseEvolutionWebhookMessage(payload: EvolutionWebhookPayload): EvolutionWebhookMessage | null {
-  const data = payload.data;
-  if (!data || typeof data !== "object") {
+  const data = resolveWebhookEnvelope(payload);
+  if (!data) {
     return null;
   }
 

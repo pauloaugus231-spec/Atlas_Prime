@@ -161,7 +161,7 @@ jobs:
               ),
               "approval_inbox": (
                   base / "approval-inbox.sqlite",
-                  "select id, channel, action_kind, subject, status, created_at from approvals order by id desc limit 10",
+                  "select id, channel, action_kind, subject, status, created_at from approval_inbox order by id desc limit 10",
               ),
           }
 

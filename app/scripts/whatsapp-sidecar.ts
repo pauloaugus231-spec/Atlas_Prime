@@ -7,6 +7,7 @@ import { TelegramApi } from "../src/integrations/telegram/telegram-api.js";
 import {
   EvolutionApiClient,
   extractPhoneFromRemoteJid,
+  looksLikeEvolutionMessageWebhook,
   parseEvolutionWebhookMessage,
   type EvolutionWebhookPayload,
 } from "../src/integrations/whatsapp/evolution-api.js";
@@ -24,8 +25,12 @@ async function readJsonBody(request: http.IncomingMessage): Promise<unknown> {
   return raw ? JSON.parse(raw) : {};
 }
 
-function isSupportedWebhookEvent(event: string | undefined): boolean {
-  const normalized = (event ?? "")
+function isSupportedWebhookEvent(payload: EvolutionWebhookPayload): boolean {
+  if (!payload.event && looksLikeEvolutionMessageWebhook(payload)) {
+    return true;
+  }
+
+  const normalized = (payload.event ?? "")
     .trim()
     .toLowerCase()
     .replace(/[_\s-]+/g, ".");
@@ -158,7 +163,13 @@ async function main(): Promise<void> {
         return;
       }
 
-      if (!isSupportedWebhookEvent(payload.event)) {
+      if (!isSupportedWebhookEvent(payload)) {
+        logger.info("WhatsApp webhook ignored", {
+          reason: "event_not_supported",
+          instanceName: payload.instance,
+          event: payload.event,
+          directMessageShape: looksLikeEvolutionMessageWebhook(payload),
+        });
         response.writeHead(202, { "Content-Type": "application/json" });
         response.end(JSON.stringify({ ok: true, ignored: true, reason: "event_not_supported" }));
         return;
@@ -166,6 +177,15 @@ async function main(): Promise<void> {
 
       const message = parseEvolutionWebhookMessage(payload);
       if (!message || message.fromMe || !message.remoteJid) {
+        logger.info("WhatsApp webhook ignored", {
+          reason: "empty_or_outbound",
+          instanceName: payload.instance,
+          event: payload.event,
+          parsed: Boolean(message),
+          fromMe: message?.fromMe ?? null,
+          hasRemoteJid: Boolean(message?.remoteJid),
+          hasText: Boolean(message?.text?.trim()),
+        });
         response.writeHead(202, { "Content-Type": "application/json" });
         response.end(JSON.stringify({ ok: true, ignored: true, reason: "empty_or_outbound" }));
         return;
@@ -174,6 +194,13 @@ async function main(): Promise<void> {
       const number = extractPhoneFromRemoteJid(message.remoteJid);
       const inboundText = message.text?.trim();
       if (!number || !inboundText) {
+        logger.info("WhatsApp webhook ignored", {
+          reason: "no_text_payload",
+          instanceName: payload.instance,
+          event: payload.event,
+          hasNumber: Boolean(number),
+          messageType: message.messageType,
+        });
         response.writeHead(202, { "Content-Type": "application/json" });
         response.end(JSON.stringify({ ok: true, ignored: true, reason: "no_text_payload" }));
         return;
