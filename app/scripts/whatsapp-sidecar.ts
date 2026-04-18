@@ -56,7 +56,7 @@ async function ensureConfiguredWebhooks(
   const expectedWebhook = {
     enabled: true,
     url: `http://whatsapp-sidecar:${config.whatsapp.sidecarPort}${config.whatsapp.webhookPath}`,
-    webhookByEvents: false,
+    webhookByEvents: true,
     webhookBase64: false,
     events: ["MESSAGES_UPSERT", "CONNECTION_UPDATE", "QRCODE_UPDATED"],
   } as const;
