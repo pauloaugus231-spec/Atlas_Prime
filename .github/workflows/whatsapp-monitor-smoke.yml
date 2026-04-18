@@ -42,13 +42,12 @@ jobs:
       - name: Post synthetic webhook payload to sidecar
         run: |
           set -euo pipefail
-          export INSTANCE SENDER_NUMBER SENDER_NAME MESSAGE_TEXT
           sudo docker exec \
             -i \
-            -e INSTANCE \
-            -e SENDER_NUMBER \
-            -e SENDER_NAME \
-            -e MESSAGE_TEXT \
+            -e "INSTANCE=$INSTANCE" \
+            -e "SENDER_NUMBER=$SENDER_NUMBER" \
+            -e "SENDER_NAME=$SENDER_NAME" \
+            -e "MESSAGE_TEXT=$MESSAGE_TEXT" \
             atlas-whatsapp-sidecar \
             node --input-type=module - <<'NODE'
           const payload = {
