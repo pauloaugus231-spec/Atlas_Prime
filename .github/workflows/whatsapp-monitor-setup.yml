@@ -36,6 +36,10 @@ on:
         description: Telegram operator channel mode
         required: true
         default: backup_operator
+      force_recreate:
+        description: Force logout and delete the instance before creating it again
+        required: false
+        default: "false"
 
 jobs:
   configure:
@@ -52,6 +56,7 @@ jobs:
       DEFAULT_ACCOUNT: ${{ github.event.inputs.default_account || 'abordagem' }}
       OPERATOR_ALERT_CHANNEL: ${{ github.event.inputs.operator_alert_channel || 'telegram_operator' }}
       TELEGRAM_OPERATOR_MODE: ${{ github.event.inputs.telegram_operator_mode || 'backup_operator' }}
+      FORCE_RECREATE: ${{ github.event.inputs.force_recreate || 'false' }}
     steps:
       - name: Validate target
         run: |
@@ -62,7 +67,7 @@ jobs:
       - name: Configure monitored WhatsApp env
         run: |
           set -euo pipefail
-          export DEPLOY_PATH OPERATOR_ID OPERATOR_NAME MONITORED_INSTANCE INSTITUTIONAL_NUMBER DEFAULT_ACCOUNT OPERATOR_ALERT_CHANNEL TELEGRAM_OPERATOR_MODE
+          export DEPLOY_PATH OPERATOR_ID OPERATOR_NAME MONITORED_INSTANCE INSTITUTIONAL_NUMBER DEFAULT_ACCOUNT OPERATOR_ALERT_CHANNEL TELEGRAM_OPERATOR_MODE FORCE_RECREATE
           python3 - <<'PY'
           import os
           from pathlib import Path
@@ -145,7 +150,8 @@ jobs:
           BASE_URL="http://127.0.0.1:8080"
           INSTANCE="$MONITORED_INSTANCE"
           NUMBER="$INSTITUTIONAL_NUMBER"
-          export API_KEY BASE_URL INSTANCE NUMBER
+          FORCE_RECREATE="${FORCE_RECREATE:-false}"
+          export API_KEY BASE_URL INSTANCE NUMBER FORCE_RECREATE
 
           for _ in $(seq 1 30); do
             if curl -fsS "$BASE_URL/instance/fetchInstances" -H "apikey: $API_KEY" >/dev/null 2>&1; then
@@ -196,6 +202,21 @@ jobs:
               with open(summary_path, "a", encoding="utf-8") as handle:
                   handle.write("\n".join(lines) + "\n")
 
+          def maybe_reset_instance():
+              if os.environ.get("FORCE_RECREATE", "false").lower() != "true":
+                  return False
+              try:
+                  request("DELETE", f"/instance/logout/{instance}")
+              except ApiError:
+                  pass
+              try:
+                  request("DELETE", f"/instance/delete/{instance}")
+                  return True
+              except ApiError:
+                  return False
+
+          hard_reset = maybe_reset_instance()
+
           instances = request("GET", "/instance/fetchInstances") or []
           existing = None
           if isinstance(instances, list):
@@ -244,6 +265,8 @@ jobs:
               "## WhatsApp monitor setup",
               f"- Instance: `{instance}`",
               f"- Number: `{number}`",
+              f"- Hard reset requested: `{'yes' if os.environ.get('FORCE_RECREATE', 'false').lower() == 'true' else 'no'}`",
+              f"- Hard reset applied: `{'yes' if hard_reset else 'no'}`",
               f"- Created now: `{'yes' if created else 'no'}`",
               f"- Connection state before pairing: `{state or 'unknown'}`",
           ]
