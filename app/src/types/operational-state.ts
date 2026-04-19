@@ -5,6 +5,35 @@ export interface OperationalStateUpcomingCommitment {
   location?: string;
 }
 
+export type OperationalStateSignalSource =
+  | "calendar"
+  | "tasks"
+  | "mode"
+  | "focus"
+  | "pending_alert"
+  | "monitored_whatsapp"
+  | "context";
+
+export type OperationalStateSignalKind =
+  | "possible_event"
+  | "possible_task"
+  | "reply_needed"
+  | "deadline"
+  | "attention"
+  | "focus_hint"
+  | "other";
+
+export interface OperationalStateSignal {
+  key: string;
+  source: OperationalStateSignalSource;
+  kind: OperationalStateSignalKind;
+  summary: string;
+  priority: "low" | "medium" | "high";
+  active: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface OperationalStateBriefing {
   lastGeneratedAt?: string;
   nextAction?: string;
@@ -22,6 +51,7 @@ export interface OperationalState {
   primaryRisk?: string;
   briefing: OperationalStateBriefing;
   recentContext: string[];
+  signals: OperationalStateSignal[];
   activeChannel?: string;
   preferredAlertChannel?: string;
   pendingApprovals: number;
@@ -39,6 +69,7 @@ export interface UpdateOperationalStateInput {
   primaryRisk?: string;
   briefing?: OperationalStateBriefing;
   recentContext?: string[];
+  signals?: OperationalStateSignal[];
   activeChannel?: string;
   preferredAlertChannel?: string;
   pendingApprovals?: number;

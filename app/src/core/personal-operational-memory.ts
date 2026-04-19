@@ -18,6 +18,7 @@ import type {
 } from "../types/learned-preferences.js";
 import type {
   OperationalState,
+  OperationalStateSignal,
   UpdateOperationalStateInput,
 } from "../types/operational-state.js";
 
@@ -73,6 +74,7 @@ const DEFAULT_OPERATIONAL_STATE: OperationalState = {
   upcomingCommitments: [],
   briefing: {},
   recentContext: [],
+  signals: [],
   pendingApprovals: 0,
   updatedAt: new Date(0).toISOString(),
 };
@@ -181,6 +183,39 @@ function normalizeUpcomingCommitments(
     .slice(0, 8);
 }
 
+function normalizeOperationalSignals(
+  value: UpdateOperationalStateInput["signals"] | OperationalState["signals"] | undefined,
+  fallback: OperationalState["signals"],
+): OperationalState["signals"] {
+  if (!Array.isArray(value)) {
+    return [...fallback];
+  }
+
+  const seen = new Set<string>();
+  const normalized: OperationalStateSignal[] = [];
+  for (const item of value) {
+    const key = normalizeOptionalString(item.key);
+    const summary = normalizeOptionalString(item.summary);
+    if (!key || !summary || seen.has(key)) {
+      continue;
+    }
+
+    seen.add(key);
+    normalized.push({
+      key,
+      source: item.source,
+      kind: item.kind,
+      summary,
+      priority: item.priority === "high" || item.priority === "medium" ? item.priority : "low",
+      active: item.active !== false,
+      createdAt: normalizeOptionalString(item.createdAt) ?? new Date().toISOString(),
+      updatedAt: normalizeOptionalString(item.updatedAt) ?? new Date().toISOString(),
+    });
+  }
+
+  return normalized.slice(0, 12);
+}
+
 function mapItemRow(row: {
   id: number;
   kind: string;
@@ -264,6 +299,7 @@ function normalizeOperationalState(
         : fallback.briefing.overloadLevel ? { overloadLevel: fallback.briefing.overloadLevel } : {}),
     },
     recentContext: normalizeStringList(value?.recentContext, fallback.recentContext),
+    signals: normalizeOperationalSignals(value?.signals, fallback.signals),
     ...(normalizeOptionalString(value?.activeChannel) ? { activeChannel: normalizeOptionalString(value?.activeChannel) } : fallback.activeChannel ? { activeChannel: fallback.activeChannel } : {}),
     ...(normalizeOptionalString(value?.preferredAlertChannel) ? { preferredAlertChannel: normalizeOptionalString(value?.preferredAlertChannel) } : fallback.preferredAlertChannel ? { preferredAlertChannel: fallback.preferredAlertChannel } : {}),
     pendingApprovals: Math.max(0, Math.floor(value?.pendingApprovals ?? fallback.pendingApprovals)),

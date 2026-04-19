@@ -36,6 +36,9 @@ import {
   type PendingMonitoredChannelAlertDraft,
 } from "../../core/monitored-channel-alerts.js";
 import {
+  buildOperationalStatePatchForResolvedMonitoredAlert,
+} from "../../core/operational-state-signals.js";
+import {
   interpretConversationTurn,
   looksLikeNewTopLevelConversationTurn,
 } from "../../core/conversation-interpreter.js";
@@ -46,6 +49,7 @@ import type { AppConfig } from "../../types/config.js";
 import type { ApprovalInboxItemRecord } from "../../types/approval-inbox.js";
 import type { ContentItemRecord } from "../../types/content-ops.js";
 import type { Logger } from "../../types/logger.js";
+import type { OperationalState } from "../../types/operational-state.js";
 import type { GoogleWorkspaceAuthService } from "../google/google-auth.js";
 import { ShortVideoRenderService } from "../media/short-video-renderer.js";
 import { OpenAiScheduleImportService } from "../openai/schedule-import.js";
@@ -75,6 +79,7 @@ import {
 } from "../voice/voice-message-handler.js";
 import { extractTelegramVoiceAttachment } from "../voice/telegram-voice.js";
 import { TelegramApi } from "./telegram-api.js";
+import { TelegramTypingSession } from "./typing-session.js";
 import {
   buildVisualTaskFailureReply,
   buildVisualTaskState,
@@ -1748,6 +1753,7 @@ export class TelegramService {
   private readonly pendingVisualTasks = new Map<number, VisualTaskState>();
   private readonly lastCalendarUndoActions = new Map<number, CalendarUndoAction>();
   private readonly operationalModes = new Map<number, OperationalModeState>();
+  private readonly typingSessions = new Map<number, TelegramTypingSession>();
   private readonly voiceHandler?: VoiceMessageHandler;
   private readonly scheduleImport?: OpenAiScheduleImportService;
   private readonly whatsapp: EvolutionApiClient;
@@ -1806,6 +1812,48 @@ export class TelegramService {
       return null;
     }
     return mode;
+  }
+
+  private beginTypingFeedback(
+    chatId: number,
+    options: {
+      replyToMessageId?: number;
+      progressText?: string;
+      fallbackText?: string;
+    } = {},
+  ): TelegramTypingSession {
+    const previous = this.typingSessions.get(chatId);
+    if (previous) {
+      this.typingSessions.delete(chatId);
+      previous.stop().catch(() => undefined);
+    }
+
+    const session = new TelegramTypingSession({
+      progressText: options.progressText ?? "Estou vendo isso agora.",
+      fallbackText: options.fallbackText ?? "Isso está demorando mais do que deveria. Ainda estou fechando isso por aqui.",
+      sendTyping: async () => {
+        await this.api.sendChatAction(chatId, "typing");
+      },
+      sendProgress: async (text) => {
+        await this.sendText(chatId, text, {
+          reply_to_message_id: options.replyToMessageId,
+          disable_web_page_preview: true,
+        });
+      },
+    });
+    this.typingSessions.set(chatId, session);
+    session.start();
+    return session;
+  }
+
+  private async endTypingFeedback(chatId: number, session?: TelegramTypingSession): Promise<void> {
+    if (!session) {
+      return;
+    }
+    if (this.typingSessions.get(chatId) === session) {
+      this.typingSessions.delete(chatId);
+    }
+    await session.stop();
   }
 
   private activateOperationalMode(chatId: number, reason: string): OperationalModeState {
@@ -2354,6 +2402,11 @@ export class TelegramService {
         return;
       }
 
+      const typingSession = this.beginTypingFeedback(message.chat.id, {
+        replyToMessageId: message.message_id,
+        progressText: "Estou ouvindo esse áudio agora.",
+        fallbackText: "Esse áudio está demorando mais do que deveria. Ainda estou tentando transcrever.",
+      });
       try {
         const transcription = await this.voiceHandler.handleTelegramVoice({
           chatId: message.chat.id,
@@ -2395,6 +2448,8 @@ export class TelegramService {
           },
         );
         return;
+      } finally {
+        await this.endTypingFeedback(message.chat.id, typingSession);
       }
     }
 
@@ -2721,6 +2776,10 @@ export class TelegramService {
     if (pendingDraft?.kind === "google_event" || pendingDraft?.kind === "google_event_update") {
       const adjustedDraft = adjustEventDraftFromInstruction(pendingDraft, normalizedText);
       if (adjustedDraft) {
+        await this.maybeRecordAgendaDraftLearning({
+          previousDraft: pendingDraft,
+          nextDraft: adjustedDraft,
+        });
         this.pendingActionDrafts.set(message.chat.id, adjustedDraft);
         const approval = this.persistPendingApproval(message.chat.id, adjustedDraft);
         const reply =
@@ -2854,15 +2913,52 @@ export class TelegramService {
       const effectiveText = pendingEmailDraft
         ? buildPendingDraftAdjustmentPrompt(pendingEmailDraft, normalizedText)
         : normalizedText;
+      const typingSession = this.beginTypingFeedback(message.chat.id, {
+        replyToMessageId: message.message_id,
+      });
       if (pendingDraft && pendingDraft.kind !== "email_reply") {
         this.clearPendingActionDraft(message.chat.id);
       }
-      const result = await this.core.runUserPrompt(
-        buildAgentPrompt(message, effectiveText, history, this.getOperationalMode(message.chat.id)),
-        { chatId: message.chat.id },
-      );
-      const structuredDecisionReply = await this.resolveStructuredAssistantDecisionReply(result.reply, message.chat.id);
-      if (structuredDecisionReply.handled) {
+      try {
+        const result = await this.core.runUserPrompt(
+          buildAgentPrompt(message, effectiveText, history, this.getOperationalMode(message.chat.id)),
+          { chatId: message.chat.id },
+        );
+        const structuredDecisionReply = await this.resolveStructuredAssistantDecisionReply(result.reply, message.chat.id);
+        await this.endTypingFeedback(message.chat.id, typingSession);
+        if (structuredDecisionReply.handled) {
+          this.appendChatTurn(message.chat.id, {
+            role: "user",
+            text: pendingEmailDraft
+              ? `${normalizedText} [ajuste de rascunho pendente]`
+              : audioAttachment
+                ? `[áudio] ${normalizedText}`
+                : normalizedText,
+          });
+          this.appendChatTurn(message.chat.id, {
+            role: "assistant",
+            text: structuredDecisionReply.visibleReply,
+          });
+          await this.sendText(message.chat.id, structuredDecisionReply.visibleReply, {
+            reply_to_message_id: message.message_id,
+            disable_web_page_preview: true,
+          });
+          return;
+        }
+        const nextPendingDraft = extractPendingActionDraft(result.reply);
+        const baseVisibleReply = sanitizeToolPayloadLeak(stripPendingDraftMarkers(result.reply) || result.reply);
+        const visibleReply =
+          audioAttachment && nextPendingDraft
+            ? buildCompactPendingActionReply(nextPendingDraft) ?? baseVisibleReply
+            : baseVisibleReply;
+        const approval = nextPendingDraft
+          ? this.persistPendingApproval(message.chat.id, nextPendingDraft)
+          : undefined;
+        if (nextPendingDraft) {
+          this.pendingActionDrafts.set(message.chat.id, nextPendingDraft);
+        } else {
+          this.clearPendingActionDraft(message.chat.id);
+        }
         this.appendChatTurn(message.chat.id, {
           role: "user",
           text: pendingEmailDraft
@@ -2873,45 +2969,16 @@ export class TelegramService {
         });
         this.appendChatTurn(message.chat.id, {
           role: "assistant",
-          text: structuredDecisionReply.visibleReply,
+          text: visibleReply,
         });
-        await this.sendText(message.chat.id, structuredDecisionReply.visibleReply, {
+        await this.sendText(message.chat.id, visibleReply, {
           reply_to_message_id: message.message_id,
-          disable_web_page_preview: true,
+          disable_web_page_preview: false,
+          reply_markup: approval ? buildApprovalInlineKeyboard(approval.id) : undefined,
         });
-        return;
+      } finally {
+        await this.endTypingFeedback(message.chat.id, typingSession);
       }
-      const nextPendingDraft = extractPendingActionDraft(result.reply);
-      const baseVisibleReply = sanitizeToolPayloadLeak(stripPendingDraftMarkers(result.reply) || result.reply);
-      const visibleReply =
-        audioAttachment && nextPendingDraft
-          ? buildCompactPendingActionReply(nextPendingDraft) ?? baseVisibleReply
-          : baseVisibleReply;
-      const approval = nextPendingDraft
-        ? this.persistPendingApproval(message.chat.id, nextPendingDraft)
-        : undefined;
-      if (nextPendingDraft) {
-        this.pendingActionDrafts.set(message.chat.id, nextPendingDraft);
-      } else {
-        this.clearPendingActionDraft(message.chat.id);
-      }
-      this.appendChatTurn(message.chat.id, {
-        role: "user",
-        text: pendingEmailDraft
-          ? `${normalizedText} [ajuste de rascunho pendente]`
-          : audioAttachment
-            ? `[áudio] ${normalizedText}`
-            : normalizedText,
-      });
-      this.appendChatTurn(message.chat.id, {
-        role: "assistant",
-        text: visibleReply,
-      });
-      await this.sendText(message.chat.id, visibleReply, {
-        reply_to_message_id: message.message_id,
-        disable_web_page_preview: false,
-        reply_markup: approval ? buildApprovalInlineKeyboard(approval.id) : undefined,
-      });
     } catch (error) {
       this.logger.error("Telegram message processing failed", {
         chatId: message.chat.id,
@@ -3179,50 +3246,58 @@ export class TelegramService {
     },
   ): Promise<void> {
     const history = this.getChatHistory(message.chat.id);
-    const result = await this.core.runUserPrompt(
-      buildAgentPrompt(message, input.effectiveText, history, this.getOperationalMode(message.chat.id)),
-      { chatId: message.chat.id },
-    );
-    const structuredDecisionReply = await this.resolveStructuredAssistantDecisionReply(result.reply, message.chat.id);
-    if (structuredDecisionReply.handled) {
+    const typingSession = this.beginTypingFeedback(message.chat.id, {
+      replyToMessageId: input.replyToMessageId,
+    });
+    try {
+      const result = await this.core.runUserPrompt(
+        buildAgentPrompt(message, input.effectiveText, history, this.getOperationalMode(message.chat.id)),
+        { chatId: message.chat.id },
+      );
+      const structuredDecisionReply = await this.resolveStructuredAssistantDecisionReply(result.reply, message.chat.id);
+      await this.endTypingFeedback(message.chat.id, typingSession);
+      if (structuredDecisionReply.handled) {
+        this.appendChatTurn(message.chat.id, {
+          role: "user",
+          text: input.userHistoryText,
+        });
+        this.appendChatTurn(message.chat.id, {
+          role: "assistant",
+          text: structuredDecisionReply.visibleReply,
+        });
+        await this.sendText(message.chat.id, structuredDecisionReply.visibleReply, {
+          reply_to_message_id: input.replyToMessageId,
+          disable_web_page_preview: true,
+        });
+        return;
+      }
+
+      const nextPendingDraft = extractPendingActionDraft(result.reply);
+      const visibleReply = sanitizeToolPayloadLeak(stripPendingDraftMarkers(result.reply) || result.reply);
+      const approval = nextPendingDraft
+        ? this.persistPendingApproval(message.chat.id, nextPendingDraft)
+        : undefined;
+      if (nextPendingDraft) {
+        this.pendingActionDrafts.set(message.chat.id, nextPendingDraft);
+      } else {
+        this.clearPendingActionDraft(message.chat.id);
+      }
       this.appendChatTurn(message.chat.id, {
         role: "user",
         text: input.userHistoryText,
       });
       this.appendChatTurn(message.chat.id, {
         role: "assistant",
-        text: structuredDecisionReply.visibleReply,
+        text: visibleReply,
       });
-      await this.sendText(message.chat.id, structuredDecisionReply.visibleReply, {
+      await this.sendText(message.chat.id, visibleReply, {
         reply_to_message_id: input.replyToMessageId,
-        disable_web_page_preview: true,
+        disable_web_page_preview: false,
+        reply_markup: approval ? buildApprovalInlineKeyboard(approval.id) : undefined,
       });
-      return;
+    } finally {
+      await this.endTypingFeedback(message.chat.id, typingSession);
     }
-
-    const nextPendingDraft = extractPendingActionDraft(result.reply);
-    const visibleReply = sanitizeToolPayloadLeak(stripPendingDraftMarkers(result.reply) || result.reply);
-    const approval = nextPendingDraft
-      ? this.persistPendingApproval(message.chat.id, nextPendingDraft)
-      : undefined;
-    if (nextPendingDraft) {
-      this.pendingActionDrafts.set(message.chat.id, nextPendingDraft);
-    } else {
-      this.clearPendingActionDraft(message.chat.id);
-    }
-    this.appendChatTurn(message.chat.id, {
-      role: "user",
-      text: input.userHistoryText,
-    });
-    this.appendChatTurn(message.chat.id, {
-      role: "assistant",
-      text: visibleReply,
-    });
-    await this.sendText(message.chat.id, visibleReply, {
-      reply_to_message_id: input.replyToMessageId,
-      disable_web_page_preview: false,
-      reply_markup: approval ? buildApprovalInlineKeyboard(approval.id) : undefined,
-    });
   }
 
   private resolveScheduleImportAccountAlias(contextText?: string): string {
@@ -3257,6 +3332,39 @@ export class TelegramService {
     }
   }
 
+  private async loadOperationalState(): Promise<OperationalState | null> {
+    try {
+      const execution = await this.core.executeToolDirect("get_operational_state", {});
+      const rawResult = execution.rawResult as { state?: OperationalState } | undefined;
+      return rawResult?.state ?? null;
+    } catch (error) {
+      this.logger.warn("Failed to load operational state from Telegram flow", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    }
+  }
+
+  private async syncMonitoredAlertOperationalState(input: {
+    draft: PendingMonitoredChannelAlertDraft;
+    resolution: "ignore" | "register" | "event" | "task" | "reply" | "summary";
+  }): Promise<void> {
+    const current = await this.loadOperationalState();
+    if (!current) {
+      return;
+    }
+
+    try {
+      const patch = buildOperationalStatePatchForResolvedMonitoredAlert(current, input.draft, input.resolution);
+      await this.core.executeToolDirect("update_operational_state", patch);
+    } catch (error) {
+      this.logger.warn("Failed to sync monitored alert into operational state from Telegram flow", {
+        resolution: input.resolution,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
   private async recordLearnedPreference(input: {
     type: "schedule_import_mode" | "agenda_scope" | "response_style" | "channel_preference" | "calendar_interpretation" | "visual_task" | "alert_action" | "other";
     key: string;
@@ -3270,11 +3378,52 @@ export class TelegramService {
         ...input,
         observe: true,
       });
+      this.logger.info("Recorded learned preference from Telegram flow", {
+        type: input.type,
+        key: input.key,
+        value: input.value,
+        source: input.source,
+      });
     } catch (error) {
       this.logger.warn("Failed to record learned preference from Telegram flow", {
         type: input.type,
         key: input.key,
         error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  private async maybeRecordAgendaDraftLearning(input: {
+    previousDraft: PendingGoogleEventDraft | PendingGoogleEventUpdateDraft;
+    nextDraft: PendingGoogleEventDraft | PendingGoogleEventUpdateDraft;
+  }): Promise<void> {
+    const beforeLocation = input.previousDraft.location?.trim().toLowerCase();
+    const afterLocation = input.nextDraft.location?.trim().toLowerCase();
+    if ((beforeLocation === "rua" || beforeLocation === "na rua") && !afterLocation) {
+      await this.recordLearnedPreference({
+        type: "calendar_interpretation",
+        key: "pseudo_location_rua",
+        description: "Quando o rascunho vier com Rua como local, isso costuma ser contexto e não location.",
+        value: "drop_location",
+        source: "correction",
+        confidence: 0.72,
+      });
+    }
+
+    const beforeSummary = input.previousDraft.summary.trim();
+    const afterSummary = input.nextDraft.summary.trim();
+    if (
+      beforeSummary.includes(":")
+      && afterSummary.includes(" - ")
+      && normalizeTelegramText(beforeSummary).replace(/\s*:\s*/g, " ") === normalizeTelegramText(afterSummary).replace(/\s*-\s*/g, " ")
+    ) {
+      await this.recordLearnedPreference({
+        type: "calendar_interpretation",
+        key: "title_separator_preference",
+        description: "Títulos de agenda com bloco composto tendem a ficar melhores com separador em travessão curto.",
+        value: "prefer_dash_separator",
+        source: "correction",
+        confidence: 0.66,
       });
     }
   }
@@ -3297,6 +3446,30 @@ export class TelegramService {
         : undefined;
     } catch (error) {
       this.logger.warn("Failed to resolve preferred schedule import mode", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return undefined;
+    }
+  }
+
+  private async resolveCalendarInterpretationRule(key: string): Promise<string | undefined> {
+    try {
+      const execution = await this.core.executeToolDirect("list_learned_preferences", {
+        type: "calendar_interpretation",
+        search: key,
+        limit: 5,
+      });
+      const record = execution.rawResult && typeof execution.rawResult === "object"
+        ? execution.rawResult as Record<string, unknown>
+        : undefined;
+      const items = Array.isArray(record?.items)
+        ? record.items as Array<Record<string, unknown>>
+        : [];
+      const match = items.find((item) => item.key === key);
+      return typeof match?.value === "string" ? match.value : undefined;
+    } catch (error) {
+      this.logger.warn("Failed to resolve calendar interpretation rule", {
+        key,
         error: error instanceof Error ? error.message : String(error),
       });
       return undefined;
@@ -3513,154 +3686,192 @@ export class TelegramService {
           },
         );
       }
-      const buffer = options.prefetchedBuffer ?? await this.downloadImportAttachmentBuffer(attachment);
-      const extracted = attachment.kind === "pdf"
-        ? await this.scheduleImport.extractFromPdf({
-            pdf: buffer,
-            sourceLabel: attachment.fileName,
-            caption: captionText,
-            currentDate: new Date().toISOString().slice(0, 10),
-            timezone,
+      const typingSession = this.beginTypingFeedback(message.chat.id, {
+        replyToMessageId: message.message_id,
+        progressText: "Estou lendo esse material agora.",
+        fallbackText: "Esse material está demorando mais do que deveria. Ainda estou tentando extrair o que der.",
+      });
+      try {
+        const buffer = options.prefetchedBuffer ?? await this.downloadImportAttachmentBuffer(attachment);
+        const extracted = attachment.kind === "pdf"
+          ? await this.scheduleImport.extractFromPdf({
+              pdf: buffer,
+              sourceLabel: attachment.fileName,
+              caption: captionText,
+              currentDate: new Date().toISOString().slice(0, 10),
+              timezone,
+            })
+          : await this.scheduleImport.extractFromImage({
+              image: buffer,
+              mimeType: attachment.mimeType,
+              sourceLabel: attachment.fileName,
+              caption: captionText,
+              currentDate: new Date().toISOString().slice(0, 10),
+              timezone,
+            });
+
+        const events = extracted.events
+          .map((event) => {
+            const matchedTerms = matchPersonalCalendarTerms({
+              account: accountAlias,
+              summary: event.summary,
+              description: event.description,
+              location: event.location,
+            });
+
+            return {
+              summary: event.summary,
+              description: event.description,
+              location: event.location,
+              start: event.start,
+              end: event.end,
+              timezone: event.timezone,
+              account: accountAlias,
+              calendarId: accountConfig.calendarId,
+              reminderMinutes: event.reminderMinutes,
+              confidence: event.confidence,
+              sourceLabel: event.sourceLabel,
+              category: event.category,
+              rawText: event.rawText,
+              assumedTime: event.assumedTime,
+              personallyRelevant: matchedTerms.length > 0,
+              matchedTerms,
+            };
           })
-        : await this.scheduleImport.extractFromImage({
-            image: buffer,
-            mimeType: attachment.mimeType,
-            sourceLabel: attachment.fileName,
-            caption: captionText,
-            currentDate: new Date().toISOString().slice(0, 10),
-            timezone,
+          .sort((left, right) => left.start.localeCompare(right.start));
+
+        if (events.length === 0) {
+          throw new Error("Não consegui identificar eventos válidos para importar.");
+        }
+
+        const existingDraft = this.pendingActionDrafts.get(message.chat.id);
+        const previousImport = existingDraft?.kind === "google_event_import_batch" &&
+          existingDraft.account === accountAlias
+          ? existingDraft
+          : undefined;
+        const extractedNonEvents: ScheduleImportIgnoredItem[] = extracted.nonEvents.map((item) => ({
+          summary: item.summary,
+          category: item.category,
+          reason: item.reason ?? "bloco não importado como evento",
+          date: item.date,
+          shift: item.shift,
+          sourceLabel: item.rawText,
+        }));
+        const previousCandidates = previousImport?.allImportableEvents ?? previousImport?.events ?? [];
+        const mergedEvents = [
+          ...previousCandidates.map((event) => ({
+            ...event,
+            category: event.importCategory ?? ("event_importable" as const),
+          })),
+          ...events,
+        ];
+        const dedupedEvents = Array.from(
+          new Map(
+            mergedEvents.map((event) => [
+              `${event.start}|${event.end}|${event.summary.trim().toLowerCase()}`,
+              event,
+            ]),
+          ).values(),
+        ).sort((left, right) => left.start.localeCompare(right.start));
+        const ignoredItems = Array.from(
+          new Map(
+            [
+              ...(previousImport?.ignoredItems ?? []),
+              ...extractedNonEvents,
+            ].map((item) => [
+              `${item.category}|${item.shift ?? ""}|${item.summary.trim().toLowerCase()}`,
+              item,
+            ]),
+          ).values(),
+        );
+        const assumptions = [
+          ...(previousImport?.assumptions ?? []),
+          ...extracted.assumptions,
+          ...extracted.uncertainties.map((item) => `incerteza: ${item}`),
+        ].filter((item, index, list) => list.indexOf(item) === index).slice(0, 8);
+        const preferredMode = previousImport?.importMode ?? await this.resolvePreferredScheduleImportMode();
+        const pseudoLocationRule = await this.resolveCalendarInterpretationRule("pseudo_location_rua");
+        const titleSeparatorRule = await this.resolveCalendarInterpretationRule("title_separator_preference");
+        const refinedImport = refineScheduleImportEvents(dedupedEvents, {
+          mode: preferredMode,
+          nonEvents: ignoredItems,
+          assumptions,
+        });
+        if (
+          pseudoLocationRule === "drop_location"
+          && dedupedEvents.some((event) => /^(?:rua|na rua)$/i.test((event.location ?? "").trim()))
+        ) {
+          this.logger.info("Applying learned calendar interpretation rule during schedule import", {
+            chatId: message.chat.id,
+            rule: "pseudo_location_rua",
           });
-
-      const events = extracted.events
-        .map((event) => {
-          const matchedTerms = matchPersonalCalendarTerms({
-            account: accountAlias,
-            summary: event.summary,
-            description: event.description,
-            location: event.location,
+          refinedImport.observations = [
+            'Regra aprendida aplicada: "Rua" continua fora do campo local.',
+            ...refinedImport.observations,
+          ].filter((item, index, list) => list.indexOf(item) === index).slice(0, 10);
+        }
+        if (
+          titleSeparatorRule === "prefer_dash_separator"
+          && refinedImport.allImportableEvents.some((event) => (event.originalSummary ?? "").includes(":"))
+        ) {
+          this.logger.info("Applying learned calendar interpretation rule during schedule import", {
+            chatId: message.chat.id,
+            rule: "title_separator_preference",
           });
+          refinedImport.observations = [
+            "Regra aprendida aplicada: títulos compostos seguem com separador em traço.",
+            ...refinedImport.observations,
+          ].filter((item, index, list) => list.indexOf(item) === index).slice(0, 10);
+        }
 
-          return {
-            summary: event.summary,
-            description: event.description,
-            location: event.location,
-            start: event.start,
-            end: event.end,
-            timezone: event.timezone,
-            account: accountAlias,
-            calendarId: accountConfig.calendarId,
-            reminderMinutes: event.reminderMinutes,
-            confidence: event.confidence,
-            sourceLabel: event.sourceLabel,
-            category: event.category,
-            rawText: event.rawText,
-            assumedTime: event.assumedTime,
-            personallyRelevant: matchedTerms.length > 0,
-            matchedTerms,
-          };
-        })
-        .sort((left, right) => left.start.localeCompare(right.start));
+        const draft: PendingGoogleEventImportBatchDraft = {
+          kind: "google_event_import_batch",
+          timezone,
+          account: accountAlias,
+          calendarId: accountConfig.calendarId,
+          sourceLabel: previousImport
+            ? `${previousImport.sourceLabel}; ${attachment.fileName}`
+            : attachment.fileName,
+          totalExtracted: refinedImport.blockCounts.total,
+          relevantCount: refinedImport.selectedEvents.filter((event) => event.personallyRelevant || event.relevanceLevel === "high").length,
+          skippedCount: refinedImport.ignoredItems.length + Math.max(0, refinedImport.allImportableEvents.length - refinedImport.selectedEvents.length),
+          assumptions: refinedImport.observations,
+          importMode: refinedImport.mode,
+          allImportableEvents: refinedImport.allImportableEvents,
+          ignoredItems: refinedImport.ignoredItems,
+          demands: refinedImport.demands,
+          ambiguousItems: refinedImport.ambiguousItems,
+          blockCounts: refinedImport.blockCounts,
+          modeCounts: refinedImport.modeCounts,
+          events: refinedImport.selectedEvents,
+        };
 
-      if (events.length === 0) {
-        throw new Error("Não consegui identificar eventos válidos para importar.");
+        this.clearPendingActionDraft(message.chat.id, "superseded");
+        this.pendingActionDrafts.set(message.chat.id, draft);
+        if (options.visualTask) {
+          this.pendingVisualTasks.set(message.chat.id, markVisualTaskDraftReady(options.visualTask));
+        }
+        const approval = this.persistPendingApproval(message.chat.id, draft);
+        const visibleReply = stripPendingDraftMarkers(buildGoogleEventImportBatchDraftReply(draft));
+
+        await this.endTypingFeedback(message.chat.id, typingSession);
+        this.appendChatTurn(message.chat.id, {
+          role: "user",
+          text: captionText?.trim() ? `[agenda_anexo] ${captionText.trim()}` : `[agenda_anexo] ${attachment.fileName}`,
+        });
+        this.appendChatTurn(message.chat.id, {
+          role: "assistant",
+          text: visibleReply,
+        });
+
+        await this.sendText(message.chat.id, visibleReply, {
+          reply_to_message_id: message.message_id,
+          disable_web_page_preview: true,
+          reply_markup: approval ? buildApprovalInlineKeyboard(approval.id) : undefined,
+        });
+      } finally {
+        await this.endTypingFeedback(message.chat.id, typingSession);
       }
-
-      const existingDraft = this.pendingActionDrafts.get(message.chat.id);
-      const previousImport = existingDraft?.kind === "google_event_import_batch" &&
-        existingDraft.account === accountAlias
-        ? existingDraft
-        : undefined;
-      const extractedNonEvents: ScheduleImportIgnoredItem[] = extracted.nonEvents.map((item) => ({
-        summary: item.summary,
-        category: item.category,
-        reason: item.reason ?? "bloco não importado como evento",
-        date: item.date,
-        shift: item.shift,
-        sourceLabel: item.rawText,
-      }));
-      const previousCandidates = previousImport?.allImportableEvents ?? previousImport?.events ?? [];
-      const mergedEvents = [
-        ...previousCandidates.map((event) => ({
-          ...event,
-          category: event.importCategory ?? ("event_importable" as const),
-        })),
-        ...events,
-      ];
-      const dedupedEvents = Array.from(
-        new Map(
-          mergedEvents.map((event) => [
-            `${event.start}|${event.end}|${event.summary.trim().toLowerCase()}`,
-            event,
-          ]),
-        ).values(),
-      ).sort((left, right) => left.start.localeCompare(right.start));
-      const ignoredItems = Array.from(
-        new Map(
-          [
-            ...(previousImport?.ignoredItems ?? []),
-            ...extractedNonEvents,
-          ].map((item) => [
-            `${item.category}|${item.shift ?? ""}|${item.summary.trim().toLowerCase()}`,
-            item,
-          ]),
-        ).values(),
-      );
-      const assumptions = [
-        ...(previousImport?.assumptions ?? []),
-        ...extracted.assumptions,
-        ...extracted.uncertainties.map((item) => `incerteza: ${item}`),
-      ].filter((item, index, list) => list.indexOf(item) === index).slice(0, 8);
-      const preferredMode = previousImport?.importMode ?? await this.resolvePreferredScheduleImportMode();
-      const refinedImport = refineScheduleImportEvents(dedupedEvents, {
-        mode: preferredMode,
-        nonEvents: ignoredItems,
-        assumptions,
-      });
-
-      const draft: PendingGoogleEventImportBatchDraft = {
-        kind: "google_event_import_batch",
-        timezone,
-        account: accountAlias,
-        calendarId: accountConfig.calendarId,
-        sourceLabel: previousImport
-          ? `${previousImport.sourceLabel}; ${attachment.fileName}`
-          : attachment.fileName,
-        totalExtracted: refinedImport.blockCounts.total,
-        relevantCount: refinedImport.selectedEvents.filter((event) => event.personallyRelevant || event.relevanceLevel === "high").length,
-        skippedCount: refinedImport.ignoredItems.length + Math.max(0, refinedImport.allImportableEvents.length - refinedImport.selectedEvents.length),
-        assumptions: refinedImport.observations,
-        importMode: refinedImport.mode,
-        allImportableEvents: refinedImport.allImportableEvents,
-        ignoredItems: refinedImport.ignoredItems,
-        demands: refinedImport.demands,
-        ambiguousItems: refinedImport.ambiguousItems,
-        blockCounts: refinedImport.blockCounts,
-        modeCounts: refinedImport.modeCounts,
-        events: refinedImport.selectedEvents,
-      };
-
-      this.clearPendingActionDraft(message.chat.id, "superseded");
-      this.pendingActionDrafts.set(message.chat.id, draft);
-      if (options.visualTask) {
-        this.pendingVisualTasks.set(message.chat.id, markVisualTaskDraftReady(options.visualTask));
-      }
-      const approval = this.persistPendingApproval(message.chat.id, draft);
-      const visibleReply = stripPendingDraftMarkers(buildGoogleEventImportBatchDraftReply(draft));
-
-      this.appendChatTurn(message.chat.id, {
-        role: "user",
-        text: captionText?.trim() ? `[agenda_anexo] ${captionText.trim()}` : `[agenda_anexo] ${attachment.fileName}`,
-      });
-      this.appendChatTurn(message.chat.id, {
-        role: "assistant",
-        text: visibleReply,
-      });
-
-      await this.sendText(message.chat.id, visibleReply, {
-        reply_to_message_id: message.message_id,
-        disable_web_page_preview: true,
-        reply_markup: approval ? buildApprovalInlineKeyboard(approval.id) : undefined,
-      });
     } catch (error) {
       this.logger.error("Telegram schedule import failed", {
         chatId: message.chat.id,
@@ -4648,6 +4859,18 @@ export class TelegramService {
 
     if (resolution.kind === "ignore") {
       this.clearPendingActionDraft(message.chat.id, "discarded");
+      await this.recordLearnedPreference({
+        type: "alert_action",
+        key: `monitored_alert:${pendingDraft.classification}`,
+        description: "Ação preferida em alerta monitorado por classificação",
+        value: "ignore",
+        source: "rejection",
+        confidence: 0.58,
+      });
+      await this.syncMonitoredAlertOperationalState({
+        draft: pendingDraft,
+        resolution: "ignore",
+      });
       await this.sendText(
         message.chat.id,
         "Alerta monitorado ignorado. Nenhuma ação foi executada.",
@@ -4660,6 +4883,18 @@ export class TelegramService {
     }
 
     if (resolution.kind === "summary") {
+      await this.recordLearnedPreference({
+        type: "alert_action",
+        key: `monitored_alert:${pendingDraft.classification}`,
+        description: "Ação preferida em alerta monitorado por classificação",
+        value: "summary",
+        source: "confirmation",
+        confidence: 0.6,
+      });
+      await this.syncMonitoredAlertOperationalState({
+        draft: pendingDraft,
+        resolution: "summary",
+      });
       await this.sendText(
         message.chat.id,
         buildMonitoredChannelAlertSummaryReply(pendingDraft),
@@ -4673,6 +4908,18 @@ export class TelegramService {
 
     if (resolution.kind === "register") {
       this.clearPendingActionDraft(message.chat.id, "executed");
+      await this.recordLearnedPreference({
+        type: "alert_action",
+        key: `monitored_alert:${pendingDraft.classification}`,
+        description: "Ação preferida em alerta monitorado por classificação",
+        value: "register",
+        source: "confirmation",
+        confidence: 0.62,
+      });
+      await this.syncMonitoredAlertOperationalState({
+        draft: pendingDraft,
+        resolution: "register",
+      });
       await this.sendText(
         message.chat.id,
         "Registrado no histórico operacional. Nenhuma ação externa foi executada.",
@@ -4717,6 +4964,18 @@ export class TelegramService {
     }
 
     this.clearPendingActionDraft(message.chat.id, "executed");
+    await this.recordLearnedPreference({
+      type: "alert_action",
+      key: `monitored_alert:${pendingDraft.classification}`,
+      description: "Ação preferida em alerta monitorado por classificação",
+      value: resolution.kind,
+      source: "confirmation",
+      confidence: 0.68,
+    });
+    await this.syncMonitoredAlertOperationalState({
+      draft: pendingDraft,
+      resolution: resolution.kind,
+    });
     this.pendingActionDrafts.set(message.chat.id, nextDraft);
     const approval = this.persistPendingApproval(message.chat.id, nextDraft);
     await this.sendText(
@@ -4739,8 +4998,14 @@ export class TelegramService {
     normalizedText: string,
     pendingDraft: PendingActionDraft,
   ): Promise<void> {
+    const typingSession = this.beginTypingFeedback(message.chat.id, {
+      replyToMessageId: message.message_id,
+      progressText: "Estou executando isso agora.",
+      fallbackText: "Isso está demorando mais do que deveria. Ainda estou tentando concluir.",
+    });
     try {
       const execution = await this.executePendingActionDraft(pendingDraft);
+      await this.endTypingFeedback(message.chat.id, typingSession);
       if (execution.ok) {
         this.captureCalendarUndoAction(message.chat.id, pendingDraft, execution.rawResult);
         this.clearPendingActionDraft(message.chat.id, "executed");
@@ -4762,6 +5027,7 @@ export class TelegramService {
         disable_web_page_preview: true,
       });
     } catch (error) {
+      await this.endTypingFeedback(message.chat.id, typingSession);
       this.logger.error("Pending controlled action confirmation failed", {
         chatId: message.chat.id,
         error: error instanceof Error ? error.message : String(error),
@@ -4777,6 +5043,8 @@ export class TelegramService {
           disable_web_page_preview: true,
         },
         );
+    } finally {
+      await this.endTypingFeedback(message.chat.id, typingSession);
     }
   }
 

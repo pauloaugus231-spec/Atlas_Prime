@@ -5,6 +5,7 @@ import {
   resolveMonitoredAlertReplyAction,
   type PendingMonitoredChannelAlertDraft,
 } from "../src/core/monitored-channel-alerts.js";
+import { PersonalOperationalMemoryStore } from "../src/core/personal-operational-memory.js";
 import { resolveIncomingWhatsAppChannel } from "../src/core/operator-profile.js";
 import {
   looksLikeEvolutionMessageWebhook,
@@ -14,6 +15,9 @@ import {
 import { WhatsAppMonitorService } from "../src/integrations/whatsapp/whatsapp-monitor-service.js";
 import type { AppConfig } from "../src/types/config.js";
 import type { Logger } from "../src/types/logger.js";
+import { mkdtempSync, rmSync } from "node:fs";
+import path from "node:path";
+import { tmpdir } from "node:os";
 
 type EvalResult = {
   name: string;
@@ -220,6 +224,8 @@ async function run(): Promise<void> {
     const approvals = makeApprovals();
     const alerts = makeAlerts();
     const messages = makeMessages();
+    const sandboxDir = mkdtempSync(path.join(tmpdir(), "atlas-monitored-whatsapp-"));
+    const personalMemory = new PersonalOperationalMemoryStore(path.join(sandboxDir, "personal.sqlite"), makeLogger());
     const service = new WhatsAppMonitorService(
       makeConfig(),
       makeLogger(),
@@ -227,6 +233,7 @@ async function run(): Promise<void> {
       makeContacts() as never,
       makeRouter() as never,
       messages as never,
+      personalMemory as never,
       {
         async chat() {
           return {
@@ -239,19 +246,26 @@ async function run(): Promise<void> {
       alerts as never,
     );
 
-    const result = await service.handleInboundText({
-      instanceName: "atlas_institucional",
-      accountAlias: "abordagem",
-      remoteJid: "5551888888888@s.whatsapp.net",
-      number: "5551888888888",
-      pushName: "Coordenação",
-      text: "Paulo, reunião amanhã às 9h no CREAS",
-    });
+    try {
+      const result = await service.handleInboundText({
+        instanceName: "atlas_institucional",
+        accountAlias: "abordagem",
+        remoteJid: "5551888888888@s.whatsapp.net",
+        number: "5551888888888",
+        pushName: "Coordenação",
+        text: "Paulo, reunião amanhã às 9h no CREAS",
+      });
+      const state = personalMemory.getOperationalState();
 
-    results.push(assert(result.ok && result.alertSent === true, "important_monitored_message_generates_alert"));
-    results.push(assert(approvals.items.length === 1, "alert_is_persisted_as_pending_item"));
-    results.push(assert(alerts.sent.length === 1 && alerts.sent[0]?.includes("Possível reunião no institucional"), "alert_is_sent_to_operator_channel_with_operational_copy"));
-    results.push(assert(messages.messages.length === 1, "monitored_channel_does_not_auto_reply"));
+      results.push(assert(result.ok && result.alertSent === true, "important_monitored_message_generates_alert"));
+      results.push(assert(approvals.items.length === 1, "alert_is_persisted_as_pending_item"));
+      results.push(assert(alerts.sent.length === 1 && alerts.sent[0]?.includes("Possível reunião no institucional"), "alert_is_sent_to_operator_channel_with_operational_copy"));
+      results.push(assert(messages.messages.length === 1, "monitored_channel_does_not_auto_reply"));
+      results.push(assert(state.pendingAlerts.some((item) => item.includes("Institucional: Paulo, reunião amanhã às 9h no CREAS")), "relevant_monitored_message_updates_operational_state_pending_alerts"));
+      results.push(assert(state.signals.some((item) => item.active && item.source === "monitored_whatsapp" && item.kind === "possible_event"), "relevant_monitored_message_creates_active_operational_signal"));
+    } finally {
+      rmSync(sandboxDir, { recursive: true, force: true });
+    }
   }
 
   {

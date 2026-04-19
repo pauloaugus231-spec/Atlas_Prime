@@ -15,6 +15,7 @@ import type { ApprovalInboxItemRecord } from "../types/approval-inbox.js";
 import type { BriefingConfig } from "../types/config.js";
 import type { MemoryEntityKind } from "../types/memory-entities.js";
 import type { PersonalOperationalProfile } from "../types/personal-operational-memory.js";
+import type { OperationalStateSignal } from "../types/operational-state.js";
 import type { TaskSummary } from "../integrations/google/google-workspace.js";
 import type { EmailAccountsService } from "../integrations/email/email-accounts.js";
 import type { GoogleWorkspaceAccountsService } from "../integrations/google/google-workspace-accounts.js";
@@ -99,6 +100,7 @@ export interface ExecutiveMorningBrief {
   personalFocus: string[];
   overloadLevel: "leve" | "moderado" | "pesado";
   mobilityAlerts: string[];
+  operationalSignals: OperationalStateSignal[];
   conflictSummary: {
     overlaps: number;
     duplicates: number;
@@ -936,6 +938,11 @@ export class PersonalOSService {
     const founderSnapshot = this.founderOps.getDailySnapshot();
     const motivation = pickDailyMotivation(this.timezone);
     const operationalMemory = this.contextMemory.summarize("operational", 4);
+    const currentOperationalState = this.personalMemory.getOperationalState();
+    const activeOperationalSignals = currentOperationalState
+      .signals
+      .filter((item) => item.active)
+      .slice(0, 4);
     const profile = this.personalMemory.getProfile();
     const weatherForecast = this.briefingConfig.weatherEnabled
       ? await this.weather.getForecast({
@@ -992,7 +999,11 @@ export class PersonalOSService {
     this.personalMemory.updateOperationalState({
       focus: personalFocus,
       weeklyPriorities: personalFocus,
-      pendingAlerts: approvals.slice(0, 4).map((item) => item.subject),
+      pendingAlerts: Array.from(new Set([
+        ...approvals.slice(0, 4).map((item) => item.subject),
+        ...activeOperationalSignals.map((item) => `Institucional: ${item.summary}`),
+        ...currentOperationalState.pendingAlerts,
+      ])).slice(0, 6),
       criticalTasks: [
         ...taskBuckets.overdue.slice(0, 2).map((item) => item.title),
         ...taskBuckets.today.slice(0, 2).map((item) => item.title),
@@ -1006,6 +1017,8 @@ export class PersonalOSService {
       primaryRisk:
         conflictSummary.overlaps > 0
           ? `${conflictSummary.overlaps} conflito(s) de agenda`
+          : activeOperationalSignals.length > 0 && currentOperationalState.primaryRisk
+            ? currentOperationalState.primaryRisk
           : overloadLevel === "pesado"
             ? "sobrecarga operacional"
             : emails[0]?.subject,
@@ -1015,8 +1028,10 @@ export class PersonalOSService {
         overloadLevel,
       },
       recentContext: [
+        ...activeOperationalSignals.map((item) => `Institucional: ${item.summary}`),
         ...(mobilityAlerts.slice(0, 2)),
         ...(dayRecommendation ? [dayRecommendation] : []),
+        ...currentOperationalState.recentContext,
       ].slice(0, 4),
       pendingApprovals: approvals.length,
     });
@@ -1037,6 +1052,7 @@ export class PersonalOSService {
       personalFocus,
       overloadLevel,
       mobilityAlerts,
+      operationalSignals: activeOperationalSignals,
       conflictSummary,
       dayRecommendation,
     };

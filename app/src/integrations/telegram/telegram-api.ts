@@ -64,6 +64,16 @@ export class TelegramApi {
     });
   }
 
+  async sendChatAction(
+    chatId: number,
+    action: "typing",
+  ): Promise<void> {
+    await this.request("sendChatAction", {
+      chat_id: chatId,
+      action,
+    });
+  }
+
   async answerCallbackQuery(
     callbackQueryId: string,
     options: {

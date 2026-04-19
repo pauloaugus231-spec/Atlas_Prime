@@ -138,6 +138,7 @@ async function main(): Promise<void> {
     contacts,
     communicationRouter,
     whatsappMessages,
+    personalMemory,
     client,
     alertDispatcher,
   );

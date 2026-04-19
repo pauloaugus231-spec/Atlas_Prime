@@ -10,6 +10,16 @@ interface UpdateOperationalStateParameters {
   criticalTasks?: string[];
   primaryRisk?: string;
   recentContext?: string[];
+  signals?: Array<{
+    key: string;
+    source: "calendar" | "tasks" | "mode" | "focus" | "pending_alert" | "monitored_whatsapp" | "context";
+    kind: "possible_event" | "possible_task" | "reply_needed" | "deadline" | "attention" | "focus_hint" | "other";
+    summary: string;
+    priority: "low" | "medium" | "high";
+    active: boolean;
+    createdAt: string;
+    updatedAt: string;
+  }>;
   activeChannel?: string;
   preferredAlertChannel?: string;
   pendingApprovals?: number;
@@ -41,6 +51,30 @@ export default defineToolPlugin<UpdateOperationalStateParameters>({
       criticalTasks: { type: "array", items: { type: "string" } },
       primaryRisk: { type: "string" },
       recentContext: { type: "array", items: { type: "string" } },
+      signals: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            key: { type: "string" },
+            source: {
+              type: "string",
+              enum: ["calendar", "tasks", "mode", "focus", "pending_alert", "monitored_whatsapp", "context"],
+            },
+            kind: {
+              type: "string",
+              enum: ["possible_event", "possible_task", "reply_needed", "deadline", "attention", "focus_hint", "other"],
+            },
+            summary: { type: "string" },
+            priority: { type: "string", enum: ["low", "medium", "high"] },
+            active: { type: "boolean" },
+            createdAt: { type: "string" },
+            updatedAt: { type: "string" },
+          },
+          required: ["key", "source", "kind", "summary", "priority", "active", "createdAt", "updatedAt"],
+          additionalProperties: false,
+        },
+      },
       activeChannel: { type: "string" },
       preferredAlertChannel: { type: "string" },
       pendingApprovals: { type: "integer", minimum: 0 },

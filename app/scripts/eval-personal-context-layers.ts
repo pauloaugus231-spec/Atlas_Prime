@@ -15,6 +15,10 @@ import {
   summarizeIdentityProfileForReasoning,
   summarizeOperationalStateForReasoning,
 } from "../src/core/personal-context-summary.js";
+import {
+  buildOperationalStatePatchForMonitoredAlert,
+  buildOperationalStatePatchForResolvedMonitoredAlert,
+} from "../src/core/operational-state-signals.js";
 import type { Logger } from "../src/types/logger.js";
 import type { ToolExecutionContext } from "../src/types/plugin.js";
 
@@ -106,6 +110,66 @@ async function run() {
       detail: JSON.stringify(updatedState, null, 2),
     });
 
+    const monitoredPatch = buildOperationalStatePatchForMonitoredAlert(store.getOperationalState(), {
+      kind: "monitored_channel_alert",
+      operatorId: "paulo",
+      sourceProvider: "whatsapp",
+      sourceChannelId: "atlas_institucional",
+      sourceDisplayName: "WhatsApp institucional",
+      sourceInstanceName: "atlas_institucional",
+      sourceAccount: "abordagem",
+      sourceRemoteJid: "5551999999999@s.whatsapp.net",
+      sourceNumber: "5551999999999",
+      sourcePushName: "Coordenação",
+      sourceText: "Paulo, amanhã temos reunião às 9h no CREAS",
+      classification: "possible_event",
+      summary: "Paulo, amanhã temos reunião às 9h no CREAS",
+      reasons: ["menção direta", "horário explícito"],
+      suggestedAction: "event",
+      operationalScore: 8,
+      urgency: "medium",
+      timeSignal: "tomorrow",
+      createdAt: "2026-04-19T08:00:00.000Z",
+    });
+    const stateWithSignal = store.updateOperationalState(monitoredPatch);
+    results.push({
+      name: "operational_state_accepts_monitored_whatsapp_signal",
+      passed:
+        stateWithSignal.signals.some((item) => item.source === "monitored_whatsapp" && item.active)
+        && stateWithSignal.pendingAlerts.some((item) => item.includes("Institucional: Paulo, amanhã temos reunião às 9h no CREAS")),
+      detail: JSON.stringify(stateWithSignal, null, 2),
+    });
+
+    const resolvedPatch = buildOperationalStatePatchForResolvedMonitoredAlert(stateWithSignal, {
+      kind: "monitored_channel_alert",
+      operatorId: "paulo",
+      sourceProvider: "whatsapp",
+      sourceChannelId: "atlas_institucional",
+      sourceDisplayName: "WhatsApp institucional",
+      sourceInstanceName: "atlas_institucional",
+      sourceAccount: "abordagem",
+      sourceRemoteJid: "5551999999999@s.whatsapp.net",
+      sourceNumber: "5551999999999",
+      sourcePushName: "Coordenação",
+      sourceText: "Paulo, amanhã temos reunião às 9h no CREAS",
+      classification: "possible_event",
+      summary: "Paulo, amanhã temos reunião às 9h no CREAS",
+      reasons: ["menção direta", "horário explícito"],
+      suggestedAction: "event",
+      operationalScore: 8,
+      urgency: "medium",
+      timeSignal: "tomorrow",
+      createdAt: "2026-04-19T08:00:00.000Z",
+    }, "ignore");
+    const clearedState = store.updateOperationalState(resolvedPatch);
+    results.push({
+      name: "ignored_monitored_alert_reduces_related_operational_state",
+      passed:
+        clearedState.signals.every((item) => item.source !== "monitored_whatsapp" || item.active === false)
+        && !clearedState.pendingAlerts.some((item) => item.includes("Institucional: Paulo, amanhã temos reunião às 9h no CREAS")),
+      detail: JSON.stringify(clearedState, null, 2),
+    });
+
     const learnedFirst = await saveLearnedPreferencePlugin.execute({
       type: "schedule_import_mode",
       key: "default_mode",
@@ -156,6 +220,21 @@ async function run() {
       detail: JSON.stringify(relevant, null, 2),
     });
 
+    const learnedLocationRule = await saveLearnedPreferencePlugin.execute({
+      type: "calendar_interpretation",
+      key: "pseudo_location_rua",
+      description: "Quando aparecer Rua como local, isso costuma ser contexto e não location.",
+      value: "drop_location",
+      source: "correction",
+    }, context) as Record<string, unknown>;
+    results.push({
+      name: "calendar_correction_can_register_location_learning",
+      passed:
+        learnedLocationRule.ok === true
+        && (learnedLocationRule.item as Record<string, unknown> | undefined)?.value === "drop_location",
+      detail: JSON.stringify(learnedLocationRule, null, 2),
+    });
+
     const identitySummary = summarizeIdentityProfileForReasoning(store.getProfile());
     const operationalSummary = summarizeOperationalStateForReasoning(store.getOperationalState());
     results.push({
@@ -164,7 +243,8 @@ async function run() {
         identitySummary.display_name === "Paulo"
         && identitySummary.primary_role === "assistente social operacional"
         && operationalSummary.mode === "field"
-        && operationalSummary.pending_approvals === 3,
+        && operationalSummary.pending_approvals === 3
+        && Array.isArray(operationalSummary.operational_signals),
       detail: JSON.stringify({ identitySummary, operationalSummary }, null, 2),
     });
 

@@ -46,6 +46,13 @@ export function summarizeOperationalStateForReasoning(state: OperationalState) {
     critical_tasks: state.criticalTasks.slice(0, 4),
     upcoming_commitments: state.upcomingCommitments.slice(0, 4),
     ...(state.primaryRisk ? { primary_risk: state.primaryRisk } : {}),
+    operational_signals: state.signals.filter((item) => item.active).slice(0, 4).map((item) => ({
+      source: item.source,
+      kind: item.kind,
+      summary: item.summary,
+      priority: item.priority,
+      updated_at: item.updatedAt,
+    })),
     briefing: state.briefing,
     recent_context: state.recentContext.slice(0, 6),
     ...(state.activeChannel ? { active_channel: state.activeChannel } : {}),

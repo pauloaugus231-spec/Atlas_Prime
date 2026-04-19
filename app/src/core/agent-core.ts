@@ -1370,13 +1370,37 @@ function isLearnedPreferencesListPrompt(prompt: string): boolean {
   return includesAny(normalized, [
     "o que voce aprendeu sobre mim",
     "o que você aprendeu sobre mim",
+    "o que voce aprendeu sobre minha agenda",
+    "o que você aprendeu sobre minha agenda",
+    "o que voce aprendeu com minhas correcoes",
+    "o que você aprendeu com minhas correções",
     "liste aprendizados",
     "liste minhas preferencias aprendidas",
     "liste minhas preferências aprendidas",
+    "liste preferencias aprendidas de agenda",
+    "liste preferências aprendidas de agenda",
     "mostre minhas preferencias aprendidas",
     "mostre minhas preferências aprendidas",
     "aprendizados sobre mim",
   ]);
+}
+
+function resolveLearnedPreferencesListFilter(prompt: string): {
+  search?: string;
+  type?: LearnedPreference["type"];
+} {
+  const normalized = normalizeEmailAnalysisText(prompt);
+  if (includesAny(normalized, ["agenda", "calendario", "calendário", "importacao", "importação", "titulo", "título", "local"])) {
+    return {
+      search: "agenda",
+    };
+  }
+  if (includesAny(normalized, ["alerta", "institucional", "whatsapp monitorado"])) {
+    return {
+      type: "alert_action",
+    };
+  }
+  return {};
 }
 
 function isLearnedPreferencesDeletePrompt(prompt: string): boolean {
@@ -4779,6 +4803,7 @@ export function buildMorningBriefReply(
   const highestEmail = input.emails.find((item) => item.priority === "alta") ?? input.emails[0];
   const nextEvent = input.events[0];
   const nextTask = input.taskBuckets.overdue[0] ?? input.taskBuckets.today[0];
+  const topOperationalSignal = input.operationalSignals?.[0];
   const pauloConflicts = input.events.filter((event) => event.owner === "paulo" && event.hasConflict);
   const focusLabel = truncateBriefText(options?.profile?.savedFocus[0] ?? input.personalFocus[0] ?? "", 110);
   const groupedEvents = {
@@ -4814,6 +4839,8 @@ export function buildMorningBriefReply(
     : undefined;
   const mainAttention = pauloConflicts[0]
     ? `O principal agora é tirar o conflito em ${truncateBriefText(pauloConflicts[0].summary, 96)} antes que ele contamine o resto do dia.`
+    : topOperationalSignal
+      ? `O principal agora é revisar este sinal do institucional: ${truncateBriefText(topOperationalSignal.summary, 96)}.`
     : nextEvent
       ? `O principal agora é ${nextEvent.prepHint} para ${truncateBriefText(nextEvent.summary, 96)}.`
       : nextTask
@@ -4840,6 +4867,9 @@ export function buildMorningBriefReply(
   lines.push(`- ${mainAttention}`);
   if (nextEvent) {
     lines.push(`- Próximo compromisso: ${summarizeEventLine(nextEvent)}`);
+  }
+  if (topOperationalSignal) {
+    lines.push(`- Sinal operacional ativo: ${truncateBriefText(topOperationalSignal.summary, 104)}${topOperationalSignal.priority !== "low" ? ` | prioridade ${topOperationalSignal.priority}` : ""}`);
   }
   if (pauloConflicts.length > 0) {
     lines.push(`- ${pauloConflicts.length} conflito(s) de agenda ainda exigem decisão antes de aceitar coisa nova.`);
@@ -5182,6 +5212,7 @@ function buildOperationalStateReply(state: OperationalState): string {
     item.start
       ? `${truncateBriefText(item.summary, 70)} (${stateDateTimeLabel(item.start) ?? item.start})`
       : truncateBriefText(item.summary, 70);
+  const activeSignals = state.signals.filter((item) => item.active);
 
   return [
     "Estado operacional atual:",
@@ -5192,6 +5223,7 @@ function buildOperationalStateReply(state: OperationalState): string {
     `- Tarefas críticas: ${state.criticalTasks.length > 0 ? state.criticalTasks.slice(0, 3).join(" | ") : "nenhuma tarefa crítica"}`,
     `- Próximos compromissos: ${state.upcomingCommitments.length > 0 ? state.upcomingCommitments.slice(0, 3).map((item) => formatStateCommitment(item)).join(" | ") : "nenhum compromisso marcado"}`,
     `- Risco principal: ${state.primaryRisk ?? "nenhum risco destacado"}`,
+    `- Sinais operacionais: ${activeSignals.length > 0 ? activeSignals.slice(0, 3).map((item) => `${item.summary} (${item.priority})`).join(" | ") : "nenhum sinal ativo"}`,
     `- Briefing: ${state.briefing.nextAction ?? "sem próxima ação"}${state.briefing.overloadLevel ? ` | carga ${state.briefing.overloadLevel}` : ""}`,
     `- Canal atual: ${state.activeChannel ?? "não registrado"}`,
     `- Canal preferido de alerta: ${state.preferredAlertChannel ?? "não registrado"}`,
@@ -15412,16 +15444,22 @@ export class AgentCore {
       return null;
     }
 
+    const filter = resolveLearnedPreferencesListFilter(userPrompt);
     const execution = await this.executeToolDirect("list_learned_preferences", {
+      ...(filter.type ? { type: filter.type } : {}),
+      ...(filter.search ? { search: filter.search } : {}),
       limit: 12,
     });
-    const rawResult = execution.rawResult as {
-      items?: LearnedPreference[];
-    };
+    const rawResult = execution.rawResult as { items?: LearnedPreference[] };
+    const items = filter.search === "agenda"
+      ? (rawResult.items ?? []).filter((item) =>
+          ["schedule_import_mode", "agenda_scope", "calendar_interpretation"].includes(item.type),
+        )
+      : (rawResult.items ?? []);
 
     return {
       requestId,
-      reply: buildLearnedPreferencesReply(rawResult.items ?? []),
+      reply: buildLearnedPreferencesReply(items),
       messages: buildBaseMessages(userPrompt, orchestration, preferences),
       toolExecutions: [
         {

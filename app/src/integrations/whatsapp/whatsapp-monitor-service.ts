@@ -11,8 +11,10 @@ import {
   type MonitoredWhatsAppReplyDraft,
   type PendingMonitoredChannelAlertDraft,
 } from "../../core/monitored-channel-alerts.js";
+import { buildOperationalStatePatchForMonitoredAlert } from "../../core/operational-state-signals.js";
 import type { ApprovalInboxStore } from "../../core/approval-inbox.js";
 import type { CommunicationRouter, ContactIntelligenceStore } from "../../core/contact-intelligence.js";
+import type { PersonalOperationalMemoryStore } from "../../core/personal-operational-memory.js";
 import type { WhatsAppMessageStore } from "../../core/whatsapp-message-store.js";
 import type { LlmClient } from "../../types/llm.js";
 import type { AppConfig } from "../../types/config.js";
@@ -110,6 +112,7 @@ export class WhatsAppMonitorService {
     private readonly contacts: ContactIntelligenceStore,
     private readonly communicationRouter: CommunicationRouter,
     private readonly whatsappMessages: WhatsAppMessageStore,
+    private readonly personalMemory: PersonalOperationalMemoryStore,
     private readonly client: LlmClient,
     private readonly alerts: OperatorAlertDispatcher,
   ) {}
@@ -256,6 +259,22 @@ export class WhatsAppMonitorService {
       actionKind: draft.kind,
       subject: `WhatsApp monitorado${draft.sourceAccount ? ` ${draft.sourceAccount}` : ""}: ${input.pushName ?? input.number}`,
       draftPayload: JSON.stringify(draft),
+    });
+
+    const currentState = this.personalMemory.getOperationalState();
+    const operationalPatch = buildOperationalStatePatchForMonitoredAlert(currentState, draft);
+    const pendingApprovals = typeof (this.approvals as { listPending?: unknown }).listPending === "function"
+      ? (this.approvals as { listPending: (chatId: number, limit?: number) => unknown[] }).listPending(alertChatId, 20).length
+      : currentState.pendingApprovals;
+    const nextState = this.personalMemory.updateOperationalState({
+      ...operationalPatch,
+      pendingApprovals: Math.max(currentState.pendingApprovals, pendingApprovals),
+    });
+    this.logger.info("Operational state updated from monitored WhatsApp alert", {
+      account: input.accountAlias,
+      signalCount: nextState.signals.filter((item) => item.active).length,
+      pendingAlerts: nextState.pendingAlerts.slice(0, 3),
+      primaryRisk: nextState.primaryRisk,
     });
 
     await this.alerts.sendToPreferredChannel(buildMonitoredChannelAlertReply(draft));

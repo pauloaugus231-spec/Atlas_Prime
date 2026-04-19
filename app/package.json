@@ -31,6 +31,7 @@
     "eval:monitored-alert-continuity": "tsx scripts/eval-monitored-alert-continuity.ts",
     "eval:llm-fallback": "tsx scripts/eval-llm-fallback.ts",
     "eval:morning-brief": "tsx scripts/eval-morning-brief-format.ts",
+    "eval:telegram-typing": "tsx scripts/eval-telegram-typing-session.ts",
     "eval:personal-memory": "tsx scripts/eval-personal-memory.ts",
     "eval:personal-context": "tsx scripts/eval-personal-context-layers.ts",
     "eval:conversational": "tsx scripts/eval-conversational-low-friction.ts",
