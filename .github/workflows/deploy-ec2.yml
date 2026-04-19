@@ -28,6 +28,31 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y rsync openssh-client
 
+      - name: Normalize deploy inputs
+        run: |
+          set -euo pipefail
+
+          trim_line() {
+            printf '%s' "$1" | tr -d '\r\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//'
+          }
+
+          clean_host="$(trim_line "$EC2_HOST")"
+          clean_user="$(trim_line "$EC2_USER")"
+          clean_path="$(printf '%s' "$DEPLOY_PATH" | tr -d '\r' | sed 's/[[:space:]]*$//')"
+          clean_port="$(printf '%s' "$EC2_PORT" | tr -cd '0-9')"
+
+          test -n "$clean_host" || { echo "AWS_EC2_HOST ausente nos secrets"; exit 1; }
+          test -n "$clean_user" || { echo "AWS_EC2_USER ausente nos secrets"; exit 1; }
+          test -n "$clean_port" || { echo "AWS_EC2_PORT invalido"; exit 1; }
+          test -n "$clean_path" || { echo "AWS_EC2_DEPLOY_PATH invalido"; exit 1; }
+
+          {
+            echo "EC2_HOST=$clean_host"
+            echo "EC2_USER=$clean_user"
+            echo "EC2_PORT=$clean_port"
+            echo "DEPLOY_PATH=$clean_path"
+          } >> "$GITHUB_ENV"
+
       - name: Prepare SSH key
         run: |
           set -euo pipefail
