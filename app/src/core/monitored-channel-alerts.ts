@@ -503,18 +503,29 @@ export function resolveMonitoredAlertReplyAction(
   if (["ignora", "ignorar", "ignora isso", "cancelar", "descartar", "cancela isso"].includes(normalized)) {
     return { kind: "ignore" };
   }
+  if (normalized.includes("ignora") || normalized.includes("cancel")) {
+    return { kind: "ignore" };
+  }
 
   if (["resumo", "resuma", "me mostra resumo", "só resumo", "so resumo"].includes(normalized)) {
+    return { kind: "summary" };
+  }
+  if (normalized.includes("resum")) {
     return { kind: "summary" };
   }
 
   if (["registrar", "registre", "deixa registrado", "so registra", "só registra", "apenas registra"].includes(normalized)) {
     return { kind: "register" };
   }
+  if (normalized.includes("registr")) {
+    return { kind: "register" };
+  }
 
   if (
     normalized === "sim"
     || normalized === "ok"
+    || normalized === "faz isso"
+    || normalized === "faz"
     || normalized === "pode seguir"
     || normalized === "segue"
     || normalized === "segue nisso"

@@ -1,3 +1,5 @@
+import { interpretConversationTurn } from "../../core/conversation-interpreter.js";
+
 export type VisualTaskKind =
   | "agenda_import"
   | "social_profile_analysis"
@@ -193,6 +195,39 @@ export function detectVisualTaskPlan(input: {
   agendaEvidence?: VisualAgendaEvidence;
 }): VisualTaskPlan {
   const normalized = normalize(input.text ?? "");
+  const interpreted = interpretConversationTurn({
+    text: input.text ?? "",
+    attachments: [{ kind: input.attachmentKind === "pdf" ? "pdf" : "image" }],
+  });
+
+  if (interpreted.intent === "agenda_import") {
+    return {
+      ...buildPlanForKind("agenda_import", input.attachmentKind),
+      confidence: interpreted.confidence,
+    };
+  }
+
+  if (interpreted.intent === "social_profile_analysis") {
+    return {
+      ...buildPlanForKind("social_profile_analysis", input.attachmentKind),
+      confidence: interpreted.confidence,
+    };
+  }
+
+  if (interpreted.intent === "task_extraction") {
+    return {
+      ...buildPlanForKind("task_extraction", input.attachmentKind),
+      confidence: interpreted.confidence,
+    };
+  }
+
+  if (interpreted.intent === "document_review") {
+    return {
+      ...buildPlanForKind("document_review", input.attachmentKind),
+      confidence: interpreted.confidence,
+    };
+  }
+
   if (!normalized && input.previous) {
     if (input.previous.kind === "agenda_import") {
       return buildPlanForKind("agenda_import", input.attachmentKind);

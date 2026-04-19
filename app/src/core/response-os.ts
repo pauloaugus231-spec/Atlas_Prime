@@ -111,33 +111,32 @@ export class ResponseOS {
 
   buildOrganizationReply(input: OrganizationResponseContract): string {
     const lines = [
-      "Leitura operacional:",
-      `- Objetivo: ${truncate(input.objective, 120)}`,
+      "Para organizar isso agora, eu seguiria assim:",
     ];
 
     if (input.currentSituation.length > 0) {
-      lines.push("", "Situação agora:");
+      lines.push("", "Agora:");
       for (const item of input.currentSituation.slice(0, 4)) {
         lines.push(`- ${truncate(item, 120)}`);
       }
     }
 
     if (input.priorities.length > 0) {
-      lines.push("", "Prioridades:");
+      lines.push("", "O que mais importa:");
       for (const item of input.priorities.slice(0, 3)) {
         lines.push(`- ${truncate(item, 120)}`);
       }
     }
 
     if (input.actionPlan.length > 0) {
-      lines.push("", "Plano curto:");
+      lines.push("", "Como eu atacaria:");
       for (const item of input.actionPlan.slice(0, 3)) {
         lines.push(`- ${truncate(item, 140)}`);
       }
     }
 
     if (input.recommendedNextStep) {
-      lines.push("", `Próxima ação: ${truncate(input.recommendedNextStep, 140)}`);
+      lines.push("", `Próximo passo: ${truncate(input.recommendedNextStep, 140)}`);
     }
 
     return this.finalize("organization", lines.join("\n"));
@@ -315,37 +314,30 @@ export class ResponseOS {
   }
 
   buildScheduleLookupReply(input: ScheduleLookupContract): string {
+    const topicSuffix = input.topicLabel ? ` sobre ${input.topicLabel}` : "";
+    const uniqueAccounts = [...new Set(input.events.map((item) => item.account))];
     if (input.events.length === 0) {
       const lines = [
-        "Leitura operacional:",
-        `- Objetivo: verificar agenda em ${input.targetLabel}${input.topicLabel ? ` sobre ${input.topicLabel}` : ""}`,
-        "",
-        "Situação agora:",
-        "- nenhum evento encontrado nas contas consultadas",
+        `Não encontrei compromisso em ${input.targetLabel}${topicSuffix}.`,
       ];
       if (typeof input.emailFallbackCount === "number" && input.emailFallbackCount > 0) {
-        lines.push(`- ${input.emailFallbackCount} email(s) relacionado(s) foram encontrados como fallback`);
+        lines.push(`Encontrei ${input.emailFallbackCount} email(s) relacionado(s), então pode valer revisar convite ou confirmação.`);
       }
       if (input.recommendedNextStep) {
-        lines.push("", `Próxima ação: ${truncate(input.recommendedNextStep, 140)}`);
+        lines.push("", `Se quiser, o próximo passo é ${truncate(input.recommendedNextStep, 140)}`);
       }
       return this.finalize("analysis", lines.join("\n"));
     }
 
     const lines = [
-      "Leitura operacional:",
-      `- Objetivo: verificar agenda em ${input.targetLabel}${input.topicLabel ? ` sobre ${input.topicLabel}` : ""}`,
-      "",
-      "Situação agora:",
-      `- ${input.events.length} evento(s) encontrado(s)`,
-      "",
-      "Prioridades:",
+      `Encontrei ${input.events.length} compromisso${input.events.length > 1 ? "s" : ""} em ${input.targetLabel}${topicSuffix}.`,
     ];
     for (const item of input.events.slice(0, 4)) {
-      lines.push(`- ${truncate(item.summary, 120)}${item.start ? ` | ${item.start}` : ""}${item.location ? ` | ${truncate(item.location, 80)}` : ""} | ${item.account}`);
+      const suffix = uniqueAccounts.length > 1 ? ` | conta: ${item.account}` : "";
+      lines.push(`- ${item.start ? `${item.start} — ` : ""}${truncate(item.summary, 120)}${item.location ? ` — ${truncate(item.location, 80)}` : ""}${suffix}`);
     }
     if (input.recommendedNextStep) {
-      lines.push("", `Próxima ação: ${truncate(input.recommendedNextStep, 140)}`);
+      lines.push("", `Se quiser, o próximo passo é ${truncate(input.recommendedNextStep, 140)}`);
     }
     return this.finalize("analysis", lines.join("\n"));
   }
@@ -383,23 +375,23 @@ export class ResponseOS {
 
   buildTaskReviewReply(input: TaskReviewContract): string {
     if (input.items.length === 0) {
-      return this.finalize("analysis", `Não encontrei tarefas abertas em ${input.scopeLabel}.`);
+      return this.finalize("analysis", `Você não tem tarefas abertas em ${input.scopeLabel}.`);
     }
 
+    const uniqueAccounts = [...new Set(input.items.map((item) => item.account))];
     const lines = [
-      "Leitura operacional:",
-      `- Objetivo: revisar tarefas em ${input.scopeLabel}`,
-      "",
-      "Situação agora:",
-      `- ${input.items.length} tarefa(s) aberta(s)`,
-      "",
-      "Prioridades:",
+      `Você tem ${input.items.length} ${input.items.length === 1 ? "tarefa aberta" : "tarefas abertas"} em ${input.scopeLabel}.`,
     ];
     for (const item of input.items.slice(0, 6)) {
-      lines.push(`- ${truncate(item.title, 120)} | ${item.taskListTitle} | ${item.account} | ${item.status} | ${item.dueLabel}`);
+      const details = [
+        item.taskListTitle,
+        ...(uniqueAccounts.length > 1 ? [item.account] : []),
+        item.dueLabel,
+      ].filter((value) => Boolean(value) && value !== "sem prazo");
+      lines.push(`- ${truncate(item.title, 120)}${details.length > 0 ? ` — ${details.join(" | ")}` : ""}`);
     }
     if (input.recommendedNextStep) {
-      lines.push("", `Próxima ação: ${truncate(input.recommendedNextStep, 140)}`);
+      lines.push("", `Se quiser, o próximo passo é ${truncate(input.recommendedNextStep, 140)}`);
     }
     return this.finalize("analysis", lines.join("\n"));
   }

@@ -102,6 +102,7 @@ import {
 } from "./google-account-resolution.js";
 import { resolveActionAutonomyRule } from "./action-autonomy-policy.js";
 import { looksLikeLowFrictionReadPrompt } from "./clarification-rules.js";
+import { interpretConversationTurn } from "./conversation-interpreter.js";
 import { PersonalOperationalMemoryStore } from "./personal-operational-memory.js";
 import {
   selectRelevantLearnedPreferences,
@@ -114,7 +115,7 @@ import type {
   PersonalOperationalProfile,
   UpdatePersonalOperationalProfileInput,
 } from "../types/personal-operational-memory.js";
-import type { LearnedPreference } from "../types/learned-preferences.js";
+import type { CreateLearnedPreferenceInput, LearnedPreference } from "../types/learned-preferences.js";
 import type { OperationalState } from "../types/operational-state.js";
 import { resolveStructuredTaskOperationPayload } from "./task-operation-resolution.js";
 import { shouldAttemptExternalReasoning, type ExternalReasoningStage } from "./external-reasoning-policy.js";
@@ -457,6 +458,13 @@ function isOperationalBriefPrompt(prompt: string): boolean {
     "brief diario",
     "brief diário",
     "meu dia",
+    "como esta meu dia",
+    "como está meu dia",
+    "como ta meu dia",
+    "como tá meu dia",
+    "status do dia",
+    "o que apareceu de importante",
+    "o que tenho de importante",
     "agenda de hoje",
     "compromissos de hoje",
     "tarefas de hoje",
@@ -474,7 +482,6 @@ function isMorningBriefPrompt(prompt: string): boolean {
     "brief matinal",
     "resumo da manha",
     "resumo da manhã",
-    "bom dia atlas",
     "me de o resumo da manha",
     "me de o resumo da manhã",
   ].some((token) => normalized.includes(token));
@@ -966,7 +973,7 @@ function isWebResearchPrompt(prompt: string): boolean {
   );
 }
 
-function isWeatherPrompt(prompt: string): boolean {
+export function isWeatherPrompt(prompt: string): boolean {
   const normalized = normalizeEmailAnalysisText(prompt);
   return includesAny(normalized, [
     "previsao do tempo",
@@ -980,6 +987,8 @@ function isWeatherPrompt(prompt: string): boolean {
     "clima amanha",
     "clima amanhã",
     "tempo em",
+    "como esta o tempo",
+    "como está o tempo",
     "tempo hoje",
     "tempo agora",
     "tempo amanha",
@@ -990,13 +999,14 @@ function isWeatherPrompt(prompt: string): boolean {
     "vai chover hoje",
     "vai chover amanha",
     "vai chover amanhã",
+    "vai chover",
     "chuva em",
   ]);
 }
 
-function isGreetingPrompt(prompt: string): boolean {
+export function isGreetingPrompt(prompt: string): boolean {
   const normalized = normalizeEmailAnalysisText(prompt);
-  if (!normalized || isMorningBriefPrompt(prompt)) {
+  if (!normalized || isMorningBriefPrompt(prompt) || isOperationalBriefPrompt(prompt)) {
     return false;
   }
 
@@ -1004,8 +1014,15 @@ function isGreetingPrompt(prompt: string): boolean {
     /^oi(?:\s+atlas)?$/,
     /^ola(?:\s+atlas)?$/,
     /^olá(?:\s+atlas)?$/,
+    /^bom dia(?:\s+atlas)?$/,
+    /^boa tarde(?:\s+atlas)?$/,
+    /^boa noite(?:\s+atlas)?$/,
     /^e ai(?:\s+atlas)?$/,
     /^hey(?:\s+atlas)?$/,
+    /^tudo certo\??$/,
+    /^tudo certo(?:\s+por ai|\s+por aí)?\??$/,
+    /^como\s+(?:voce|você)\s+esta\??$/,
+    /^como\s+esta\??$/,
     /^oi\s+atlas[, ]+como\s+(?:voce|você)\s+esta\??$/,
     /^oi\s+atlas[, ]+como\s+esta\??$/,
     /^atlas[, ]+como\s+(?:voce|você)\s+esta\??$/,
@@ -1032,16 +1049,231 @@ function buildAgentIdentityReply(preferredAgentName = "Atlas"): string {
   ].join("\n");
 }
 
-function buildGreetingReply(prompt: string): string {
+function extractFirstName(value: string | undefined): string | undefined {
+  const normalized = value?.trim();
+  if (!normalized) {
+    return undefined;
+  }
+  return normalized.split(/\s+/)[0];
+}
+
+export function buildGreetingReply(
+  prompt: string,
+  options?: {
+    profile?: PersonalOperationalProfile;
+    operationalMode?: "field" | null;
+  },
+): string {
   const normalized = normalizeEmailAnalysisText(prompt);
+  const firstName = extractFirstName(options?.profile?.displayName);
+  const greetingName = firstName ? `, ${firstName}` : "";
+  const compact = options?.operationalMode === "field";
+
+  if (normalized.startsWith("bom dia")) {
+    return compact
+      ? `Bom dia${greetingName}. Diz o que precisa agora.`
+      : `Bom dia${greetingName}. Como posso te ajudar hoje?`;
+  }
+  if (normalized.startsWith("boa tarde")) {
+    return compact
+      ? `Boa tarde${greetingName}. Diz o que precisa agora.`
+      : `Boa tarde${greetingName}. Como posso te ajudar?`;
+  }
+  if (normalized.startsWith("boa noite")) {
+    return compact
+      ? `Boa noite${greetingName}. Diz o que precisa agora.`
+      : `Boa noite${greetingName}. Como posso te ajudar?`;
+  }
   if (normalized.includes("como") && (normalized.includes("esta") || normalized.includes("está"))) {
-    return [
-      "Estou online e operando.",
-      "Pode mandar agenda, briefing, clima, tarefas ou aprovações.",
-    ].join("\n");
+    return compact
+      ? `Tudo certo por aqui${greetingName}. Diz o que tu precisa agora.`
+      : `Estou bem${greetingName}. Em que posso te ajudar?`;
+  }
+  if (normalized.includes("tudo certo")) {
+    return compact
+      ? `Tudo certo por aqui${greetingName}. Diz o que precisa.`
+      : `Tudo certo por aqui${greetingName}. O que tu precisa agora?`;
   }
 
-  return "Estou online. Pode mandar o próximo pedido.";
+  return compact
+    ? `Estou online${greetingName}. Pode mandar o pedido.`
+    : `Estou online${greetingName}. Em que posso te ajudar?`;
+}
+
+function hasTechnicalSimpleReplyFraming(reply: string): boolean {
+  return [
+    "Conclusão",
+    "Evidência essencial",
+    "Lacuna / risco",
+    "Próxima ação recomendada",
+  ].some((token) => reply.includes(token));
+}
+
+function extractConclusionLine(reply: string): string | undefined {
+  const lines = reply
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  const explicit = lines.find((line) => /^Conclus[aã]o\s+[—-]\s*/i.test(line));
+  if (explicit) {
+    return explicit.replace(/^Conclus[aã]o\s+[—-]\s*/i, "").trim();
+  }
+
+  return lines.find((line) =>
+    !/^Evid[êe]ncia essencial/i.test(line)
+    && !/^Lacuna \/ risco/i.test(line)
+    && !/^Pr[oó]xima a[cç][aã]o recomendada/i.test(line)
+  );
+}
+
+export function rewriteConversationalSimpleReply(
+  prompt: string,
+  reply: string,
+  options?: {
+    profile?: PersonalOperationalProfile;
+    operationalMode?: "field" | null;
+  },
+): string {
+  const interpreted = interpretConversationTurn({
+    text: prompt,
+    operationalMode: options?.operationalMode === "field" ? "field" : "normal",
+  });
+  if (
+    !["greeting", "weather", "briefing", "agenda", "tasks", "planning", "memory"].includes(interpreted.skill)
+    || interpreted.confidence < 0.78
+    || !hasTechnicalSimpleReplyFraming(reply)
+  ) {
+    return reply;
+  }
+
+  if (interpreted.skill === "greeting") {
+    return buildGreetingReply(prompt, options);
+  }
+
+  const conclusion = extractConclusionLine(reply);
+  if (!conclusion) {
+    return reply;
+  }
+
+  const normalized = conclusion.replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return reply;
+  }
+
+  return /[.!?]$/.test(normalized) ? normalized : `${normalized}.`;
+}
+
+function isConversationStyleCorrectionPrompt(prompt: string): boolean {
+  const normalized = normalizeEmailAnalysisText(prompt);
+  if (!normalized) {
+    return false;
+  }
+
+  return includesAny(normalized, [
+    "essa resposta está muito verbosa",
+    "essa resposta esta muito verbosa",
+    "essa resposta esta muito longa",
+    "essa resposta está muito longa",
+    "seja mais direto",
+    "seja mais objetiva",
+    "mais direto",
+    "mais objetiva",
+    "mais objetivo",
+    "responda curto",
+    "responde curto",
+    "responda mais curto",
+    "responda mais direto",
+    "resposta mais curta",
+    "nao precisa perguntar tanto",
+    "não precisa perguntar tanto",
+    "nao precisa perguntar muito",
+    "não precisa perguntar muito",
+    "pergunta menos",
+    "menos perguntas",
+  ]);
+}
+
+export function extractConversationStyleCorrection(
+  prompt: string,
+  current: PersonalOperationalProfile,
+): {
+  profileUpdate: UpdatePersonalOperationalProfileInput;
+  preferenceUpdate: import("../types/user-preferences.js").UpdateUserPreferencesInput;
+  learnedPreference: CreateLearnedPreferenceInput;
+  reply: string;
+} | null {
+  if (!isConversationStyleCorrectionPrompt(prompt)) {
+    return null;
+  }
+
+  const normalized = normalizeEmailAnalysisText(prompt);
+  const wantsShort = includesAny(normalized, [
+    "muito verbosa",
+    "muito longa",
+    "mais direto",
+    "mais objetiva",
+    "mais objetivo",
+    "responda curto",
+    "responde curto",
+    "responda mais curto",
+    "responda mais direto",
+    "resposta mais curta",
+  ]);
+  const wantsFewerQuestions = includesAny(normalized, [
+    "nao precisa perguntar tanto",
+    "não precisa perguntar tanto",
+    "nao precisa perguntar muito",
+    "não precisa perguntar muito",
+    "pergunta menos",
+    "menos perguntas",
+  ]);
+
+  const autonomyPreference = "leituras simples executam direto quando o contexto já basta";
+  const profileUpdate: UpdatePersonalOperationalProfileInput = {
+    responseStyle: wantsShort ? "direto e objetivo" : current.responseStyle,
+    tonePreference: wantsShort ? "objetivo" : current.tonePreference,
+    detailLevel: wantsShort ? "resumo" : current.detailLevel,
+    briefingPreference: wantsShort ? "curto" : current.briefingPreference,
+    autonomyPreferences: wantsFewerQuestions
+      ? uniqueAppend(current.autonomyPreferences, [autonomyPreference])
+      : current.autonomyPreferences,
+  };
+
+  const preferenceUpdate: import("../types/user-preferences.js").UpdateUserPreferencesInput = {
+    responseStyle: "executive",
+    responseLength: "short",
+  };
+
+  const learnedPreference: CreateLearnedPreferenceInput = wantsFewerQuestions
+    ? {
+        type: "response_style",
+        key: "low_friction_simple_reads",
+        description: "Preferência por respostas curtas e menos perguntas em pedidos simples",
+        value: "responder curto e só perguntar quando faltar dado crítico",
+        source: "correction",
+        confidence: 0.84,
+      }
+    : {
+        type: "response_style",
+        key: "short_direct_replies",
+        description: "Preferência por respostas curtas, diretas e mais resolutivas",
+        value: "responder curto e direto",
+        source: "correction",
+        confidence: 0.8,
+      };
+
+  const reply = wantsFewerQuestions
+    ? "Ajustado. Vou responder mais curto e direto, e só vou perguntar quando faltar algo realmente crítico."
+    : "Ajustado. Vou responder mais curto e direto.";
+
+  return {
+    profileUpdate,
+    preferenceUpdate,
+    learnedPreference,
+    reply,
+  };
 }
 
 function isMemoryUpdatePrompt(prompt: string): boolean {
@@ -1351,6 +1583,7 @@ function isPersonalOperationalProfileDeletePrompt(prompt: string): boolean {
 function isDirectLocalContextCommandPrompt(prompt: string): boolean {
   return (
     isGreetingPrompt(prompt) ||
+    isConversationStyleCorrectionPrompt(prompt) ||
     isWeatherPrompt(prompt) ||
     isMorningBriefPrompt(prompt) ||
     isOperationalBriefPrompt(prompt) ||
@@ -1373,7 +1606,29 @@ export function shouldBypassPreLocalExternalReasoningForPrompt(
   prompt: string,
   intent?: IntentResolution,
 ): boolean {
-  return isDirectLocalContextCommandPrompt(prompt) || looksLikeLowFrictionReadPrompt(prompt, intent);
+  if (isDirectLocalContextCommandPrompt(prompt) || looksLikeLowFrictionReadPrompt(prompt, intent)) {
+    return true;
+  }
+
+  const interpreted = interpretConversationTurn({ text: prompt });
+  if (interpreted.suggestedAction === "handoff") {
+    return false;
+  }
+
+  if ([
+    "greeting",
+    "weather",
+    "briefing",
+    "agenda",
+    "tasks",
+    "memory",
+    "planning",
+    "visual_task",
+  ].includes(interpreted.skill) && interpreted.confidence >= 0.78) {
+    return true;
+  }
+
+  return interpreted.suggestedAction === "draft_then_confirm" && interpreted.confidence >= 0.8;
 }
 
 function extractPersonalOperationalProfileRemoveQuery(prompt: string): string | undefined {
@@ -1906,7 +2161,37 @@ function extractWeatherLocation(prompt: string): string | undefined {
   return undefined;
 }
 
-function buildWeatherReply(result: {
+function buildWeatherTip(result: {
+  current?: {
+    temperatureC?: number;
+  };
+  daily: Array<{
+    minTempC?: number;
+    maxTempC?: number;
+    precipitationProbabilityMax?: number;
+  }>;
+}): string | undefined {
+  const today = result.daily[0];
+  const rain = today?.precipitationProbabilityMax ?? 0;
+  const maxTemp = today?.maxTempC ?? result.current?.temperatureC;
+  const minTemp = today?.minTempC;
+
+  if (rain >= 60) {
+    return "Vale sair com guarda-chuva.";
+  }
+  if (typeof minTemp === "number" && minTemp <= 14) {
+    return "Vale levar um casaco leve.";
+  }
+  if (typeof maxTemp === "number" && maxTemp >= 28) {
+    return "Pode ir com roupa leve.";
+  }
+  if (rain <= 20) {
+    return "Não parece precisar de guarda-chuva.";
+  }
+  return undefined;
+}
+
+export function buildWeatherReply(result: {
   locationLabel: string;
   timezone: string;
   current?: {
@@ -1927,41 +2212,45 @@ function buildWeatherReply(result: {
     precipitationSumMm?: number;
   }>;
 }): string {
-  const lines = [`Tempo em ${result.locationLabel}:`];
+  const today = result.daily[0];
+  const tomorrow = result.daily[1];
+  const parts: string[] = [];
 
-  if (result.current) {
-    lines.push(
-      `- Agora: ${result.current.description}, ${result.current.temperatureC ?? "?"}°C.`,
-    );
+  if (today) {
+    const tempRange = typeof today.minTempC === "number" && typeof today.maxTempC === "number"
+      ? `, entre ${today.minTempC}° e ${today.maxTempC}°`
+      : "";
+    const rain = typeof today.precipitationProbabilityMax === "number"
+      ? ` e chuva em torno de ${today.precipitationProbabilityMax}%`
+      : "";
+    const currentTemp = typeof result.current?.temperatureC === "number"
+      ? `, ${result.current.temperatureC}°C agora`
+      : "";
+    parts.push(`Hoje em ${result.locationLabel} o tempo está ${today.description.toLowerCase()}${currentTemp}${tempRange}${rain}.`);
+  } else if (result.current) {
+    parts.push(`Agora em ${result.locationLabel} está ${result.current.description.toLowerCase()}, com ${result.current.temperatureC ?? "?"}°C.`);
   }
 
-  if (result.daily.length > 0) {
-    const [today, tomorrow] = result.daily;
-    if (today) {
-      lines.push(
-        `- Hoje: ${today.description}` +
-          (typeof today.minTempC === "number" && typeof today.maxTempC === "number"
-            ? ` | ${today.minTempC}°–${today.maxTempC}°`
-            : "") +
-          (typeof today.precipitationProbabilityMax === "number"
-            ? ` | chuva ${today.precipitationProbabilityMax}%`
-            : ""),
-      );
-    }
-    if (tomorrow) {
-      lines.push(
-        `- Amanhã: ${tomorrow.description}` +
-          (typeof tomorrow.minTempC === "number" && typeof tomorrow.maxTempC === "number"
-            ? ` | ${tomorrow.minTempC}°–${tomorrow.maxTempC}°`
-            : "") +
-          (typeof tomorrow.precipitationProbabilityMax === "number"
-            ? ` | chuva ${tomorrow.precipitationProbabilityMax}%`
-            : ""),
-      );
-    }
+  const tip = buildWeatherTip(result);
+  if (tip) {
+    parts.push(tip);
   }
 
-  return lines.join("\n");
+  if (tomorrow) {
+    const tempRange = typeof tomorrow.minTempC === "number" && typeof tomorrow.maxTempC === "number"
+      ? `, entre ${tomorrow.minTempC}° e ${tomorrow.maxTempC}°`
+      : "";
+    const rain = typeof tomorrow.precipitationProbabilityMax === "number"
+      ? ` e chuva em torno de ${tomorrow.precipitationProbabilityMax}%`
+      : "";
+    parts.push(`Amanhã a tendência é ${tomorrow.description.toLowerCase()}${tempRange}${rain}.`);
+  }
+
+  if (parts.length === 0) {
+    return `Não encontrei uma previsão confiável agora para ${result.locationLabel}.`;
+  }
+
+  return parts.join(" ");
 }
 
 function extractWebResearchQuery(prompt: string): string {
@@ -4417,40 +4706,46 @@ function buildOperationalBriefReply(input: {
   brief: DailyOperationalBrief;
   focus: Array<{ title: string; whyNow: string; nextAction: string }>;
 }): string {
+  const nextEvent = input.brief.events[0];
+  const nextTask = input.brief.tasks[0];
   const lines = [
-    `Brief diário gerado para ${input.brief.timezone}.`,
-    `- Eventos hoje: ${input.brief.events.length}`,
-    `- Tarefas abertas: ${input.brief.tasks.length}`,
-    `- Focos operacionais: ${input.focus.length}`,
-    "",
-    "Agenda de hoje:",
+    `Hoje teu dia tem ${input.brief.events.length} ${input.brief.events.length === 1 ? "compromisso" : "compromissos"}, ${input.brief.tasks.length} ${input.brief.tasks.length === 1 ? "tarefa" : "tarefas"} e ${input.focus.length} ${input.focus.length === 1 ? "frente em foco" : "frentes em foco"}.`,
   ];
 
-  if (input.brief.events.length === 0) {
-    lines.push("- Nenhum compromisso encontrado para hoje.");
-  } else {
-    for (const event of input.brief.events.slice(0, 6)) {
+  if (nextEvent) {
+    lines.push(`O próximo compromisso é ${formatBriefDateTime(nextEvent.start, input.brief.timezone)} — ${nextEvent.summary}${nextEvent.location ? ` — ${nextEvent.location}` : ""}.`);
+  }
+  if (nextTask) {
+    lines.push(`A tarefa que mais pede atenção agora é ${nextTask.title} — ${formatTaskDue(nextTask, input.brief.timezone)}.`);
+  }
+  if (input.focus[0]) {
+    lines.push(`Teu foco agora é ${input.focus[0].title} — ${input.focus[0].nextAction}.`);
+  }
+
+  if (!nextEvent && !nextTask && input.focus.length === 0) {
+    lines.push("Hoje está mais leve até aqui.");
+  }
+
+  if (input.brief.events.length > 0) {
+    lines.push("", "Agenda mais próxima:");
+    for (const event of input.brief.events.slice(0, 4)) {
       lines.push(
-        `- ${formatBriefDateTime(event.start, input.brief.timezone)} | ${event.summary}${event.location ? ` | ${event.location}` : ""}`,
+        `- ${formatBriefDateTime(event.start, input.brief.timezone)} — ${event.summary}${event.location ? ` — ${event.location}` : ""}`,
       );
     }
   }
 
-  lines.push("", "Tarefas prioritárias:");
-  if (input.brief.tasks.length === 0) {
-    lines.push("- Nenhuma tarefa encontrada para a janela do dia.");
-  } else {
-    for (const task of input.brief.tasks.slice(0, 6)) {
-      lines.push(`- ${task.title} (${task.taskListTitle}) | prazo: ${formatTaskDue(task, input.brief.timezone)}`);
+  if (input.brief.tasks.length > 0) {
+    lines.push("", "Tarefas que valem olhar:");
+    for (const task of input.brief.tasks.slice(0, 4)) {
+      lines.push(`- ${task.title} — ${task.taskListTitle} — ${formatTaskDue(task, input.brief.timezone)}`);
     }
   }
 
-  lines.push("", "Foco do agente:");
-  if (input.focus.length === 0) {
-    lines.push("- Nenhum foco salvo na memória operacional.");
-  } else {
-    for (const item of input.focus) {
-      lines.push(`- ${item.title} | por que agora: ${item.whyNow} | próxima ação: ${item.nextAction}`);
+  if (input.focus.length > 1) {
+    lines.push("", "Outras frentes:");
+    for (const item of input.focus.slice(0, 3)) {
+      lines.push(`- ${item.title} — ${item.nextAction}`);
     }
   }
 
@@ -4485,51 +4780,81 @@ export function buildMorningBriefReply(
   const nextEvent = input.events[0];
   const nextTask = input.taskBuckets.overdue[0] ?? input.taskBuckets.today[0];
   const pauloConflicts = input.events.filter((event) => event.owner === "paulo" && event.hasConflict);
+  const focusLabel = truncateBriefText(options?.profile?.savedFocus[0] ?? input.personalFocus[0] ?? "", 110);
   const groupedEvents = {
     manha: input.events.filter((event) => classifyBriefPeriod(event.start, input.timezone) === "manha"),
     tarde: input.events.filter((event) => classifyBriefPeriod(event.start, input.timezone) === "tarde"),
     noite: input.events.filter((event) => classifyBriefPeriod(event.start, input.timezone) === "noite"),
   };
+  const periodCounts = [
+    { label: "manhã", count: groupedEvents.manha.length },
+    { label: "tarde", count: groupedEvents.tarde.length },
+    { label: "noite", count: groupedEvents.noite.length },
+  ].sort((left, right) => right.count - left.count);
+  const busiestPeriod = periodCounts[0]?.count ? periodCounts[0].label : undefined;
+  const actionableTasks = input.taskBuckets.actionableCount;
+  const keyAttentionCount =
+    (pauloConflicts.length > 0 ? 1 : 0)
+    + (nextTask ? 1 : 0)
+    + (highestEmail ? 1 : 0);
 
   const summarizeEventLine = (event: ExecutiveMorningBrief["events"][number]): string => {
     const tags = [
       event.hasConflict ? "conflito" : undefined,
       compact ? undefined : event.owner !== "paulo" ? labelBriefOwner(event.owner) : undefined,
-      compact ? undefined : event.account,
     ].filter(Boolean);
     return `${formatBriefDateTime(event.start, input.timezone)} — ${truncateBriefText(event.summary)}${event.location ? ` — ${summarizeCalendarLocation(event.location)}` : ""}${tags.length > 0 ? ` | ${tags.join(" | ")}` : ""}`;
   };
+
+  const visionLine = compact
+    ? `Hoje o foco é operar em modo rua, com ${input.events.length} compromisso(s) e ${keyAttentionCount} ponto(s) que merecem atenção imediata.`
+    : `Hoje teu dia está ${input.overloadLevel}, com ${input.events.length} compromisso(s) e ${actionableTasks} tarefa(s) que podem virar ação real.`;
+  const periodLine = busiestPeriod
+    ? `O trecho mais carregado tende a ficar na ${busiestPeriod}${pauloConflicts.length > 0 ? ", então vale resolver conflito antes de abrir coisa nova." : "."}`
+    : undefined;
+  const mainAttention = pauloConflicts[0]
+    ? `O principal agora é tirar o conflito em ${truncateBriefText(pauloConflicts[0].summary, 96)} antes que ele contamine o resto do dia.`
+    : nextEvent
+      ? `O principal agora é ${nextEvent.prepHint} para ${truncateBriefText(nextEvent.summary, 96)}.`
+      : nextTask
+        ? `O principal agora é destravar ${truncateBriefText(nextTask.title, 96)} para não empurrar isso mais uma vez.`
+        : highestEmail
+          ? `O principal agora é decidir se ${truncateBriefText(highestEmail.subject || "(sem assunto)", 96)} exige ação hoje.`
+          : "O principal agora é manter o dia simples e sem abrir frente desnecessária.";
 
   const lines = [
     "Briefing da manhã",
     "",
     "Visão do dia:",
-    `- Hoje: ${input.events.length} compromisso(s) | ${input.taskBuckets.actionableCount} tarefa(s) acionáveis | ${input.emails.length} email(s) relevantes`,
-    `- Ritmo: ${input.overloadLevel}${input.conflictSummary.overlaps > 0 ? ` | ${input.conflictSummary.overlaps} conflito(s)` : ""}${input.conflictSummary.duplicates > 0 ? ` | ${input.conflictSummary.duplicates} duplicidade(s)` : ""}`,
+    `- ${visionLine}`,
   ];
 
-  if (options?.profile?.savedFocus[0] || input.personalFocus[0]) {
-    lines.push(`- Foco salvo: ${truncateBriefText(options?.profile?.savedFocus[0] ?? input.personalFocus[0] ?? "", 110)}`);
+  if (periodLine) {
+    lines.push(`- ${periodLine}`);
+  }
+  if (focusLabel) {
+    lines.push(`- Foco de base: ${focusLabel}`);
   }
 
   lines.push("", "Atenção principal:");
+  lines.push(`- ${mainAttention}`);
   if (nextEvent) {
-    lines.push(`- Próximo compromisso: ${summarizeEventLine(nextEvent)} — ${nextEvent.prepHint}`);
+    lines.push(`- Próximo compromisso: ${summarizeEventLine(nextEvent)}`);
   }
   if (pauloConflicts.length > 0) {
-    lines.push(`- ${pauloConflicts.length} conflito(s) de agenda exigem decisão antes de abrir novas frentes.`);
+    lines.push(`- ${pauloConflicts.length} conflito(s) de agenda ainda exigem decisão antes de aceitar coisa nova.`);
   }
   if (nextTask) {
-    lines.push(`- Tarefa em foco: ${truncateBriefText(nextTask.title)} — ${formatTaskDue(nextTask, input.timezone)} — ${nextTask.account}`);
+    lines.push(`- Tarefa que pode te travar: ${truncateBriefText(nextTask.title)} — ${formatTaskDue(nextTask, input.timezone)}`);
   }
   if (highestEmail) {
-    lines.push(`- Email prioritário: ${truncateBriefText(highestEmail.subject || "(sem assunto)")} — ${summarizeEmailSender(highestEmail.from)} — ${highestEmail.account}`);
+    lines.push(`- Email que merece triagem: ${truncateBriefText(highestEmail.subject || "(sem assunto)")} — ${summarizeEmailSender(highestEmail.from)}`);
   }
   if (!nextEvent && !nextTask && !highestEmail) {
     lines.push("- Nada crítico pendente agora.");
   }
 
-  lines.push("", compact ? "Rua, clima e deslocamento:" : "Rua, clima e deslocamento:");
+  lines.push("", "Rua, clima e deslocamento:");
   if (input.mobilityAlerts.length > 0) {
     for (const item of input.mobilityAlerts.slice(0, compact ? 2 : 3)) {
       lines.push(`- ${truncateBriefText(item, 110)}`);
@@ -4538,12 +4863,12 @@ export function buildMorningBriefReply(
   if (input.weather?.current) {
     lines.push(`- Agora em ${input.weather.locationLabel}: ${input.weather.current.description}, ${formatBriefTemperature(input.weather.current.temperatureC)}.`);
   }
-  for (const day of (input.weather?.days ?? []).slice(0, 2)) {
+  for (const day of (input.weather?.days ?? []).slice(0, compact ? 1 : 2)) {
     const rain = typeof day.precipitationProbabilityMax === "number"
       ? ` | chuva ${day.precipitationProbabilityMax}%`
       : "";
     lines.push(`- ${day.label}: ${day.description} | ${formatBriefTemperatureRange(day.minTempC, day.maxTempC)}${rain}`);
-    lines.push(`  Dica: ${day.tip}`);
+    lines.push(`  Dica prática: ${day.tip}`);
   }
   if ((input.weather?.days.length ?? 0) === 0 && input.mobilityAlerts.length === 0) {
     lines.push("- Sem alerta extra de clima ou deslocamento agora.");
@@ -4573,9 +4898,9 @@ export function buildMorningBriefReply(
     }
   }
 
-  lines.push("", "Prioridade do dia:");
+  lines.push("", "Prioridade do dia / próxima ação:");
   if (input.dayRecommendation) {
-    lines.push(`- Recomendação prática: ${truncateBriefText(input.dayRecommendation, 120)}`);
+    lines.push(`- Prioridade: ${truncateBriefText(input.dayRecommendation, 120)}`);
   }
   if (input.nextAction) {
     lines.push(`- Próxima ação: ${truncateBriefText(input.nextAction, 110)}`);
@@ -9669,6 +9994,15 @@ export class AgentCore {
     if (directGreetingResult) {
       return directGreetingResult;
     }
+    const directConversationStyleResult = await this.tryRunDirectConversationStyleCorrection(
+      activeUserPrompt,
+      requestId,
+      orchestration,
+      preferences,
+    );
+    if (directConversationStyleResult) {
+      return directConversationStyleResult;
+    }
     const directIdentityResult = await this.tryRunDirectAgentIdentity(
       activeUserPrompt,
       requestId,
@@ -10371,9 +10705,18 @@ export class AgentCore {
       messages.push(assistantMessage);
 
       if (!responseToolCalls.length) {
+        const profile = this.personalMemory.getProfile();
+        const operationalMode = resolveEffectiveOperationalMode(activeUserPrompt, profile);
         return {
           requestId,
-          reply: assistantMessage.content.trim() || "O modelo não retornou conteúdo.",
+          reply: rewriteConversationalSimpleReply(
+            activeUserPrompt,
+            assistantMessage.content.trim() || "O modelo não retornou conteúdo.",
+            {
+              profile,
+              operationalMode,
+            },
+          ),
           messages,
           toolExecutions,
         };
@@ -10462,6 +10805,7 @@ export class AgentCore {
           messages,
           toolExecutions,
           orchestration,
+          userPrompt: activeUserPrompt,
         });
       }
     }
@@ -10568,10 +10912,15 @@ export class AgentCore {
           stage,
         },
       );
+      const personalProfile = this.personalMemory.getProfile();
+      const operationalMode = resolveEffectiveOperationalMode(userPrompt, personalProfile);
 
       return {
         requestId,
-        reply: response.content,
+        reply: rewriteConversationalSimpleReply(userPrompt, response.content, {
+          profile: personalProfile,
+          operationalMode,
+        }),
         messages: buildBaseMessages(userPrompt, intent.orchestration, preferences),
         toolExecutions: [
           {
@@ -10926,11 +11275,68 @@ export class AgentCore {
       return null;
     }
 
+    const profile = this.personalMemory.getProfile();
+    const operationalMode = resolveEffectiveOperationalMode(userPrompt, profile);
     return {
       requestId,
-      reply: buildGreetingReply(userPrompt),
+      reply: buildGreetingReply(userPrompt, {
+        profile,
+        operationalMode,
+      }),
       messages: buildBaseMessages(userPrompt, orchestration, this.preferences.get()),
       toolExecutions: [],
+    };
+  }
+
+  private async tryRunDirectConversationStyleCorrection(
+    userPrompt: string,
+    requestId: string,
+    orchestration: OrchestrationContext,
+    preferences: UserPreferences,
+  ): Promise<AgentRunResult | null> {
+    const currentProfile = this.personalMemory.getProfile();
+    const correction = extractConversationStyleCorrection(userPrompt, currentProfile);
+    if (!correction) {
+      return null;
+    }
+
+    await this.executeToolDirect("update_personal_operational_profile", {
+      ...(correction.profileUpdate.responseStyle ? { responseStyle: correction.profileUpdate.responseStyle } : {}),
+      ...(correction.profileUpdate.briefingPreference ? { briefingPreference: correction.profileUpdate.briefingPreference } : {}),
+      ...(correction.profileUpdate.detailLevel ? { detailLevel: correction.profileUpdate.detailLevel } : {}),
+      ...(correction.profileUpdate.tonePreference ? { tonePreference: correction.profileUpdate.tonePreference } : {}),
+      ...(correction.profileUpdate.autonomyPreferences ? { autonomyPreferences: correction.profileUpdate.autonomyPreferences } : {}),
+    });
+    this.preferences.update(correction.preferenceUpdate);
+
+    try {
+      await this.executeToolDirect("save_learned_preference", {
+        ...correction.learnedPreference,
+        observe: true,
+      });
+    } catch (error) {
+      this.logger.warn("Failed to save learned conversation style preference", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    return {
+      requestId,
+      reply: correction.reply,
+      messages: buildBaseMessages(userPrompt, orchestration, {
+        ...preferences,
+        ...correction.preferenceUpdate,
+      }),
+      toolExecutions: [
+        {
+          toolName: "update_personal_operational_profile",
+          resultPreview: correction.reply,
+        },
+        {
+          toolName: "save_learned_preference",
+          resultPreview: correction.learnedPreference.value,
+        },
+      ],
     };
   }
 
@@ -17208,6 +17614,7 @@ export class AgentCore {
     messages: ConversationMessage[];
     toolExecutions: AgentRunResult["toolExecutions"];
     orchestration: OrchestrationContext;
+    userPrompt?: string;
   }): Promise<AgentRunResult> {
     const synthesisMessages: ConversationMessage[] = [
       ...input.messages,
@@ -17224,10 +17631,19 @@ export class AgentCore {
     const reply =
       synthesisResponse.message.content.trim() ||
       this.buildFallbackReply(input.toolExecutions);
+    const profile = this.personalMemory.getProfile();
+    const operationalMode = input.userPrompt
+      ? resolveEffectiveOperationalMode(input.userPrompt, profile)
+      : null;
 
     return {
       requestId: input.requestId,
-      reply,
+      reply: input.userPrompt
+        ? rewriteConversationalSimpleReply(input.userPrompt, reply, {
+            profile,
+            operationalMode,
+          })
+        : reply,
       messages: [...synthesisMessages, synthesisResponse.message],
       toolExecutions: input.toolExecutions,
     };

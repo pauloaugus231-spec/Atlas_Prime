@@ -35,6 +35,10 @@ import {
   type MonitoredWhatsAppReplyDraft,
   type PendingMonitoredChannelAlertDraft,
 } from "../../core/monitored-channel-alerts.js";
+import {
+  interpretConversationTurn,
+  looksLikeNewTopLevelConversationTurn,
+} from "../../core/conversation-interpreter.js";
 import { normalizeVoiceTranscriptForTelegram } from "../../core/voice-semantic-normalizer.js";
 import { extractLatestShortPackage, type ParsedShortPackage } from "../../core/short-video-package.js";
 import { parseAssistantDecisionReply } from "../../core/assistant-decision.js";
@@ -708,9 +712,12 @@ function isExplicitSendConfirmation(text: string): boolean {
     /^sim[, ]+quero\b/,
     /^agendar\b/,
     /^agende\b/,
+    /^segue\b/,
+    /^pode seguir\b/,
     /^confirmar\b/,
     /^confirmado\b/,
     /^ok\b/,
+    /^faz isso\b/,
     /^pode criar\b/,
     /^crie\b/,
     /^quero enviar\b/,
@@ -835,75 +842,7 @@ function isApprovalListRequest(text: string): boolean {
 }
 
 function isClearlyNewTopLevelIntent(text: string): boolean {
-  const normalized = normalizeIntentText(text);
-  if (!normalized) {
-    return false;
-  }
-
-  if (isGoogleEventCreatePrompt(text) || isGoogleTaskCreatePrompt(text)) {
-    return true;
-  }
-
-  return [
-    "oi atlas",
-    "ola atlas",
-    "olá atlas",
-    "oi atlas como esta",
-    "oi atlas como está",
-    "atlas como esta",
-    "atlas como está",
-    "meu calendario",
-    "meu calendário",
-    "minha agenda",
-    "coloque um evento",
-    "coloca um evento",
-    "crie um evento",
-    "agende",
-    "agendar",
-    "crie uma tarefa",
-    "adicione uma tarefa",
-    "procure no whatsapp",
-    "busque no whatsapp",
-    "veja no whatsapp",
-    "pesquise na internet",
-    "pesquise sobre",
-    "procure na internet",
-    "clima em",
-    "previsao do tempo",
-    "previsão do tempo",
-    "qual o clima",
-    "clima hoje",
-    "tempo hoje",
-    "liste meus compromissos",
-    "briefing da manha",
-    "briefing da manhã",
-    "brief diario",
-    "brief diário",
-    "resumo da manha",
-    "resumo da manhã",
-    "organize meu dia",
-    "organizar meu dia",
-    "morning briefing",
-    "liste minhas tarefas",
-    "mostre meu perfil",
-    "mostrar meu perfil",
-    "meu perfil operacional",
-    "perfil operacional",
-    "meu estado operacional",
-    "estado operacional",
-    "o que voce aprendeu sobre mim",
-    "o que você aprendeu sobre mim",
-    "aprendizados sobre mim",
-    "minha memoria pessoal",
-    "minha memória pessoal",
-    "memoria pessoal",
-    "memória pessoal",
-    "minhas preferencias aprendidas",
-    "minhas preferências aprendidas",
-    "minhas preferencias",
-    "minhas preferências",
-    "procure o contato",
-  ].some((token) => normalized.includes(token));
+  return looksLikeNewTopLevelConversationTurn(text);
 }
 
 function isUndoLastCalendarChangeRequest(text: string): boolean {
@@ -2517,6 +2456,44 @@ export class TelegramService {
       return;
     }
 
+    const currentOperationalMode = this.getOperationalMode(message.chat.id);
+    const baseInterpretation = interpretConversationTurn({
+      text: normalizedText,
+      attachments: audioAttachment ? [{ kind: "audio" }] : [],
+      recentMessages: this.getChatHistory(message.chat.id).map((turn) => turn.text).slice(-6),
+      operationalMode: currentOperationalMode?.kind === "field" ? "field" : "normal",
+    });
+    if (
+      audioAttachment
+      || baseInterpretation.skill !== "other"
+      || baseInterpretation.isCorrection
+      || baseInterpretation.isShortConfirmation
+    ) {
+      this.logger.info("Telegram conversation interpreted", {
+        chatId: message.chat.id,
+        intent: baseInterpretation.intent,
+        skill: baseInterpretation.skill,
+        confidence: baseInterpretation.confidence,
+        followUp: baseInterpretation.isFollowUp,
+        correction: baseInterpretation.isCorrection,
+        topicShift: baseInterpretation.isTopicShift,
+        suggestedAction: baseInterpretation.suggestedAction,
+      });
+    }
+    const correctedTargetType = typeof baseInterpretation.entities.corrected_target_type === "string"
+      ? baseInterpretation.entities.corrected_target_type
+      : undefined;
+    if (baseInterpretation.isCorrection && correctedTargetType) {
+      await this.recordLearnedPreference({
+        type: "other",
+        key: "corrected_target_type",
+        description: "Correção recorrente entre tarefa e evento no fluxo conversacional",
+        value: correctedTargetType,
+        source: "correction",
+        confidence: 0.58,
+      });
+    }
+
     if (resolvedText && isManualVideoScriptRequest(resolvedText)) {
       await this.handleManualVideoScriptRequest(message, resolvedText);
       return;
@@ -2954,7 +2931,21 @@ export class TelegramService {
       return false;
     }
 
-    if (isClearlyNewTopLevelIntent(normalizedText)) {
+    const interpreted = interpretConversationTurn({
+      text: normalizedText,
+      pendingFlow: {
+        kind: "clarification",
+      },
+      recentMessages: this.getChatHistory(message.chat.id).map((turn) => turn.text).slice(-6),
+      operationalMode: this.getOperationalMode(message.chat.id)?.kind === "field" ? "field" : "normal",
+    });
+
+    if (interpreted.isTopicShift) {
+      this.logger.info("Pending clarification interrupted by new top-level Telegram intent", {
+        chatId: message.chat.id,
+        intent: interpreted.intent,
+        skill: interpreted.skill,
+      });
       this.clarificationEngine.cancel(pending.id);
       return false;
     }
@@ -3113,7 +3104,21 @@ export class TelegramService {
       return false;
     }
 
-    if (isClearlyNewTopLevelIntent(normalizedText)) {
+    const interpreted = interpretConversationTurn({
+      text: normalizedText,
+      pendingFlow: {
+        kind: "choice",
+      },
+      recentMessages: this.getChatHistory(message.chat.id).map((turn) => turn.text).slice(-6),
+      operationalMode: this.getOperationalMode(message.chat.id)?.kind === "field" ? "field" : "normal",
+    });
+
+    if (interpreted.isTopicShift) {
+      this.logger.info("Pending Telegram choice interrupted by new top-level intent", {
+        chatId: message.chat.id,
+        intent: interpreted.intent,
+        skill: interpreted.skill,
+      });
       this.clearPendingChoiceState(message.chat.id);
       return false;
     }

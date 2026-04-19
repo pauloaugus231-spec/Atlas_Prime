@@ -502,6 +502,9 @@ Estado atual:
 
 - leitura e organizacao: implementadas
 - consultas simples de leitura usam defaults inteligentes e execucao direta quando o contexto ja basta; em agenda, o padrao e responder em modo resumo
+- a camada conversacional de baixo atrito trata greetings, clima, briefing, agenda, tarefas e status do dia como pedidos pessoais simples: responde direto, com texto mais humano e curto, sem menus desnecessarios; correcoes como `seja mais direto` e `nao precisa perguntar tanto` passam a alimentar preferencias aprendidas
+- o Atlas agora tem uma camada leve de `Conversation Interpreter / Meaning Resolver` entre a mensagem bruta e o roteamento: ela ajuda a distinguir follow-up, correção, mudança de assunto, confirmação curta e cancelamento, sugerindo skill e próxima ação com menos atrito em agenda, tasks, briefing, audio curto e tarefas visuais
+- respostas simples do dia a dia evitam formato de relatório tecnico; estruturas como `Conclusão`, `Evidência essencial` e `Próxima ação recomendada` ficam reservadas para casos realmente analiticos
 - quando o Atlas apresenta opcoes numeradas no Telegram, respostas curtas como `1`, `3`, `a primeira`, `segue com a 2`, `ok` ou `cancelar` continuam o fluxo pendente em vez de reiniciar uma clarificacao generica
 - escrita controlada de eventos no Google Calendar: implementada, dependendo de write scopes concedidos no OAuth
 - escrita controlada de tarefas Google: implementada com executor unificado, dependendo de write scopes concedidos no OAuth
@@ -509,6 +512,7 @@ Estado atual:
 - o brief diario agora segue um formato operacional mais consistente: visao do dia, atencao principal, rua/clima/deslocamento, agenda limpa, prioridade do dia e mensagem final
 - existe politica explicita de autonomia por intencao: leituras simples rodam direto; escrita e acoes destrutivas continuam confirmadas
 - o Telegram suporta modo operacional de rua/plantao por chat, e esse modo agora afeta briefing, agenda do dia/amanha, conflitos e proximas acoes com respostas mais compactas
+- o briefing da manha foi polido para ficar menos painel tecnico e mais leitura assistiva: começa por visao do dia, atenção principal, rua/clima/deslocamento, agenda limpa e prioridade prática
 - o Telegram aceita voz assincrona quando `VOICE_ENABLED=true`: o Atlas baixa o audio, transcreve para texto, passa por uma camada de normalizacao semantica antes do roteamento e responde em texto; resposta em audio/TTS fica para uma etapa futura
 - tarefas com imagem, print, foto ou PDF passam por um fluxo visual/documental guiado: o Atlas explica o que vai tentar extrair, guarda o contexto da tarefa, sugere o melhor formato alternativo se a leitura falhar e continua a missão quando novos arquivos chegam
 - importação de agenda por print/PDF agora aplica regras operacionais para a abordagem: `manhã` = 08:00-12:00, `tarde` = 13:30-17:00, títulos limpos, demandas/feriados separados e modos de importação `só Paulo`, `Paulo + reuniões importantes` ou `tudo importável`

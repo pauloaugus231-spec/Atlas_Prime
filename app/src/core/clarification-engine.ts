@@ -16,6 +16,7 @@ import {
   isGoogleEventCreatePrompt,
   isGoogleTaskCreatePrompt,
 } from "./google-draft-utils.js";
+import { interpretConversationTurn } from "./conversation-interpreter.js";
 
 function normalize(value: string): string {
   return value
@@ -78,6 +79,16 @@ export class ClarificationEngine {
     prompt: string;
     intent: IntentResolution;
   }): Promise<ClarificationInboxItemRecord | null> {
+    const interpreted = interpretConversationTurn({ text: input.prompt });
+    if (
+      ["greeting", "weather", "briefing", "agenda", "tasks", "planning", "memory"].includes(interpreted.skill)
+      && interpreted.confidence >= 0.8
+      && !interpreted.needsConfirmation
+      && !interpreted.needsClarification
+    ) {
+      return null;
+    }
+
     if (looksLikeLowFrictionReadPrompt(input.prompt, input.intent)) {
       return null;
     }
@@ -170,6 +181,16 @@ export class ClarificationEngine {
 
   private buildHeuristicProposal(prompt: string, intent: IntentResolution): ClarificationProposal | null {
     const normalized = normalize(prompt);
+    const interpreted = interpretConversationTurn({ text: prompt });
+    if (
+      ["greeting", "weather", "briefing", "agenda", "tasks", "planning", "memory"].includes(interpreted.skill)
+      && interpreted.confidence >= 0.8
+      && !interpreted.needsConfirmation
+      && !interpreted.needsClarification
+    ) {
+      return null;
+    }
+
     if (looksLikeLowFrictionReadPrompt(prompt, intent)) {
       return null;
     }

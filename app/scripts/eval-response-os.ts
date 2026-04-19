@@ -83,10 +83,10 @@ function run() {
   });
   results.push({
     name: "schedule_reply_contract",
-    passed: scheduleReply.includes("Leitura operacional:")
-      && scheduleReply.includes("Objetivo: verificar agenda")
-      && scheduleReply.includes("Prioridades:")
-      && scheduleReply.includes("Próxima ação:"),
+    passed: scheduleReply.includes("Encontrei 1 compromisso")
+      && scheduleReply.includes("09/04, 08:00 — Paulo e Máira: Muralismo")
+      && scheduleReply.includes("Casa da Sopa")
+      && scheduleReply.includes("Se quiser, o próximo passo é"),
     detail: scheduleReply,
   });
 
@@ -131,11 +131,11 @@ function run() {
   });
   results.push({
     name: "organization_reply_contract",
-    passed: organizationReply.includes("Leitura operacional:")
-      && organizationReply.includes("Situação agora:")
-      && organizationReply.includes("Prioridades:")
-      && organizationReply.includes("Plano curto:")
-      && organizationReply.includes("Próxima ação:"),
+    passed: organizationReply.includes("Para organizar isso agora")
+      && organizationReply.includes("Agora:")
+      && organizationReply.includes("O que mais importa:")
+      && organizationReply.includes("Como eu atacaria:")
+      && organizationReply.includes("Próximo passo:"),
     detail: organizationReply,
   });
 

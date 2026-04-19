@@ -29,6 +29,11 @@ async function run() {
     "continue",
   ));
   results.push(check(
+    "pending_alert_plus_faz_isso_continues",
+    resolveMonitoredAlertTurnBehavior("faz isso"),
+    "continue",
+  ));
+  results.push(check(
     "pending_alert_plus_ignora_continues_as_alert_action",
     resolveMonitoredAlertTurnBehavior("ignora"),
     "continue",

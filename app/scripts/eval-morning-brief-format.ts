@@ -155,14 +155,30 @@ function run() {
         && normal.includes("Atenção principal:")
         && normal.includes("Rua, clima e deslocamento:")
         && normal.includes("Agenda limpa:")
-        && normal.includes("Prioridade do dia:")
+        && normal.includes("Prioridade do dia / próxima ação:")
         && normal.includes("Mensagem do dia:"),
       detail: normal,
     },
     {
+      name: "morning_brief_opens_with_assistive_day_summary",
+      passed:
+        normal.includes("Hoje teu dia está")
+        && normal.includes("O principal agora é")
+        && !normal.includes("Resumo rápido:")
+        && !normal.includes("Leitura operacional"),
+      detail: normal,
+    },
+    {
       name: "morning_brief_compact_field_mode_mentions_carry_items",
-      passed: field.includes("Levar: carregador, casaco leve"),
+      passed:
+        field.includes("Levar: carregador, casaco leve")
+        && field.includes("Hoje o foco é operar em modo rua"),
       detail: field,
+    },
+    {
+      name: "morning_brief_field_mode_is_more_compact",
+      passed: field.split("\n").length <= normal.split("\n").length,
+      detail: `normal_lines=${normal.split("\n").length} field_lines=${field.split("\n").length}`,
     },
   ];
 

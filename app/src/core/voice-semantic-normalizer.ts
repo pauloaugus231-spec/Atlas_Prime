@@ -4,6 +4,7 @@ import {
   type PendingGoogleEventDraft,
   type PendingGoogleTaskDraft,
 } from "./google-draft-utils.js";
+import { looksLikeShortContextualConversationReply } from "./conversation-interpreter.js";
 
 export type VoiceSemanticIntentHint =
   | "contextual_reply"
@@ -33,16 +34,6 @@ function normalizeComparable(value: string): string {
 
 function hasAny(normalized: string, terms: string[]): boolean {
   return terms.some((term) => normalized.includes(term));
-}
-
-function looksLikeShortContextualReply(normalized: string): boolean {
-  if (!normalized) {
-    return false;
-  }
-
-  return /^(?:sim|ok|pode seguir|segue|esse|esse mesmo|essa|essa mesma|a primeira|o primeiro|a segunda|o segundo|a terceira|o terceiro|a ultima|a última|agenda|cria tarefa|cria task|cria o evento|crie o evento|transforma isso em tarefa|responda|resposta|resumo|registrar|registre|so registra|só registra|ignora|ignora isso|cancelar)$/i.test(normalized)
-    || /^(?:amanha|hoje|na abordagem|no pessoal|na agenda principal|no calendario principal)$/.test(normalized)
-    || /^(?:o da manha|o da tarde|o da noite|o de \d{1,2}(?::\d{2})?|as \d{1,2}(?::\d{2})?(?: h| horas?)?(?: da manha| da tarde| da noite)?|a \d{1,2}(?::\d{2})?(?: h| horas?)?(?: da manha| da tarde| da noite)?|\d{1,2}h(?:\d{2})?)$/.test(normalized);
 }
 
 function looksLikeEventTiming(normalized: string): boolean {
@@ -127,7 +118,7 @@ export function normalizeVoiceTranscriptForTelegram(
     };
   }
 
-  if (looksLikeShortContextualReply(normalized)) {
+  if (looksLikeShortContextualConversationReply(trimmed)) {
     return {
       text: trimmed,
       changed: false,
