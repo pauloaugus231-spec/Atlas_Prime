@@ -15,10 +15,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
-      DEPLOY_PATH: ${{ secrets.AWS_EC2_DEPLOY_PATH || '/srv/atlas/app' }}
-      EC2_HOST: ${{ secrets.AWS_EC2_HOST }}
-      EC2_PORT: ${{ secrets.AWS_EC2_PORT || '22' }}
-      EC2_USER: ${{ secrets.AWS_EC2_USER || 'ubuntu' }}
+      DEPLOY_PATH: /srv/atlas/app
+      EC2_HOST: 16.59.231.206
+      EC2_PORT: "22"
+      EC2_USER: ubuntu
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -28,41 +28,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y rsync openssh-client
 
-      - name: Normalize deploy inputs
-        run: |
-          set -euo pipefail
-
-          trim_line() {
-            printf '%s' "$1" | tr -d '\r\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//'
-          }
-
-          clean_host="$(trim_line "$EC2_HOST" | tr -cd 'A-Za-z0-9.-')"
-          clean_user="$(trim_line "$EC2_USER" | tr -cd 'A-Za-z0-9._-')"
-          clean_path="$(printf '%s' "$DEPLOY_PATH" | tr -d '\r' | sed 's/[[:space:]]*$//')"
-          clean_port="$(printf '%s' "$EC2_PORT" | tr -cd '0-9')"
-
-          if [[ -z "$clean_path" ]]; then
-            clean_path="/srv/atlas/app"
-          fi
-          if [[ -z "$clean_port" ]]; then
-            clean_port="22"
-          fi
-
-          test -n "$clean_host" || { echo "AWS_EC2_HOST ausente nos secrets"; exit 1; }
-          test -n "$clean_user" || { echo "AWS_EC2_USER ausente nos secrets"; exit 1; }
-
-          {
-            echo "EC2_HOST=$clean_host"
-            echo "EC2_USER=$clean_user"
-            echo "EC2_PORT=$clean_port"
-            echo "DEPLOY_PATH=$clean_path"
-          } >> "$GITHUB_ENV"
-
       - name: Prepare SSH key
         run: |
           set -euo pipefail
-          test -n "$EC2_HOST" || { echo "AWS_EC2_HOST ausente nos secrets"; exit 1; }
-          test -n "$EC2_USER" || { echo "AWS_EC2_USER ausente nos secrets"; exit 1; }
           mkdir -p "$HOME/.ssh"
           cat > "$HOME/.ssh/atlas_ec2_key" <<'KEY'
           ${{ secrets.AWS_EC2_SSH_KEY }}
