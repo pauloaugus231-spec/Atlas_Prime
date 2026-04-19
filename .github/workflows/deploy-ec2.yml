@@ -36,8 +36,8 @@ jobs:
             printf '%s' "$1" | tr -d '\r\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//'
           }
 
-          clean_host="$(trim_line "$EC2_HOST")"
-          clean_user="$(trim_line "$EC2_USER")"
+          clean_host="$(trim_line "$EC2_HOST" | tr -cd 'A-Za-z0-9.-')"
+          clean_user="$(trim_line "$EC2_USER" | tr -cd 'A-Za-z0-9._-')"
           clean_path="$(printf '%s' "$DEPLOY_PATH" | tr -d '\r' | sed 's/[[:space:]]*$//')"
           clean_port="$(printf '%s' "$EC2_PORT" | tr -cd '0-9')"
 
