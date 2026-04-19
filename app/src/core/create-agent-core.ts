@@ -35,6 +35,7 @@ import { ApprovalEngine } from "./approval-engine.js";
 import { WorkflowExecutionRuntime } from "./execution-runtime.js";
 import { CapabilityRegistry } from "./capability-registry.js";
 import { createBuiltInCapabilities } from "./capabilities/index.js";
+import { createDeclaredCapabilityCatalog } from "./capabilities/catalog.js";
 import { MemoryEntityStore } from "./memory-entity-store.js";
 import { EntityLinker } from "./entity-linker.js";
 import { IntentRouter } from "./intent-router.js";
@@ -260,6 +261,7 @@ export async function createAgentCore() {
   const capabilityRegistry = new CapabilityRegistry(
     registry,
     createBuiltInCapabilities(),
+    createDeclaredCapabilityCatalog(),
     logger.child({ scope: "capability-registry" }),
   );
   const client: LlmClient = createConfiguredLlmClient(config, logger);
@@ -288,6 +290,7 @@ export async function createAgentCore() {
     logger.child({ scope: "agent-core" }),
     fileAccess,
     client,
+    capabilityRegistry,
     registry,
     memory,
     preferences,

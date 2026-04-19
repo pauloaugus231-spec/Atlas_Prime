@@ -119,6 +119,15 @@ function run(): void {
     detail: JSON.stringify(briefing, null, 2),
   });
 
+  const recentInfo = interpretConversationTurn({
+    text: "qual a cotação do dólar hoje?",
+  });
+  results.push({
+    name: "recent_external_info_routes_to_web_search_intent",
+    passed: recentInfo.intent === "web_search" && recentInfo.skill === "planning",
+    detail: JSON.stringify(recentInfo, null, 2),
+  });
+
   const taskRead = interpretConversationTurn({
     text: "me mostra minhas tarefas",
   });

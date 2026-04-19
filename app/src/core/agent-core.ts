@@ -117,8 +117,18 @@ import type {
 } from "../types/personal-operational-memory.js";
 import type { CreateLearnedPreferenceInput, LearnedPreference } from "../types/learned-preferences.js";
 import type { OperationalState } from "../types/operational-state.js";
+import type { ProductGapRecord } from "../types/product-gaps.js";
 import { resolveStructuredTaskOperationPayload } from "./task-operation-resolution.js";
 import { shouldAttemptExternalReasoning, type ExternalReasoningStage } from "./external-reasoning-policy.js";
+import { CapabilityRegistry } from "./capability-registry.js";
+import {
+  CapabilityPlanner,
+  looksLikeCapabilityAwareTravelPrompt,
+  looksLikeCapabilityAwareWebPrompt,
+  looksLikeCapabilityInspectionPrompt,
+  type CapabilityPlan,
+} from "./capability-planner.js";
+import type { CapabilityAvailabilityRecord } from "../types/capability.js";
 
 function stripCodeFences(value: string): string {
   const trimmed = value.trim();
@@ -1622,7 +1632,8 @@ function isDirectLocalContextCommandPrompt(prompt: string): boolean {
     isPersonalMemoryUpdatePrompt(prompt) ||
     isPersonalMemoryDeletePrompt(prompt) ||
     isUserPreferencesPrompt(prompt) ||
-    isAgentIdentityPrompt(prompt)
+    isAgentIdentityPrompt(prompt) ||
+    looksLikeCapabilityInspectionPrompt(prompt)
   );
 }
 
@@ -1630,7 +1641,12 @@ export function shouldBypassPreLocalExternalReasoningForPrompt(
   prompt: string,
   intent?: IntentResolution,
 ): boolean {
-  if (isDirectLocalContextCommandPrompt(prompt) || looksLikeLowFrictionReadPrompt(prompt, intent)) {
+  if (
+    isDirectLocalContextCommandPrompt(prompt)
+    || looksLikeLowFrictionReadPrompt(prompt, intent)
+    || looksLikeCapabilityAwareTravelPrompt(prompt)
+    || looksLikeCapabilityAwareWebPrompt(prompt)
+  ) {
     return true;
   }
 
@@ -5288,6 +5304,129 @@ function buildLearnedPreferenceDeactivatedReply(item: LearnedPreference): string
   ].join("\n");
 }
 
+function buildCapabilityGapSignature(plan: CapabilityPlan): string {
+  const missingCapabilities = [...new Set(plan.missingRequirements
+    .filter((item) => item.kind !== "user_data")
+    .map((item) => item.name))]
+    .sort();
+  const missingUserData = [...new Set(plan.missingUserData)].sort();
+
+  return [
+    plan.objective,
+    missingCapabilities.join("|") || "no_capability_gap",
+    missingUserData.join("|") || "no_user_data_gap",
+  ].join("::");
+}
+
+function formatCapabilityObjectiveLabel(objective: CapabilityPlan["objective"]): string {
+  switch (objective) {
+    case "travel_cost_estimate":
+      return "estimar o custo da viagem";
+    case "route_distance":
+      return "calcular a distância da rota";
+    case "route_tolls":
+      return "estimar pedágios da rota";
+    case "recent_information_lookup":
+      return "buscar informação recente na web";
+    case "web_comparison":
+      return "comparar isso com fontes na web";
+    case "source_validation":
+      return "validar isso em fontes externas";
+    default:
+      return objective.replace(/_/g, " ");
+  }
+}
+
+function buildCapabilityAvailabilityReply(items: CapabilityAvailabilityRecord[]): string {
+  const relevant = items
+    .filter((item) => item.availability !== "available")
+    .slice(0, 12);
+
+  if (relevant.length === 0) {
+    return "Hoje eu não tenho lacunas abertas de capability que valham destaque. O que já está ligado no Atlas está disponível.";
+  }
+
+  return [
+    "Hoje estas capabilities ainda estão faltando ou parciais no Atlas:",
+    ...relevant.map((item) =>
+      `- ${item.name} | ${item.availability} | ${item.reason}`,
+    ),
+  ].join("\n");
+}
+
+function buildProductGapsReply(items: ProductGapRecord[]): string {
+  if (items.length === 0) {
+    return "Não encontrei gaps de capability recentes registrados pelo uso.";
+  }
+
+  return [
+    `Gaps recentes identificados pelo uso: ${items.length}.`,
+    ...items.slice(0, 10).map((item) => {
+      const missing = item.missingCapabilities.length > 0
+        ? item.missingCapabilities.join(" | ")
+        : "sem capability nomeada";
+      return `- #${item.id} | ${item.inferredObjective} | faltou: ${missing} | recorrência ${item.recurrence} | status ${item.status}`;
+    }),
+  ].join("\n");
+}
+
+function buildCapabilityPlanUserDataReply(plan: CapabilityPlan): string {
+  return [
+    `Entendi que você quer ${formatCapabilityObjectiveLabel(plan.objective)}.`,
+    `Para eu seguir, só me passe: ${plan.missingUserData.join(" e ")}.`,
+  ].join(" ");
+}
+
+function buildCapabilityGapReply(plan: CapabilityPlan, gap?: ProductGapRecord): string {
+  const missingCapabilities = [...new Set(plan.missingRequirements
+    .filter((item) => item.kind !== "user_data")
+    .map((item) => item.label))];
+  const missingData = [...new Set(plan.missingUserData)];
+  const lines = [
+    `Entendi que você quer ${formatCapabilityObjectiveLabel(plan.objective)}.`,
+  ];
+
+  if (missingCapabilities.length > 0) {
+    lines.push(
+      `Hoje eu ainda não consigo fechar isso sozinho no Atlas porque me faltam ${missingCapabilities.join(", ")}.`,
+    );
+  }
+
+  if (missingData.length > 0) {
+    lines.push(
+      `Se você quiser seguir agora mesmo, me passe só: ${missingData.join(" e ")}.`,
+    );
+  } else {
+    lines.push("Se quiser, eu sigo com o melhor caminho alternativo com os dados que você tiver.");
+  }
+
+  if (gap) {
+    lines.push(`Deixei isso registrado como lacuna real do Atlas (#${gap.id}) para priorizar depois.`);
+  }
+
+  return lines.join(" ");
+}
+
+function buildProductGapDetailReply(item: ProductGapRecord): string {
+  const missing = item.missingCapabilities.length > 0
+    ? item.missingCapabilities.join(", ")
+    : "uma capability ainda não implementada";
+  const lines = [
+    `No caso mais recente, eu não consegui fechar isso sozinho porque me faltaram ${missing}.`,
+    `Objetivo que eu inferi: ${item.inferredObjective}.`,
+  ];
+
+  if (item.contextSummary) {
+    lines.push(item.contextSummary);
+  }
+
+  if (item.recurrence > 1) {
+    lines.push(`Isso já apareceu ${item.recurrence} vezes no uso real.`);
+  }
+
+  return lines.join(" ");
+}
+
 function formatPersonalMemoryKindLabel(kind: PersonalOperationalMemoryItemKind): string {
   switch (kind) {
     case "preference":
@@ -6345,28 +6484,26 @@ function buildWebResearchReply(input: {
     return `Não encontrei resultados web úteis para: ${input.query}.`;
   }
 
-  const lines = [`Pesquisa para: ${input.query}`];
+  const lines = [`Encontrei ${input.results.length} fonte${input.results.length > 1 ? "s" : ""} útil${input.results.length > 1 ? "eis" : ""} sobre ${input.query}.`];
   if (input.aliasLabel) {
-    lines.push(`Entidade reconhecida: ${input.aliasLabel}`);
+    lines.push(`Contexto reconhecido: ${input.aliasLabel}.`);
   }
 
-  if (input.results.length > 0) {
-    lines.push("", "Fontes priorizadas:");
-  }
+  lines.push("", "Fontes:");
   for (const [index, item] of input.results.entries()) {
-    lines.push(`${index + 1}. ${item.title}`);
-    lines.push(`   Fonte: ${item.sourceHost || item.url}`);
-    lines.push(`   URL: ${item.url}`);
+    const summary = item.snippet || item.excerpt?.slice(0, 180) || "";
+    const published = item.publishedAt ? ` | ${item.publishedAt}` : "";
+    lines.push(`${index + 1}. ${item.title} — ${item.sourceHost || item.url}${published}`);
+    lines.push(`   ${item.url}`);
     if (item.publishedAt) {
-      lines.push(`   Publicado: ${item.publishedAt}`);
+      // already included inline for a tighter reply
     }
-    if (item.snippet) {
-      lines.push(`   Resumo: ${item.snippet}`);
-    } else if (item.excerpt) {
-      lines.push(`   Trecho: ${item.excerpt.slice(0, 240)}`);
+    if (summary) {
+      lines.push(`   ${summary}`);
     }
   }
 
+  lines.push("", "Se quiser, eu aprofundo isso ou filtro só por fontes oficiais.");
   return lines.join("\n");
 }
 
@@ -9540,11 +9677,14 @@ export interface AgentRunOptions {
 }
 
 export class AgentCore {
+  private readonly capabilityPlanner: CapabilityPlanner;
+
   constructor(
     private readonly config: AppConfig,
     private readonly logger: Logger,
     private readonly fileAccess: FileAccessPolicy,
     private readonly client: LlmClient,
+    private readonly capabilityRegistry: CapabilityRegistry,
     private readonly pluginRegistry: ToolPluginRegistry,
     private readonly memory: OperationalMemoryStore,
     private readonly preferences: UserPreferencesStore,
@@ -9576,7 +9716,16 @@ export class AgentCore {
     private readonly pexelsMedia: PexelsMediaService,
     private readonly projectOps: ProjectOpsService,
     private readonly safeExec: SafeExecService,
-  ) {}
+  ) {
+    this.capabilityPlanner = new CapabilityPlanner(
+      this.config,
+      this.capabilityRegistry,
+      this.googleWorkspaces,
+      this.googleMaps,
+      this.externalReasoning,
+      this.logger.child({ scope: "capability-planner" }),
+    );
+  }
 
   resolveIntent(userPrompt: string): IntentResolution {
     return this.intentRouter.resolve(userPrompt);
@@ -10078,6 +10227,25 @@ export class AgentCore {
     );
     if (directLearnedPreferencesDeleteResult) {
       return directLearnedPreferencesDeleteResult;
+    }
+    const directCapabilityInspectionResult = await this.tryRunDirectCapabilityInspection(
+      activeUserPrompt,
+      requestId,
+      orchestration,
+      preferences,
+    );
+    if (directCapabilityInspectionResult) {
+      return directCapabilityInspectionResult;
+    }
+    const directCapabilityPlanningResult = await this.tryRunDirectCapabilityAwarePlanning(
+      activeUserPrompt,
+      requestId,
+      requestLogger,
+      orchestration,
+      preferences,
+    );
+    if (directCapabilityPlanningResult) {
+      return directCapabilityPlanningResult;
     }
     const directPersonalProfileUpdateResult = await this.tryRunDirectPersonalOperationalProfileUpdate(
       activeUserPrompt,
@@ -13268,22 +13436,24 @@ export class AgentCore {
     };
   }
 
-  private async tryRunDirectWebResearch(
-    userPrompt: string,
-    requestId: string,
-    requestLogger: Logger,
-    orchestration: OrchestrationContext,
-  ): Promise<AgentRunResult | null> {
-    if (!isWebResearchPrompt(userPrompt) && !isImplicitResearchPrompt(userPrompt)) {
-      return null;
-    }
-
-    const query = extractWebResearchQuery(userPrompt);
-    if (!query) {
-      return null;
-    }
-
-    const researchMode = extractWebResearchMode(userPrompt);
+  private async executeDirectWebResearch(
+    input: {
+      userPrompt: string;
+      query: string;
+      requestId: string;
+      requestLogger: Logger;
+      orchestration: OrchestrationContext;
+      researchMode: WebResearchMode;
+    },
+  ): Promise<AgentRunResult> {
+    const {
+      userPrompt,
+      query,
+      requestId,
+      requestLogger,
+      orchestration,
+      researchMode,
+    } = input;
     const alias = resolveKnowledgeAlias(query);
     const preferredDomains = inferPreferredDomains(query, alias);
 
@@ -13485,6 +13655,31 @@ export class AgentCore {
         },
       ],
     };
+  }
+
+  private async tryRunDirectWebResearch(
+    userPrompt: string,
+    requestId: string,
+    requestLogger: Logger,
+    orchestration: OrchestrationContext,
+  ): Promise<AgentRunResult | null> {
+    if (!isWebResearchPrompt(userPrompt) && !isImplicitResearchPrompt(userPrompt)) {
+      return null;
+    }
+
+    const query = extractWebResearchQuery(userPrompt);
+    if (!query) {
+      return null;
+    }
+
+    return this.executeDirectWebResearch({
+      userPrompt,
+      query,
+      requestId,
+      requestLogger,
+      orchestration,
+      researchMode: extractWebResearchMode(userPrompt),
+    });
   }
 
   private async synthesizeWebResearchReply(input: {
@@ -15538,6 +15733,208 @@ export class AgentCore {
             },
           ]
         : [],
+    };
+  }
+
+  private async tryRunDirectCapabilityInspection(
+    userPrompt: string,
+    requestId: string,
+    orchestration: OrchestrationContext,
+    preferences: UserPreferences,
+  ): Promise<AgentRunResult | null> {
+    if (!this.capabilityPlanner.isCapabilityInspectionPrompt(userPrompt)) {
+      return null;
+    }
+
+    const normalized = normalizeEmailAnalysisText(userPrompt);
+    const wantsWhy = includesAny(normalized, [
+      "por que voce nao conseguiu resolver isso",
+      "por que você não conseguiu resolver isso",
+    ]);
+    const wantsGaps = includesAny(normalized, [
+      "lacunas",
+      "gaps",
+      "melhorias sugeridas pelo uso",
+    ]);
+
+    if (wantsWhy) {
+      const latestGap = this.personalMemory.listProductGaps({ limit: 1 })[0];
+      return {
+        requestId,
+        reply: latestGap
+          ? buildProductGapDetailReply(latestGap)
+          : "Ainda não tenho um gap recente registrado para te explicar.",
+        messages: buildBaseMessages(userPrompt, orchestration, preferences),
+        toolExecutions: latestGap
+          ? [
+              {
+                toolName: "product_gap.inspect",
+                resultPreview: JSON.stringify({
+                  id: latestGap.id,
+                  objective: latestGap.inferredObjective,
+                  missingCapabilities: latestGap.missingCapabilities,
+                }),
+              },
+            ]
+          : [],
+      };
+    }
+
+    if (wantsGaps) {
+      const gaps = this.personalMemory.listProductGaps({ status: "open", limit: 12 });
+      return {
+        requestId,
+        reply: buildProductGapsReply(gaps),
+        messages: buildBaseMessages(userPrompt, orchestration, preferences),
+        toolExecutions: [
+          {
+            toolName: "product_gap.list",
+            resultPreview: JSON.stringify({
+              total: gaps.length,
+              ids: gaps.slice(0, 10).map((item) => item.id),
+            }),
+          },
+        ],
+      };
+    }
+
+    const availability = this.capabilityPlanner.listCapabilityAvailability();
+    const constrained = availability.filter((item) => item.availability !== "available");
+    return {
+      requestId,
+      reply: buildCapabilityAvailabilityReply(availability),
+      messages: buildBaseMessages(userPrompt, orchestration, preferences),
+      toolExecutions: [
+        {
+          toolName: "capability_registry.inspect",
+          resultPreview: JSON.stringify({
+            total: availability.length,
+            constrained: constrained.slice(0, 10).map((item) => ({
+              name: item.name,
+              availability: item.availability,
+            })),
+          }),
+        },
+      ],
+    };
+  }
+
+  private async tryRunDirectCapabilityAwarePlanning(
+    userPrompt: string,
+    requestId: string,
+    requestLogger: Logger,
+    orchestration: OrchestrationContext,
+    preferences: UserPreferences,
+  ): Promise<AgentRunResult | null> {
+    if (!this.capabilityPlanner.isPlanningCandidate(userPrompt)) {
+      return null;
+    }
+
+    const interpreted = interpretConversationTurn({
+      text: userPrompt,
+      operationalMode: this.personalMemory.getOperationalState().mode,
+    });
+    const plan = this.capabilityPlanner.plan(userPrompt, interpreted);
+    if (!plan) {
+      return null;
+    }
+
+    requestLogger.info("Using direct capability planning route", {
+      objective: plan.objective,
+      suggestedAction: plan.suggestedAction,
+      missingRequirements: plan.missingRequirements.map((item) => ({
+        name: item.name,
+        kind: item.kind,
+      })),
+      missingUserData: plan.missingUserData,
+    });
+
+    if (plan.suggestedAction === "respond_direct") {
+      return {
+        requestId,
+        reply: plan.directReply ?? plan.summary,
+        messages: buildBaseMessages(userPrompt, orchestration, preferences),
+        toolExecutions: [
+          {
+            toolName: "capability_planner",
+            resultPreview: JSON.stringify({
+              objective: plan.objective,
+              suggestedAction: plan.suggestedAction,
+            }),
+          },
+        ],
+      };
+    }
+
+    if (plan.suggestedAction === "run_web_search") {
+      return this.executeDirectWebResearch({
+        userPrompt,
+        query: plan.webQuery ?? userPrompt,
+        requestId,
+        requestLogger,
+        orchestration,
+        researchMode: plan.researchMode ?? "executive",
+      });
+    }
+
+    if (plan.suggestedAction === "ask_user_data") {
+      return {
+        requestId,
+        reply: buildCapabilityPlanUserDataReply(plan),
+        messages: buildBaseMessages(userPrompt, orchestration, preferences),
+        toolExecutions: [
+          {
+            toolName: "capability_planner",
+            resultPreview: JSON.stringify({
+              objective: plan.objective,
+              suggestedAction: plan.suggestedAction,
+              missingUserData: plan.missingUserData,
+            }),
+          },
+        ],
+      };
+    }
+
+    if (plan.suggestedAction !== "handle_gap") {
+      return null;
+    }
+
+    const missingCapabilities = [...new Set(plan.missingRequirements
+      .filter((item) => item.kind !== "user_data")
+      .map((item) => item.name))];
+    const missingRequirementKinds = [...new Set(plan.missingRequirements
+      .filter((item) => item.kind !== "user_data")
+      .map((item) => item.kind))];
+    const gap = plan.shouldLogGap
+      ? this.personalMemory.recordProductGapObservation({
+          signature: buildCapabilityGapSignature(plan),
+          type: plan.gapType ?? "capability_gap",
+          description: userPrompt,
+          inferredObjective: plan.objective,
+          missingCapabilities,
+          missingRequirementKinds,
+          contextSummary: plan.summary,
+          relatedSkill: interpreted.skill,
+          impact: plan.objective === "travel_cost_estimate" ? "high" : "medium",
+        })
+      : undefined;
+
+    return {
+      requestId,
+      reply: buildCapabilityGapReply(plan, gap),
+      messages: buildBaseMessages(userPrompt, orchestration, preferences),
+      toolExecutions: [
+        {
+          toolName: "capability_planner",
+          resultPreview: JSON.stringify({
+            objective: plan.objective,
+            suggestedAction: plan.suggestedAction,
+            gapId: gap?.id ?? null,
+            missingCapabilities,
+            missingUserData: plan.missingUserData,
+          }),
+        },
+      ],
     };
   }
 

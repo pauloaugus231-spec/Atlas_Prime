@@ -1,6 +1,11 @@
 import { Ajv, type ErrorObject, type ValidateFunction } from "ajv";
 import type { Logger } from "../types/logger.js";
-import type { CapabilityDefinition, RiskLevel, SideEffect } from "../types/capability.js";
+import type {
+  CapabilityAvailabilityRecord,
+  CapabilityDefinition,
+  RiskLevel,
+  SideEffect,
+} from "../types/capability.js";
 import type { ToolExecutionContext, ToolPluginResult } from "../types/plugin.js";
 import { ToolPluginRegistry } from "./plugin-registry.js";
 import type { ApprovalEngine } from "./approval-engine.js";
@@ -97,15 +102,22 @@ function inferPluginRequiresApproval(toolName: string): boolean {
 export class CapabilityRegistry {
   private readonly validators = new Map<string, ValidateFunction<Record<string, unknown>>>();
   private readonly handlers = new Map<string, CapabilityHandler>();
+  private readonly catalog = new Map<string, CapabilityDefinition>();
 
   constructor(
     private readonly toolRegistry: ToolPluginRegistry,
     builtIns: BuiltInCapabilityDefinition[],
+    declaredCapabilities: CapabilityDefinition[],
     private readonly logger: Logger,
   ) {
     const ajv = new Ajv({ allErrors: true, strict: false });
 
+    for (const capability of declaredCapabilities) {
+      this.catalog.set(capability.name, capability);
+    }
+
     for (const capability of builtIns) {
+      this.catalog.set(capability.name, capability);
       this.handlers.set(capability.name, {
         definition: capability,
         source: "builtin",
@@ -118,6 +130,7 @@ export class CapabilityRegistry {
       const definition: CapabilityDefinition = {
         name: loaded.plugin.name,
         domain: "orchestrator",
+        category: "plugin",
         description: loaded.plugin.description,
         inputSchema: loaded.plugin.parameters,
         risk: inferPluginRisk(loaded.plugin.name),
@@ -125,6 +138,7 @@ export class CapabilityRegistry {
         requiresApproval: inferPluginRequiresApproval(loaded.plugin.name),
         exposeToModel: loaded.plugin.exposeToModel,
       };
+      this.catalog.set(definition.name, definition);
       this.handlers.set(definition.name, {
         definition,
         source: "plugin",
@@ -144,6 +158,30 @@ export class CapabilityRegistry {
     return [...this.handlers.values()].map((entry) => entry.definition);
   }
 
+  listCatalogCapabilities(): CapabilityDefinition[] {
+    return [...this.catalog.values()].sort((left, right) => left.name.localeCompare(right.name));
+  }
+
+  listCatalogAvailability(
+    resolveAvailability?: (capability: CapabilityDefinition) => Omit<CapabilityAvailabilityRecord, "name" | "description" | "domain" | "requiresApproval" | "experimental" | "integrationKey" | "declaredOnly" | "category">,
+  ): CapabilityAvailabilityRecord[] {
+    return this.listCatalogCapabilities().map((capability) => {
+      const availability = resolveAvailability?.(capability);
+      return {
+        name: capability.name,
+        description: capability.description,
+        domain: capability.domain,
+        category: capability.category ?? capability.domain,
+        availability: availability?.availability ?? (this.handlers.has(capability.name) ? "available" : "unavailable"),
+        reason: availability?.reason ?? (this.handlers.has(capability.name) ? "Capability executável registrada." : "Capability declarada, sem implementação executável."),
+        requiresApproval: capability.requiresApproval,
+        experimental: capability.experimental === true,
+        integrationKey: capability.integrationKey,
+        declaredOnly: capability.declaredOnly === true,
+      };
+    });
+  }
+
   listByDomain(domain: CapabilityDefinition["domain"]): CapabilityDefinition[] {
     return this.listCapabilities().filter((capability) => capability.domain === domain);
   }
@@ -153,7 +191,7 @@ export class CapabilityRegistry {
   }
 
   getCapability(name: string): CapabilityDefinition | null {
-    return this.handlers.get(name)?.definition ?? null;
+    return this.catalog.get(name) ?? this.handlers.get(name)?.definition ?? null;
   }
 
   async execute(

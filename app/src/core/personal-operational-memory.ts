@@ -17,6 +17,11 @@ import type {
   UpdateLearnedPreferenceInput,
 } from "../types/learned-preferences.js";
 import type {
+  CreateProductGapObservationInput,
+  ProductGapRecord,
+  ProductGapStatus,
+} from "../types/product-gaps.js";
+import type {
   OperationalState,
   OperationalStateSignal,
   UpdateOperationalStateInput,
@@ -248,6 +253,22 @@ function mapItemRow(row: {
   };
 }
 
+function parseJsonStringArray(raw: string | null): string[] {
+  if (!raw) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    return [...new Set(parsed.map((item) => String(item).trim()).filter(Boolean))];
+  } catch {
+    return [];
+  }
+}
+
 function mapLearnedPreferenceRow(row: {
   id: number;
   type: string;
@@ -272,6 +293,44 @@ function mapLearnedPreferenceRow(row: {
     confidence: normalizeConfidence(row.confidence, 0.6),
     confirmations: normalizePositiveInteger(row.confirmations, 1),
     active: row.active === 1,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    lastObservedAt: row.last_observed_at,
+  };
+}
+
+function mapProductGapRow(row: {
+  id: number;
+  signature: string;
+  type: string;
+  description: string;
+  inferred_objective: string;
+  missing_capabilities_json: string;
+  missing_requirement_kinds_json: string;
+  context_summary: string | null;
+  related_skill: string | null;
+  channel: string | null;
+  impact: string;
+  recurrence: number;
+  status: string;
+  created_at: string;
+  updated_at: string;
+  last_observed_at: string;
+}): ProductGapRecord {
+  return {
+    id: row.id,
+    signature: row.signature,
+    type: row.type as CreateProductGapObservationInput["type"],
+    description: row.description,
+    inferredObjective: row.inferred_objective,
+    missingCapabilities: parseJsonStringArray(row.missing_capabilities_json),
+    missingRequirementKinds: parseJsonStringArray(row.missing_requirement_kinds_json) as CreateProductGapObservationInput["missingRequirementKinds"],
+    ...(normalizeOptionalString(row.context_summary ?? undefined) ? { contextSummary: normalizeOptionalString(row.context_summary ?? undefined) } : {}),
+    ...(normalizeOptionalString(row.related_skill ?? undefined) ? { relatedSkill: normalizeOptionalString(row.related_skill ?? undefined) } : {}),
+    ...(normalizeOptionalString(row.channel ?? undefined) ? { channel: normalizeOptionalString(row.channel ?? undefined) } : {}),
+    impact: row.impact === "high" || row.impact === "medium" ? row.impact : "low",
+    recurrence: normalizePositiveInteger(row.recurrence, 1),
+    status: (row.status === "reviewed" || row.status === "implemented" || row.status === "dismissed" ? row.status : "open") as ProductGapStatus,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     lastObservedAt: row.last_observed_at,
@@ -438,6 +497,30 @@ export class PersonalOperationalMemoryStore {
     this.db.exec(`
       CREATE INDEX IF NOT EXISTS idx_personal_learned_preferences_lookup
       ON personal_learned_preferences (type, key_name, active, confirmations DESC, updated_at DESC);
+    `);
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS personal_product_gaps (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        signature TEXT NOT NULL,
+        type TEXT NOT NULL,
+        description TEXT NOT NULL,
+        inferred_objective TEXT NOT NULL,
+        missing_capabilities_json TEXT NOT NULL,
+        missing_requirement_kinds_json TEXT NOT NULL,
+        context_summary TEXT,
+        related_skill TEXT,
+        channel TEXT,
+        impact TEXT NOT NULL DEFAULT 'medium',
+        recurrence INTEGER NOT NULL DEFAULT 1,
+        status TEXT NOT NULL DEFAULT 'open',
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        last_observed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_personal_product_gaps_lookup
+      ON personal_product_gaps (signature, status, recurrence DESC, updated_at DESC);
     `);
     this.ensureDefaultProfile();
     this.logger.info("Personal operational memory ready", {
@@ -889,6 +972,178 @@ export class PersonalOperationalMemoryStore {
     return learned.value;
   }
 
+  listProductGaps(input?: {
+    status?: ProductGapStatus;
+    search?: string;
+    limit?: number;
+  }): ProductGapRecord[] {
+    const filters: string[] = [];
+    const args: Array<string | number> = [];
+
+    if (input?.status) {
+      filters.push("status = ?");
+      args.push(input.status);
+    }
+
+    const search = normalizeOptionalString(input?.search);
+    if (search) {
+      filters.push(
+        "(LOWER(description) LIKE ? OR LOWER(inferred_objective) LIKE ? OR LOWER(context_summary) LIKE ? OR LOWER(missing_capabilities_json) LIKE ?)",
+      );
+      const pattern = `%${search.toLowerCase()}%`;
+      args.push(pattern, pattern, pattern, pattern);
+    }
+
+    const limit = Math.max(1, Math.min(50, Math.floor(input?.limit ?? 20)));
+    args.push(limit);
+
+    const rows = this.db
+      .prepare(`
+        SELECT id, signature, type, description, inferred_objective, missing_capabilities_json, missing_requirement_kinds_json, context_summary, related_skill, channel, impact, recurrence, status, created_at, updated_at, last_observed_at
+        FROM personal_product_gaps
+        ${filters.length > 0 ? `WHERE ${filters.join(" AND ")}` : ""}
+        ORDER BY recurrence DESC, updated_at DESC, id DESC
+        LIMIT ?
+      `)
+      .all(...args) as Array<{
+        id: number;
+        signature: string;
+        type: string;
+        description: string;
+        inferred_objective: string;
+        missing_capabilities_json: string;
+        missing_requirement_kinds_json: string;
+        context_summary: string | null;
+        related_skill: string | null;
+        channel: string | null;
+        impact: string;
+        recurrence: number;
+        status: string;
+        created_at: string;
+        updated_at: string;
+        last_observed_at: string;
+      }>;
+
+    return rows.map(mapProductGapRow);
+  }
+
+  recordProductGapObservation(input: CreateProductGapObservationInput): ProductGapRecord {
+    const signature = normalizeOptionalString(input.signature);
+    const description = normalizeOptionalString(input.description);
+    const inferredObjective = normalizeOptionalString(input.inferredObjective);
+    if (!signature || !description || !inferredObjective) {
+      throw new Error("Product gap observation requires signature, description and inferredObjective.");
+    }
+
+    const missingCapabilities = [...new Set(input.missingCapabilities.map((item) => item.trim()).filter(Boolean))];
+    const missingRequirementKinds = [...new Set(input.missingRequirementKinds.map((item) => item.trim()).filter(Boolean))];
+
+    const existing = this.db
+      .prepare(`
+        SELECT id, signature, type, description, inferred_objective, missing_capabilities_json, missing_requirement_kinds_json, context_summary, related_skill, channel, impact, recurrence, status, created_at, updated_at, last_observed_at
+        FROM personal_product_gaps
+        WHERE signature = ? AND status != 'implemented'
+        ORDER BY recurrence DESC, updated_at DESC, id DESC
+        LIMIT 1
+      `)
+      .get(signature) as {
+        id: number;
+        signature: string;
+        type: string;
+        description: string;
+        inferred_objective: string;
+        missing_capabilities_json: string;
+        missing_requirement_kinds_json: string;
+        context_summary: string | null;
+        related_skill: string | null;
+        channel: string | null;
+        impact: string;
+        recurrence: number;
+        status: string;
+        created_at: string;
+        updated_at: string;
+        last_observed_at: string;
+      } | undefined;
+
+    if (!existing) {
+      const result = this.db
+        .prepare(`
+          INSERT INTO personal_product_gaps (
+            signature, type, description, inferred_objective, missing_capabilities_json, missing_requirement_kinds_json, context_summary, related_skill, channel, impact, recurrence, status, created_at, updated_at, last_observed_at
+          )
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'open', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        `)
+        .run(
+          signature,
+          input.type,
+          description,
+          inferredObjective,
+          JSON.stringify(missingCapabilities),
+          JSON.stringify(missingRequirementKinds),
+          normalizeOptionalString(input.contextSummary) ?? null,
+          normalizeOptionalString(input.relatedSkill) ?? null,
+          normalizeOptionalString(input.channel) ?? null,
+          input.impact === "high" || input.impact === "low" ? input.impact : "medium",
+        );
+
+      const created = this.getProductGap(Number(result.lastInsertRowid)) as ProductGapRecord;
+      this.logger.info("Recorded new product gap observation", {
+        id: created.id,
+        signature: created.signature,
+        type: created.type,
+        recurrence: created.recurrence,
+        missingCapabilities: created.missingCapabilities,
+      });
+      return created;
+    }
+
+    const nextRecurrence = normalizePositiveInteger(existing.recurrence + 1, 1);
+    this.db
+      .prepare(`
+        UPDATE personal_product_gaps
+        SET description = ?, type = ?, inferred_objective = ?, missing_capabilities_json = ?, missing_requirement_kinds_json = ?, context_summary = COALESCE(?, context_summary), related_skill = COALESCE(?, related_skill), channel = COALESCE(?, channel), impact = ?, recurrence = ?, updated_at = CURRENT_TIMESTAMP, last_observed_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `)
+      .run(
+        description,
+        input.type,
+        inferredObjective,
+        JSON.stringify(missingCapabilities),
+        JSON.stringify(missingRequirementKinds),
+        normalizeOptionalString(input.contextSummary) ?? null,
+        normalizeOptionalString(input.relatedSkill) ?? null,
+        normalizeOptionalString(input.channel) ?? null,
+        input.impact === "high" || input.impact === "low" ? input.impact : existing.impact,
+        nextRecurrence,
+        existing.id,
+      );
+
+    const updated = this.getProductGap(existing.id) ?? mapProductGapRow(existing);
+    this.logger.info("Reinforced existing product gap observation", {
+      id: updated.id,
+      signature: updated.signature,
+      recurrence: updated.recurrence,
+      status: updated.status,
+    });
+    return updated;
+  }
+
+  updateProductGapStatus(id: number, status: ProductGapStatus): ProductGapRecord {
+    this.db
+      .prepare(`
+        UPDATE personal_product_gaps
+        SET status = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `)
+      .run(status, id);
+
+    const updated = this.getProductGap(id);
+    if (!updated) {
+      throw new Error(`Product gap ${id} was not found.`);
+    }
+    return updated;
+  }
+
   private readStoredProfile(): PersonalOperationalProfile {
     const row = this.db
       .prepare("SELECT value_json FROM personal_operational_memory WHERE key = 'profile'")
@@ -991,6 +1246,35 @@ export class PersonalOperationalMemoryStore {
       } | undefined;
 
     return row ? mapItemRow(row) : undefined;
+  }
+
+  private getProductGap(id: number): ProductGapRecord | undefined {
+    const row = this.db
+      .prepare(`
+        SELECT id, signature, type, description, inferred_objective, missing_capabilities_json, missing_requirement_kinds_json, context_summary, related_skill, channel, impact, recurrence, status, created_at, updated_at, last_observed_at
+        FROM personal_product_gaps
+        WHERE id = ?
+      `)
+      .get(id) as {
+        id: number;
+        signature: string;
+        type: string;
+        description: string;
+        inferred_objective: string;
+        missing_capabilities_json: string;
+        missing_requirement_kinds_json: string;
+        context_summary: string | null;
+        related_skill: string | null;
+        channel: string | null;
+        impact: string;
+        recurrence: number;
+        status: string;
+        created_at: string;
+        updated_at: string;
+        last_observed_at: string;
+      } | undefined;
+
+    return row ? mapProductGapRow(row) : undefined;
   }
 
   private ensureDefaultProfile(): void {

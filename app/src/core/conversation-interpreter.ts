@@ -262,6 +262,31 @@ const CALENDAR_WRITE_HINTS = [
   "vira evento",
 ];
 
+const WEB_RESEARCH_HINTS = [
+  "na internet",
+  "com fontes",
+  "fonte oficial",
+  "fontes oficiais",
+  "pesquise",
+  "procure",
+  "busque",
+  "buscar",
+  "compare",
+  "comparar",
+  "valide",
+  "confirme",
+  "verifique",
+  "mais recente",
+  "ultimas noticias",
+  "últimas notícias",
+  "cotacao",
+  "cotação",
+  "noticia",
+  "notícia",
+  "noticias",
+  "notícias",
+];
+
 function looksLikeShortConfirmation(normalized: string): boolean {
   if (!normalized) {
     return false;
@@ -494,6 +519,19 @@ function detectTopLevelSkill(normalized: string, attachments: ConversationAttach
       needsConfirmation: false,
       needsClarification: false,
       summaryOfUnderstanding: "Pedido de leitura rápida do dia atual.",
+    };
+  }
+
+  if (hasAny(normalized, WEB_RESEARCH_HINTS)) {
+    return {
+      intent: "web_search",
+      skill: "planning",
+      confidence: 0.84,
+      entities,
+      suggestedAction: "respond_direct",
+      needsConfirmation: false,
+      needsClarification: false,
+      summaryOfUnderstanding: "Pedido de informação recente ou externa que deve passar por busca web com fontes.",
     };
   }
 

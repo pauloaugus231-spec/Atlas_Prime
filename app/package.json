@@ -36,6 +36,7 @@
     "eval:personal-context": "tsx scripts/eval-personal-context-layers.ts",
     "eval:conversational": "tsx scripts/eval-conversational-low-friction.ts",
     "eval:conversation-interpreter": "tsx scripts/eval-conversation-interpreter.ts",
+    "eval:capabilities": "tsx scripts/eval-capability-planner.ts",
     "dev": "tsx src/index.ts",
     "core:doctor": "tsx src/index.ts doctor",
     "core:plugins": "tsx src/index.ts plugins:list",
