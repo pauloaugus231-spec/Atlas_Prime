@@ -52,6 +52,15 @@ export interface TelegramConfig {
   morningBriefEnabled: boolean;
   dailyEditorialAutomationEnabled: boolean;
   operationalModeHours: number;
+  typingEnabled: boolean;
+}
+
+export interface PresenceConfig {
+  enabled: boolean;
+  startDelayMs: number;
+  refreshIntervalMs: number;
+  progressDelayMs: number;
+  maxDurationMs: number;
 }
 
 export type VoiceSttProvider = "openai" | "command";
@@ -238,6 +247,7 @@ export interface AppConfig {
   paths: AppPathsConfig;
   llm: LlmConfig;
   telegram: TelegramConfig;
+  presence: PresenceConfig;
   voice: VoiceConfig;
   briefing: BriefingConfig;
   externalReasoning: ExternalReasoningConfig;

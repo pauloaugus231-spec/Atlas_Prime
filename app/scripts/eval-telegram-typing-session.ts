@@ -1,5 +1,5 @@
 import { setTimeout as delay } from "node:timers/promises";
-import { TelegramTypingSession } from "../src/integrations/telegram/typing-session.js";
+import { ChatPresenceSession } from "../src/integrations/presence/chat-presence.js";
 
 interface EvalResult {
   name: string;
@@ -7,16 +7,21 @@ interface EvalResult {
   detail?: string;
 }
 
-async function run(): Promise<void> {
+async function runFastRequestNoPresenceEval(): Promise<EvalResult> {
   const events: string[] = [];
-  const session = new TelegramTypingSession({
-    startDelayMs: 30,
-    heartbeatMs: 40,
-    progressDelayMs: 80,
-    fallbackDelayMs: 150,
+  const session = new ChatPresenceSession({
+    channel: "telegram",
+    flow: "fast_request",
+    config: {
+      enabled: true,
+      startDelayMs: 80,
+      refreshIntervalMs: 40,
+      progressDelayMs: 150,
+      maxDurationMs: 220,
+    },
     progressText: "Estou vendo isso agora.",
-    fallbackText: "Isso está demorando mais do que deveria.",
-    sendTyping: async () => {
+    timeoutText: "Isso está demorando mais do que deveria.",
+    sendPresence: async () => {
       events.push("typing");
     },
     sendProgress: async (text) => {
@@ -25,25 +30,116 @@ async function run(): Promise<void> {
   });
 
   session.start();
-  await delay(190);
-  await session.stop();
+  await delay(30);
+  await session.stop("completed");
+  await delay(120);
 
+  return {
+    name: "fast_request_does_not_start_presence",
+    passed: events.length === 0,
+    detail: JSON.stringify(events),
+  };
+}
+
+async function runSlowRequestPresenceEval(): Promise<EvalResult[]> {
+  const events: Array<{ kind: string; at: number }> = [];
+  const startedAt = Date.now();
+  const session = new ChatPresenceSession({
+    channel: "telegram",
+    flow: "slow_request",
+    config: {
+      enabled: true,
+      startDelayMs: 20,
+      refreshIntervalMs: 35,
+      progressDelayMs: 120,
+      maxDurationMs: 260,
+    },
+    progressText: "Estou vendo isso agora.",
+    timeoutText: "Isso está demorando mais do que deveria.",
+    sendPresence: async () => {
+      events.push({ kind: "typing", at: Date.now() - startedAt });
+    },
+    sendProgress: async (text) => {
+      events.push({ kind: text, at: Date.now() - startedAt });
+    },
+  });
+
+  session.start();
+  await delay(90);
+  await session.stop("completed");
+  const countBeforeWait = events.length;
+  await delay(120);
+  const typingCount = events.filter((item) => item.kind === "typing").length;
+
+  return [
+    {
+      name: "slow_request_starts_presence",
+      passed: typingCount >= 1,
+      detail: JSON.stringify(events),
+    },
+    {
+      name: "presence_stops_after_response",
+      passed: events.length === countBeforeWait,
+      detail: JSON.stringify(events),
+    },
+  ];
+}
+
+async function runTimeoutEval(): Promise<EvalResult[]> {
+  const events: Array<{ kind: string; at: number }> = [];
+  const startedAt = Date.now();
+  const session = new ChatPresenceSession({
+    channel: "telegram",
+    flow: "timeout_request",
+    config: {
+      enabled: true,
+      startDelayMs: 15,
+      refreshIntervalMs: 30,
+      progressDelayMs: 60,
+      maxDurationMs: 110,
+    },
+    progressText: "Estou vendo isso agora.",
+    timeoutText: "Isso está demorando mais do que deveria.",
+    sendPresence: async () => {
+      events.push({ kind: "typing", at: Date.now() - startedAt });
+    },
+    sendProgress: async (text) => {
+      events.push({ kind: text, at: Date.now() - startedAt });
+    },
+  });
+
+  session.start();
+  await delay(170);
+  const countAtTimeout = events.length;
+  await delay(90);
+  const typingAfterTimeout = events
+    .slice(countAtTimeout)
+    .filter((item) => item.kind === "typing").length;
+
+  return [
+    {
+      name: "timeout_sends_progress_message",
+      passed: events.filter((item) => item.kind === "Estou vendo isso agora.").length === 1,
+      detail: JSON.stringify(events),
+    },
+    {
+      name: "timeout_sends_fallback_message_once",
+      passed: events.filter((item) => item.kind === "Isso está demorando mais do que deveria.").length === 1,
+      detail: JSON.stringify(events),
+    },
+    {
+      name: "timeout_stops_presence_loop",
+      passed: typingAfterTimeout === 0,
+      detail: JSON.stringify(events),
+    },
+  ];
+}
+
+async function run(): Promise<void> {
   const results: EvalResult[] = [
-    {
-      name: "typing_starts_after_delay",
-      passed: events.includes("typing"),
-      detail: JSON.stringify(events),
-    },
-    {
-      name: "progress_message_is_sent_once",
-      passed: events.filter((item) => item === "Estou vendo isso agora.").length === 1,
-      detail: JSON.stringify(events),
-    },
-    {
-      name: "fallback_message_is_sent_once",
-      passed: events.filter((item) => item === "Isso está demorando mais do que deveria.").length === 1,
-      detail: JSON.stringify(events),
-    },
+    await runFastRequestNoPresenceEval(),
+    ...(await runSlowRequestPresenceEval()),
+    ...(await runTimeoutEval()),
   ];
 
   const failure = results.find((item) => !item.passed);
@@ -56,7 +152,7 @@ async function run(): Promise<void> {
     return;
   }
 
-  console.log(`\nTelegram typing session evals ok: ${results.length}/${results.length}`);
+  console.log(`\nTelegram presence evals ok: ${results.length}/${results.length}`);
 }
 
 run().catch((error) => {

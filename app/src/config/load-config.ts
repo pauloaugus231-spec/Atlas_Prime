@@ -15,6 +15,7 @@ import type {
   MediaConfig,
   OperatorChannelBinding,
   OperatorChannelMode,
+  PresenceConfig,
   WhatsAppUnauthorizedMode,
   VoiceConfig,
   VoiceSttProvider,
@@ -529,6 +530,19 @@ function buildExternalReasoningConfig(env: NodeJS.ProcessEnv): ExternalReasoning
   };
 }
 
+function buildPresenceConfig(env: NodeJS.ProcessEnv): PresenceConfig {
+  const startDelayMs = parsePositiveInteger(env.PRESENCE_START_DELAY_MS, 1200);
+  const refreshIntervalMs = parsePositiveInteger(env.PRESENCE_REFRESH_INTERVAL_MS, 4000);
+  const maxDurationMs = parsePositiveInteger(env.PRESENCE_MAX_DURATION_MS, 25_000);
+  return {
+    enabled: parseBoolean(env.PRESENCE_ENABLED, true),
+    startDelayMs,
+    refreshIntervalMs,
+    progressDelayMs: Math.min(parsePositiveInteger(env.PRESENCE_PROGRESS_DELAY_MS, 8000), maxDurationMs),
+    maxDurationMs,
+  };
+}
+
 function buildVoiceConfig(env: NodeJS.ProcessEnv, workspaceDir: string): VoiceConfig {
   const rawProvider = env.VOICE_STT_PROVIDER?.trim().toLowerCase();
   const sttProvider: VoiceSttProvider = rawProvider === "command" ? "command" : "openai";
@@ -768,7 +782,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       morningBriefEnabled: parseBoolean(env.TELEGRAM_MORNING_BRIEF_ENABLED, true),
       dailyEditorialAutomationEnabled: parseBoolean(env.TELEGRAM_DAILY_EDITORIAL_AUTOMATION_ENABLED, false),
       operationalModeHours: parsePositiveInteger(env.TELEGRAM_OPERATIONAL_MODE_HOURS, 18),
+      typingEnabled: parseBoolean(env.TELEGRAM_TYPING_ENABLED, true),
     },
+    presence: buildPresenceConfig(env),
     voice: buildVoiceConfig(env, workspaceDir),
     briefing: buildBriefingConfig(env),
     externalReasoning: buildExternalReasoningConfig(env),

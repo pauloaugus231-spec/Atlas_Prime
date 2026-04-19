@@ -79,7 +79,8 @@ import {
 } from "../voice/voice-message-handler.js";
 import { extractTelegramVoiceAttachment } from "../voice/telegram-voice.js";
 import { TelegramApi } from "./telegram-api.js";
-import { TelegramTypingSession } from "./typing-session.js";
+import type { PresenceSession } from "../presence/chat-presence.js";
+import { createTelegramPresenceSession } from "./telegram-presence.js";
 import {
   buildVisualTaskFailureReply,
   buildVisualTaskState,
@@ -1753,7 +1754,7 @@ export class TelegramService {
   private readonly pendingVisualTasks = new Map<number, VisualTaskState>();
   private readonly lastCalendarUndoActions = new Map<number, CalendarUndoAction>();
   private readonly operationalModes = new Map<number, OperationalModeState>();
-  private readonly typingSessions = new Map<number, TelegramTypingSession>();
+  private readonly typingSessions = new Map<number, PresenceSession>();
   private readonly voiceHandler?: VoiceMessageHandler;
   private readonly scheduleImport?: OpenAiScheduleImportService;
   private readonly whatsapp: EvolutionApiClient;
@@ -1817,23 +1818,26 @@ export class TelegramService {
   private beginTypingFeedback(
     chatId: number,
     options: {
+      flow?: string;
       replyToMessageId?: number;
       progressText?: string;
       fallbackText?: string;
     } = {},
-  ): TelegramTypingSession {
+  ): PresenceSession | undefined {
     const previous = this.typingSessions.get(chatId);
     if (previous) {
       this.typingSessions.delete(chatId);
-      previous.stop().catch(() => undefined);
+      previous.stop("replaced").catch(() => undefined);
     }
 
-    const session = new TelegramTypingSession({
+    const session = createTelegramPresenceSession({
+      config: this.config,
+      logger: this.logger,
+      api: this.api,
+      chatId,
+      flow: options.flow,
       progressText: options.progressText ?? "Estou vendo isso agora.",
-      fallbackText: options.fallbackText ?? "Isso está demorando mais do que deveria. Ainda estou fechando isso por aqui.",
-      sendTyping: async () => {
-        await this.api.sendChatAction(chatId, "typing");
-      },
+      timeoutText: options.fallbackText ?? "Isso está demorando mais do que deveria. Ainda estou fechando isso por aqui.",
       sendProgress: async (text) => {
         await this.sendText(chatId, text, {
           reply_to_message_id: options.replyToMessageId,
@@ -1841,12 +1845,15 @@ export class TelegramService {
         });
       },
     });
+    if (!session) {
+      return undefined;
+    }
     this.typingSessions.set(chatId, session);
     session.start();
     return session;
   }
 
-  private async endTypingFeedback(chatId: number, session?: TelegramTypingSession): Promise<void> {
+  private async endTypingFeedback(chatId: number, session?: PresenceSession): Promise<void> {
     if (!session) {
       return;
     }
@@ -2403,6 +2410,7 @@ export class TelegramService {
       }
 
       const typingSession = this.beginTypingFeedback(message.chat.id, {
+        flow: "voice_transcription",
         replyToMessageId: message.message_id,
         progressText: "Estou ouvindo esse áudio agora.",
         fallbackText: "Esse áudio está demorando mais do que deveria. Ainda estou tentando transcrever.",
@@ -2914,6 +2922,7 @@ export class TelegramService {
         ? buildPendingDraftAdjustmentPrompt(pendingEmailDraft, normalizedText)
         : normalizedText;
       const typingSession = this.beginTypingFeedback(message.chat.id, {
+        flow: "prompt_response",
         replyToMessageId: message.message_id,
       });
       if (pendingDraft && pendingDraft.kind !== "email_reply") {
@@ -3247,6 +3256,7 @@ export class TelegramService {
   ): Promise<void> {
     const history = this.getChatHistory(message.chat.id);
     const typingSession = this.beginTypingFeedback(message.chat.id, {
+      flow: "clarified_prompt",
       replyToMessageId: input.replyToMessageId,
     });
     try {
@@ -3687,6 +3697,7 @@ export class TelegramService {
         );
       }
       const typingSession = this.beginTypingFeedback(message.chat.id, {
+        flow: "visual_schedule_import",
         replyToMessageId: message.message_id,
         progressText: "Estou lendo esse material agora.",
         fallbackText: "Esse material está demorando mais do que deveria. Ainda estou tentando extrair o que der.",
@@ -4999,6 +5010,7 @@ export class TelegramService {
     pendingDraft: PendingActionDraft,
   ): Promise<void> {
     const typingSession = this.beginTypingFeedback(message.chat.id, {
+      flow: "pending_action_confirmation",
       replyToMessageId: message.message_id,
       progressText: "Estou executando isso agora.",
       fallbackText: "Isso está demorando mais do que deveria. Ainda estou tentando concluir.",

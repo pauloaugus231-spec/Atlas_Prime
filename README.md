@@ -18,6 +18,7 @@ As fases entregues até agora incluem:
 - integracao de email com leitura IMAP, triagem operacional e envio SMTP controlado
 - orquestrador inicial de domínios com policy engine por risco e autonomia
 - pacote inicial de secretario operacional com Google Calendar, Tasks e Contacts em leitura e escrita controlada
+- presenca conversacional no Telegram com `typing`, timeout e cleanup para requests mais lentos
 - workspace isolado
 - leitura apenas de diretorios autorizados
 - plugins de base, growth e email com confirmacao explicita de envio
@@ -133,6 +134,12 @@ LLM_FALLBACK_PROVIDER=openai
 TELEGRAM_BOT_TOKEN=seu_token
 TELEGRAM_ALLOWED_USER_IDS=seu_user_id
 TELEGRAM_POLL_TIMEOUT_SECONDS=30
+TELEGRAM_TYPING_ENABLED=true
+PRESENCE_ENABLED=true
+PRESENCE_START_DELAY_MS=1200
+PRESENCE_REFRESH_INTERVAL_MS=4000
+PRESENCE_PROGRESS_DELAY_MS=8000
+PRESENCE_MAX_DURATION_MS=25000
 
 EMAIL_ENABLED=false
 EMAIL_IMAP_HOST=
@@ -179,6 +186,9 @@ Observacoes:
 - `HOST_AUTHORIZED_PROJECTS_DIR` pode ser uma pasta com varios projetos ou um projeto especifico montado em modo somente leitura
 - `HOST_USER_DOCUMENTS_DIR` monta o seu `/Users/.../Documents` dentro do container para que os symlinks de `Agente_Autorizados` resolvam corretamente
 - `TELEGRAM_ALLOWED_USER_IDS` aceita mais de um id separado por virgula
+- `TELEGRAM_TYPING_ENABLED=true` habilita `typing` no Telegram quando a resposta passa do limiar configurado
+- `PRESENCE_*` controla atraso inicial, refresh, aviso curto intermediario e timeout maximo para evitar presenca infinita
+- a camada de presenca foi separada do canal para permitir adapters futuros, como WhatsApp, sem reabrir o fluxo principal
 - a integracao de email nasce desativada
 - leitura usa IMAP
 - envio usa SMTP separado e continua bloqueado ate `EMAIL_WRITE_ENABLED=true`
