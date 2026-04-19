@@ -41,10 +41,15 @@ jobs:
           clean_path="$(printf '%s' "$DEPLOY_PATH" | tr -d '\r' | sed 's/[[:space:]]*$//')"
           clean_port="$(printf '%s' "$EC2_PORT" | tr -cd '0-9')"
 
+          if [[ -z "$clean_path" ]]; then
+            clean_path="/srv/atlas/app"
+          fi
+          if [[ -z "$clean_port" ]]; then
+            clean_port="22"
+          fi
+
           test -n "$clean_host" || { echo "AWS_EC2_HOST ausente nos secrets"; exit 1; }
           test -n "$clean_user" || { echo "AWS_EC2_USER ausente nos secrets"; exit 1; }
-          test -n "$clean_port" || { echo "AWS_EC2_PORT invalido"; exit 1; }
-          test -n "$clean_path" || { echo "AWS_EC2_DEPLOY_PATH invalido"; exit 1; }
 
           {
             echo "EC2_HOST=$clean_host"
