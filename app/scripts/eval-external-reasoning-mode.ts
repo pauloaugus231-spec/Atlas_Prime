@@ -1,6 +1,7 @@
 import process from "node:process";
 import type { ExternalReasoningConfig } from "../src/types/config.js";
 import { shouldAttemptExternalReasoning } from "../src/core/external-reasoning-policy.js";
+import { shouldBypassPreLocalExternalReasoningForPrompt } from "../src/core/agent-core.js";
 import type { IntentResolution } from "../src/core/intent-router.js";
 import type { OrchestrationContext } from "../src/types/orchestration.js";
 
@@ -87,6 +88,56 @@ function run() {
         }),
       }),
       "pre_local",
+    ),
+  });
+
+  results.push({
+    name: "pre_local_bypass_keeps_weather_shortcuts_local",
+    passed: shouldBypassPreLocalExternalReasoningForPrompt(
+      "clima hoje",
+      buildIntent({
+        activeUserPrompt: "clima hoje",
+        orchestration: buildOrchestration({
+          route: {
+            actionMode: "analyze",
+            confidence: 0.88,
+          },
+          policy: {
+            riskLevel: "low",
+            autonomyLevel: "autonomous_low_risk",
+          },
+        }),
+      }),
+    ),
+  });
+
+  results.push({
+    name: "pre_local_bypass_keeps_briefing_local",
+    passed: shouldBypassPreLocalExternalReasoningForPrompt(
+      "briefing da manhã",
+      buildIntent({
+        activeUserPrompt: "briefing da manhã",
+        orchestration: buildOrchestration({
+          route: {
+            actionMode: "brief",
+            confidence: 0.91,
+          },
+          policy: {
+            riskLevel: "low",
+            autonomyLevel: "autonomous_low_risk",
+          },
+        }),
+      }),
+    ),
+  });
+
+  results.push({
+    name: "pre_local_bypass_keeps_greeting_local",
+    passed: shouldBypassPreLocalExternalReasoningForPrompt(
+      "oi atlas",
+      buildIntent({
+        activeUserPrompt: "oi atlas",
+      }),
     ),
   });
 

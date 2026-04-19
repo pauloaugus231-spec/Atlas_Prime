@@ -845,6 +845,13 @@ function isClearlyNewTopLevelIntent(text: string): boolean {
   }
 
   return [
+    "oi atlas",
+    "ola atlas",
+    "olá atlas",
+    "oi atlas como esta",
+    "oi atlas como está",
+    "atlas como esta",
+    "atlas como está",
     "meu calendario",
     "meu calendário",
     "minha agenda",

@@ -101,6 +101,7 @@ import {
   resolveGoogleAccountAliasesForPrompt,
 } from "./google-account-resolution.js";
 import { resolveActionAutonomyRule } from "./action-autonomy-policy.js";
+import { looksLikeLowFrictionReadPrompt } from "./clarification-rules.js";
 import { PersonalOperationalMemoryStore } from "./personal-operational-memory.js";
 import {
   selectRelevantLearnedPreferences,
@@ -971,11 +972,45 @@ function isWeatherPrompt(prompt: string): boolean {
     "previsao do tempo",
     "previsão do tempo",
     "clima em",
+    "qual o clima",
+    "como esta o clima",
+    "como está o clima",
+    "clima hoje",
+    "clima agora",
+    "clima amanha",
+    "clima amanhã",
     "tempo em",
+    "tempo hoje",
+    "tempo agora",
+    "tempo amanha",
+    "tempo amanhã",
     "temperatura em",
+    "temperatura hoje",
     "vai chover em",
+    "vai chover hoje",
+    "vai chover amanha",
+    "vai chover amanhã",
     "chuva em",
   ]);
+}
+
+function isGreetingPrompt(prompt: string): boolean {
+  const normalized = normalizeEmailAnalysisText(prompt);
+  if (!normalized || isMorningBriefPrompt(prompt)) {
+    return false;
+  }
+
+  return [
+    /^oi(?:\s+atlas)?$/,
+    /^ola(?:\s+atlas)?$/,
+    /^olá(?:\s+atlas)?$/,
+    /^e ai(?:\s+atlas)?$/,
+    /^hey(?:\s+atlas)?$/,
+    /^oi\s+atlas[, ]+como\s+(?:voce|você)\s+esta\??$/,
+    /^oi\s+atlas[, ]+como\s+esta\??$/,
+    /^atlas[, ]+como\s+(?:voce|você)\s+esta\??$/,
+    /^atlas[, ]+como\s+esta\??$/,
+  ].some((pattern) => pattern.test(normalized));
 }
 
 function isAgentIdentityPrompt(prompt: string): boolean {
@@ -995,6 +1030,18 @@ function buildAgentIdentityReply(preferredAgentName = "Atlas"): string {
     `Pode me chamar de ${preferredAgentName}.`,
     "Se preferir algo mais direto, pode usar Agente.",
   ].join("\n");
+}
+
+function buildGreetingReply(prompt: string): string {
+  const normalized = normalizeEmailAnalysisText(prompt);
+  if (normalized.includes("como") && (normalized.includes("esta") || normalized.includes("está"))) {
+    return [
+      "Estou online e operando.",
+      "Pode mandar agenda, briefing, clima, tarefas ou aprovações.",
+    ].join("\n");
+  }
+
+  return "Estou online. Pode mandar o próximo pedido.";
 }
 
 function isMemoryUpdatePrompt(prompt: string): boolean {
@@ -1303,6 +1350,10 @@ function isPersonalOperationalProfileDeletePrompt(prompt: string): boolean {
 
 function isDirectLocalContextCommandPrompt(prompt: string): boolean {
   return (
+    isGreetingPrompt(prompt) ||
+    isWeatherPrompt(prompt) ||
+    isMorningBriefPrompt(prompt) ||
+    isOperationalBriefPrompt(prompt) ||
     isPersonalOperationalProfileShowPrompt(prompt) ||
     isPersonalOperationalProfileUpdatePrompt(prompt) ||
     isPersonalOperationalProfileDeletePrompt(prompt) ||
@@ -1316,6 +1367,13 @@ function isDirectLocalContextCommandPrompt(prompt: string): boolean {
     isUserPreferencesPrompt(prompt) ||
     isAgentIdentityPrompt(prompt)
   );
+}
+
+export function shouldBypassPreLocalExternalReasoningForPrompt(
+  prompt: string,
+  intent?: IntentResolution,
+): boolean {
+  return isDirectLocalContextCommandPrompt(prompt) || looksLikeLowFrictionReadPrompt(prompt, intent);
 }
 
 function extractPersonalOperationalProfileRemoveQuery(prompt: string): string | undefined {
@@ -1835,7 +1893,11 @@ function extractWeatherLocation(prompt: string): string | undefined {
 
   for (const pattern of patterns) {
     const match = prompt.match(pattern);
-    const value = match?.[1]?.trim().replace(/[.,;:!?]+$/g, "").trim();
+    const value = match?.[1]
+      ?.trim()
+      .replace(/[.,;:!?]+$/g, "")
+      .replace(/\b(?:hoje|agora|amanha|amanhã)\b$/i, "")
+      .trim();
     if (value) {
       return value;
     }
@@ -1865,42 +1927,40 @@ function buildWeatherReply(result: {
     precipitationSumMm?: number;
   }>;
 }): string {
-  const lines = [`Previsão do tempo para ${result.locationLabel}.`];
+  const lines = [`Tempo em ${result.locationLabel}:`];
 
   if (result.current) {
     lines.push(
-      `- Agora: ${result.current.description}, ${result.current.temperatureC ?? "?"}°C` +
-        (typeof result.current.apparentTemperatureC === "number"
-          ? `, sensação ${result.current.apparentTemperatureC}°C`
-          : "") +
-        (typeof result.current.humidityPercent === "number"
-          ? `, umidade ${result.current.humidityPercent}%`
-          : "") +
-        (typeof result.current.windSpeedKmh === "number"
-          ? `, vento ${result.current.windSpeedKmh} km/h`
-          : ""),
+      `- Agora: ${result.current.description}, ${result.current.temperatureC ?? "?"}°C.`,
     );
   }
 
   if (result.daily.length > 0) {
-    lines.push("", "Próximos dias:");
-    for (const day of result.daily.slice(0, 3)) {
+    const [today, tomorrow] = result.daily;
+    if (today) {
       lines.push(
-        `- ${day.date}: ${day.description}` +
-          (typeof day.minTempC === "number" && typeof day.maxTempC === "number"
-            ? ` | min ${day.minTempC}°C / max ${day.maxTempC}°C`
+        `- Hoje: ${today.description}` +
+          (typeof today.minTempC === "number" && typeof today.maxTempC === "number"
+            ? ` | ${today.minTempC}°–${today.maxTempC}°`
             : "") +
-          (typeof day.precipitationProbabilityMax === "number"
-            ? ` | chuva ${day.precipitationProbabilityMax}%`
+          (typeof today.precipitationProbabilityMax === "number"
+            ? ` | chuva ${today.precipitationProbabilityMax}%`
+            : ""),
+      );
+    }
+    if (tomorrow) {
+      lines.push(
+        `- Amanhã: ${tomorrow.description}` +
+          (typeof tomorrow.minTempC === "number" && typeof tomorrow.maxTempC === "number"
+            ? ` | ${tomorrow.minTempC}°–${tomorrow.maxTempC}°`
             : "") +
-          (typeof day.precipitationSumMm === "number"
-            ? ` | volume ${day.precipitationSumMm} mm`
+          (typeof tomorrow.precipitationProbabilityMax === "number"
+            ? ` | chuva ${tomorrow.precipitationProbabilityMax}%`
             : ""),
       );
     }
   }
 
-  lines.push("", "Fonte: Open-Meteo");
   return lines.join("\n");
 }
 
@@ -9567,7 +9627,10 @@ export class AgentCore {
       autonomyLevel: orchestration.policy.autonomyLevel,
     });
 
-    const shouldBypassPreLocalExternalReasoning = isDirectLocalContextCommandPrompt(activeUserPrompt);
+    const shouldBypassPreLocalExternalReasoning = shouldBypassPreLocalExternalReasoningForPrompt(
+      activeUserPrompt,
+      intent,
+    );
     if (shouldBypassPreLocalExternalReasoning) {
       requestLogger.info("Skipping external reasoning for direct local context command", {
         mode: this.config.externalReasoning.mode,
@@ -9597,6 +9660,14 @@ export class AgentCore {
     );
     if (directPingResult) {
       return directPingResult;
+    }
+    const directGreetingResult = await this.tryRunDirectGreeting(
+      activeUserPrompt,
+      requestId,
+      orchestration,
+    );
+    if (directGreetingResult) {
+      return directGreetingResult;
     }
     const directIdentityResult = await this.tryRunDirectAgentIdentity(
       activeUserPrompt,
@@ -10841,6 +10912,23 @@ export class AgentCore {
     return {
       requestId,
       reply: buildAgentIdentityReply(this.preferences.get().preferredAgentName),
+      messages: buildBaseMessages(userPrompt, orchestration, this.preferences.get()),
+      toolExecutions: [],
+    };
+  }
+
+  private async tryRunDirectGreeting(
+    userPrompt: string,
+    requestId: string,
+    orchestration: OrchestrationContext,
+  ): Promise<AgentRunResult | null> {
+    if (!isGreetingPrompt(userPrompt)) {
+      return null;
+    }
+
+    return {
+      requestId,
+      reply: buildGreetingReply(userPrompt),
       messages: buildBaseMessages(userPrompt, orchestration, this.preferences.get()),
       toolExecutions: [],
     };
@@ -13130,10 +13218,7 @@ export class AgentCore {
       return null;
     }
 
-    const location = extractWeatherLocation(userPrompt);
-    if (!location) {
-      return null;
-    }
+    const location = extractWeatherLocation(userPrompt) ?? this.config.briefing.weatherLocation;
 
     requestLogger.info("Using direct weather route", {
       location,
