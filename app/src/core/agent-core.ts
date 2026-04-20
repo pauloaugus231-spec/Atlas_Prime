@@ -3267,6 +3267,9 @@ function extractReferenceMonth(prompt: string): string | undefined {
 }
 
 function isCalendarLookupPrompt(prompt: string): boolean {
+  if (isGoogleEventCreatePrompt(prompt) || isGoogleTaskCreatePrompt(prompt)) {
+    return false;
+  }
   const normalized = normalizeEmailAnalysisText(prompt);
   return (
     includesAny(normalized, [
@@ -12607,13 +12610,25 @@ export class AgentCore {
       return null;
     }
 
-    const explicitAccount = extractExplicitAccountAlias(userPrompt, this.googleWorkspaces.getAliases());
-    const workspace = this.googleWorkspaces.getWorkspace(explicitAccount);
-    const status = workspace.getStatus();
-    if (!status.ready) {
+    const availableAliases = this.googleWorkspaces.getAliases();
+    const explicitAccount = extractExplicitAccountAlias(userPrompt, availableAliases);
+    const readyAliases = availableAliases.filter((alias) => this.googleWorkspaces.getWorkspace(alias).getStatus().ready);
+    const selectedAccount = explicitAccount ?? (readyAliases.length === 1 ? readyAliases[0] : undefined);
+    const workspace = selectedAccount ? this.googleWorkspaces.getWorkspace(selectedAccount) : undefined;
+    const status = workspace?.getStatus();
+    if (selectedAccount && !status?.ready) {
       return {
         requestId,
-        reply: `A integração do Google Workspace não está pronta. ${status.message}`,
+        reply: `A integração do Google Workspace não está pronta. ${status?.message ?? "Conta indisponível no momento."}`,
+        messages: buildBaseMessages(userPrompt, orchestration),
+        toolExecutions: [],
+      };
+    }
+    if (!selectedAccount && readyAliases.length === 0) {
+      const fallbackStatus = this.googleWorkspaces.getWorkspace(explicitAccount).getStatus();
+      return {
+        requestId,
+        reply: `A integração do Google Workspace não está pronta. ${fallbackStatus.message}`,
         messages: buildBaseMessages(userPrompt, orchestration),
         toolExecutions: [],
       };
@@ -12621,6 +12636,7 @@ export class AgentCore {
 
     requestLogger.info("Using direct Google Calendar event draft route", {
       domain: orchestration.route.primaryDomain,
+      account: selectedAccount ?? (readyAliases.length > 1 ? "clarify_account" : "default"),
     });
 
     const draftResult = buildEventDraftFromPrompt(userPrompt, this.config.google.defaultTimezone);
@@ -12633,15 +12649,27 @@ export class AgentCore {
       };
     }
 
-    if (explicitAccount) {
-      draftResult.draft.account = explicitAccount;
+    if (selectedAccount) {
+      draftResult.draft.account = selectedAccount;
     }
     const explicitCalendar = extractExplicitCalendarAlias(
       userPrompt,
-      Object.keys(workspace.getCalendarAliases()),
+      Object.keys((workspace ?? this.googleWorkspaces.getWorkspace(explicitAccount)).getCalendarAliases()),
     );
     if (explicitCalendar) {
       draftResult.draft.calendarId = explicitCalendar;
+    }
+
+    if (!selectedAccount && readyAliases.length > 1) {
+      return {
+        requestId,
+        reply: [
+          "Preciso saber em qual agenda salvar: pessoal ou abordagem?",
+          buildGoogleEventDraftReply(draftResult.draft),
+        ].join("\n\n"),
+        messages: buildBaseMessages(userPrompt, orchestration),
+        toolExecutions: [],
+      };
     }
 
     if (draftResult.draft.location && !looksLikePostalAddress(draftResult.draft.location)) {
@@ -12656,7 +12684,7 @@ export class AgentCore {
       }
     }
 
-    if (shouldAutoCreateGoogleEvent(userPrompt, draftResult.draft, Boolean(status.writeReady))) {
+    if (shouldAutoCreateGoogleEvent(userPrompt, draftResult.draft, Boolean(status?.writeReady))) {
       requestLogger.info("Using direct Google Calendar auto-create route", {
         account: draftResult.draft.account ?? "primary",
         calendarId: draftResult.draft.calendarId ?? "default",
@@ -12690,7 +12718,7 @@ export class AgentCore {
       };
     }
 
-    const scopeNotice = status.writeReady
+    const scopeNotice = status?.writeReady
       ? undefined
       : "Observação: a conta Google atual ainda está somente leitura. Antes de confirmar a criação, reautorize com `npm run google:auth` para liberar escopo de escrita.";
     const reply = [

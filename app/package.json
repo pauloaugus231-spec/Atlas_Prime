@@ -21,6 +21,7 @@
     "eval:task-decision-resolution": "tsx scripts/eval-task-decision-resolution.ts",
     "eval:autonomy": "tsx scripts/eval-autonomy-policy.ts",
     "eval:calendar-conflicts": "tsx scripts/eval-calendar-conflicts.ts",
+    "eval:calendar-direct-routing": "tsx scripts/eval-calendar-direct-routing.ts",
     "eval:calendar-resolution": "tsx scripts/eval-calendar-event-resolution.ts",
     "eval:calendar-context": "tsx scripts/eval-calendar-context.ts",
     "eval:voice-telegram": "tsx scripts/eval-voice-telegram.ts",
