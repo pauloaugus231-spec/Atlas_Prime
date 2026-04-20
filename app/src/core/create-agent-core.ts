@@ -18,6 +18,7 @@ import { GrowthOpsStore } from "./growth-ops.js";
 import { OpenAIClient } from "./openai-client.js";
 import { OllamaClient } from "./ollama-client.js";
 import { FallbackLlmClient } from "./fallback-llm-client.js";
+import { SmartRoutingLlmClient } from "./smart-routing-llm-client.js";
 import { OperationalMemoryStore } from "./operational-memory.js";
 import { PersonalOSService } from "./personal-os.js";
 import { loadToolPlugins } from "./plugin-loader.js";
@@ -73,6 +74,51 @@ function createSingleLlmClient(
 }
 
 function createConfiguredLlmClient(config: AppConfig, logger: ReturnType<typeof createLogger>): LlmClient {
+  const openAiMini = config.llm.openai
+    ? createSingleLlmClient(config, logger, config.llm.openai)
+    : undefined;
+  const openAiAdvanced = config.llm.advanced
+    ? createSingleLlmClient(config, logger, config.llm.advanced)
+    : undefined;
+  const ollamaFallback = config.llm.ollama
+    ? createSingleLlmClient(config, logger, config.llm.ollama)
+    : undefined;
+  const advancedProviderConfig = config.llm.advanced;
+
+  if (
+    config.llm.smartRouting?.enabled
+    && openAiMini
+    && openAiAdvanced
+    && advancedProviderConfig
+    && config.llm.openai?.model !== advancedProviderConfig.model
+  ) {
+    const tiers = [
+      {
+        label: `${config.llm.openai?.provider ?? "openai"}:${config.llm.openai?.model ?? config.llm.model}`,
+        client: openAiMini,
+      },
+      {
+        label: `${advancedProviderConfig.provider}:${advancedProviderConfig.model}`,
+        client: openAiAdvanced,
+      },
+      ...(ollamaFallback
+        ? [{
+            label: `${config.llm.ollama?.provider ?? "ollama"}:${config.llm.ollama?.model ?? "unknown"}`,
+            client: ollamaFallback,
+          }]
+        : []),
+    ];
+
+    return new SmartRoutingLlmClient(
+      logger.child({ scope: "llm-smart-routing" }),
+      {
+        tiers,
+        advancedIndex: 1,
+        routing: config.llm.smartRouting,
+      },
+    );
+  }
+
   if (config.llm.provider === "fallback" && config.llm.fallback) {
     const primary = createSingleLlmClient(config, logger, config.llm.fallback.primary);
     const secondary = createSingleLlmClient(config, logger, config.llm.fallback.secondary);

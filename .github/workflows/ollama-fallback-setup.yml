@@ -54,12 +54,19 @@ jobs:
           updates = {
               "ATLAS_COMPOSE_PROFILES": ",".join(profiles),
               "LLM_PROVIDER": "fallback",
-              "LLM_PRIMARY_PROVIDER": "ollama",
-              "LLM_FALLBACK_PROVIDER": "openai",
+              "LLM_PRIMARY_PROVIDER": "openai",
+              "LLM_FALLBACK_PROVIDER": "ollama",
+              "LLM_SMART_ROUTING_ENABLED": "true",
+              "LLM_COMPLEXITY_PROMPT_CHARS": "180",
+              "LLM_TOOL_COMPLEXITY_PROMPT_CHARS": "80",
+              "LLM_USE_ADVANCED_FOR_TOOLS": "true",
               "OLLAMA_BASE_URL": "http://ollama:11434",
               "OLLAMA_MODEL": model,
               "OLLAMA_TIMEOUT_SECONDS": "30",
               "OLLAMA_PULL_ON_DEPLOY": "true",
+              "OPENAI_MODEL": "gpt-5.4-mini",
+              "OPENAI_ADVANCED_MODEL": "gpt-5.4",
+              "OPENAI_ADVANCED_TIMEOUT_SECONDS": "90",
           }
 
           out = []
@@ -81,7 +88,7 @@ jobs:
                   out.append(f"{key}={value}")
 
           path.write_text("\n".join(out).rstrip() + "\n", encoding="utf-8")
-          print("Updated .env.production for Ollama-first fallback")
+          print("Updated .env.production for OpenAI smart routing with Ollama fallback")
           print(f"ATLAS_COMPOSE_PROFILES={updates['ATLAS_COMPOSE_PROFILES']}")
           print(f"OLLAMA_MODEL={model}")
           PY

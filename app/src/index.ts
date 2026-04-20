@@ -62,6 +62,10 @@ async function main(): Promise<void> {
                 secondary: `${config.llm.fallback.secondary.provider}:${config.llm.fallback.secondary.model}`,
               }
             : undefined,
+          llmAdvanced: config.llm.advanced
+            ? `${config.llm.advanced.provider}:${config.llm.advanced.model}`
+            : undefined,
+          llmSmartRouting: config.llm.smartRouting,
           loadedPlugins: loadedPlugins.map((item) => ({
             name: item.plugin.name,
             origin: item.origin,

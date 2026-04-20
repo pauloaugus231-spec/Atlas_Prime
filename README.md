@@ -128,8 +128,14 @@ OLLAMA_BASE_URL=http://host.docker.internal:11434
 OLLAMA_MODEL=qwen3:1.7b
 OLLAMA_TIMEOUT_SECONDS=60
 LLM_PROVIDER=fallback
-LLM_PRIMARY_PROVIDER=ollama
-LLM_FALLBACK_PROVIDER=openai
+LLM_PRIMARY_PROVIDER=openai
+LLM_FALLBACK_PROVIDER=ollama
+LLM_SMART_ROUTING_ENABLED=true
+LLM_COMPLEXITY_PROMPT_CHARS=180
+LLM_TOOL_COMPLEXITY_PROMPT_CHARS=80
+LLM_USE_ADVANCED_FOR_TOOLS=true
+OPENAI_MODEL=gpt-5.4-mini
+OPENAI_ADVANCED_MODEL=gpt-5.4
 
 TELEGRAM_BOT_TOKEN=seu_token
 TELEGRAM_ALLOWED_USER_IDS=seu_user_id
@@ -180,8 +186,8 @@ GOOGLE_MAX_CONTACTS=10
 Observacoes:
 
 - `OLLAMA_BASE_URL` deve apontar para `http://host.docker.internal:11434`, sem `/v1`
-- `LLM_PROVIDER=fallback` usa Ollama primeiro e cai para OpenAI quando o modelo local falhar ou devolver resposta vazia
-- `LLM_PRIMARY_PROVIDER=ollama` e `LLM_FALLBACK_PROVIDER=openai` mantem custo baixo sem remover a robustez da OpenAI
+- `LLM_PROVIDER=fallback` com `LLM_SMART_ROUTING_ENABLED=true` usa `gpt-5.4-mini` como padrao, sobe para `gpt-5.4` em pedidos mais complexos e deixa Ollama como fallback final
+- `LLM_PRIMARY_PROVIDER=openai` e `LLM_FALLBACK_PROVIDER=ollama` mantem boa qualidade no canal operador sem perder contingencia local
 - recursos que dependem de OpenAI, como STT, TTS e importacao de agenda por PDF/print, continuam usando `OPENAI_API_KEY` quando configurado
 - `HOST_AUTHORIZED_PROJECTS_DIR` pode ser uma pasta com varios projetos ou um projeto especifico montado em modo somente leitura
 - `HOST_USER_DOCUMENTS_DIR` monta o seu `/Users/.../Documents` dentro do container para que os symlinks de `Agente_Autorizados` resolvam corretamente
@@ -260,7 +266,7 @@ O compose de producao sobe apenas o core do Atlas por padrao:
 
 WhatsApp/Evolution ficam fora do boot padrao para reduzir consumo e evitar concorrencia desnecessaria nos bancos locais. Quando o profile `whatsapp` nao esta ativo, o deploy tambem para containers antigos desse bloco sem apagar volumes. Para ativar esse bloco na nuvem, defina `ATLAS_COMPOSE_PROFILES=whatsapp` ou `COMPOSE_PROFILES=whatsapp` no ambiente de deploy/`.env.production` e rode o deploy novamente.
 
-Ollama na EC2 tambem fica em profile opcional. Para usar `qwen3:1.7b` na nuvem, habilite o profile `ollama`, aponte `OLLAMA_BASE_URL=http://ollama:11434`, use `LLM_PROVIDER=fallback`, `LLM_PRIMARY_PROVIDER=ollama` e `LLM_FALLBACK_PROVIDER=openai`. Se WhatsApp e Ollama estiverem ativos juntos, use `ATLAS_COMPOSE_PROFILES=whatsapp,ollama`. O deploy executa `ollama pull` para `OLLAMA_MODEL` quando `OLLAMA_PULL_ON_DEPLOY` nao estiver desativado. O workflow manual `Ollama Fallback Setup` aplica essas variaveis na EC2 e faz redeploy controlado.
+Ollama na EC2 tambem fica em profile opcional. Para usar `qwen3:1.7b` na nuvem como fallback final, habilite o profile `ollama`, aponte `OLLAMA_BASE_URL=http://ollama:11434`, use `LLM_PROVIDER=fallback`, `LLM_PRIMARY_PROVIDER=openai`, `LLM_FALLBACK_PROVIDER=ollama`, `OPENAI_MODEL=gpt-5.4-mini`, `OPENAI_ADVANCED_MODEL=gpt-5.4` e `LLM_SMART_ROUTING_ENABLED=true`. Se WhatsApp e Ollama estiverem ativos juntos, use `ATLAS_COMPOSE_PROFILES=whatsapp,ollama`. O deploy executa `ollama pull` para `OLLAMA_MODEL` quando `OLLAMA_PULL_ON_DEPLOY` nao estiver desativado.
 
 Se alterar `.env`, recrie o container:
 

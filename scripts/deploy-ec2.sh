@@ -61,6 +61,45 @@ ensure_env_default() {
   fi
 }
 
+replace_env_value_if_exact_match() {
+  local key="$1"
+  local expected="$2"
+  local replacement="$3"
+  local current
+  current="$(read_env_file_value "$key")"
+  if [[ "$current" != "$expected" ]]; then
+    return
+  fi
+
+  python3 - "$key" "$replacement" <<'PY'
+import sys
+from pathlib import Path
+
+key = sys.argv[1]
+replacement = sys.argv[2]
+path = Path(".env.production")
+lines = path.read_text(encoding="utf-8").splitlines()
+out = []
+updated = False
+
+for line in lines:
+    stripped = line.strip()
+    if not stripped or stripped.startswith("#") or "=" not in line:
+        out.append(line)
+        continue
+    existing_key, _ = line.split("=", 1)
+    if existing_key == key:
+        out.append(f"{key}={replacement}")
+        updated = True
+    else:
+        out.append(line)
+
+if updated:
+    path.write_text("\n".join(out).rstrip() + "\n", encoding="utf-8")
+PY
+  log "Variavel ${key} atualizada de ${expected} para ${replacement}"
+}
+
 prepare_cloud_dirs() {
   sudo mkdir -p \
     "$WORKSPACE_STATE_DIR" \
@@ -142,6 +181,13 @@ pull_ollama_model_if_enabled() {
 }
 
 if grep -Eq '^OPENAI_API_KEY=.+$' ".env.production"; then
+  ensure_env_default "LLM_SMART_ROUTING_ENABLED" "true"
+  ensure_env_default "LLM_COMPLEXITY_PROMPT_CHARS" "180"
+  ensure_env_default "LLM_TOOL_COMPLEXITY_PROMPT_CHARS" "80"
+  ensure_env_default "LLM_USE_ADVANCED_FOR_TOOLS" "true"
+  ensure_env_default "OPENAI_ADVANCED_MODEL" "gpt-5.4"
+  ensure_env_default "OPENAI_ADVANCED_TIMEOUT_SECONDS" "90"
+  replace_env_value_if_exact_match "OPENAI_MODEL" "gpt-5-mini" "gpt-5.4-mini"
   ensure_env_default "VOICE_ENABLED" "true"
   ensure_env_default "VOICE_STT_PROVIDER" "openai"
   ensure_env_default "VOICE_MAX_AUDIO_SECONDS" "90"

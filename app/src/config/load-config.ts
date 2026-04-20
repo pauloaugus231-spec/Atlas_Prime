@@ -12,6 +12,7 @@ import type {
   LlmConfig,
   LlmProvider,
   LlmProviderConfig,
+  LlmSmartRoutingConfig,
   MediaConfig,
   OperatorChannelBinding,
   OperatorChannelMode,
@@ -25,7 +26,8 @@ import type { LogLevel } from "../types/logger.js";
 const DEFAULT_OLLAMA_BASE_URL = "http://host.docker.internal:11434";
 const DEFAULT_OLLAMA_MODEL = "qwen3:1.7b";
 const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
-const DEFAULT_OPENAI_MODEL = "gpt-5-mini";
+const DEFAULT_OPENAI_MODEL = "gpt-5.4-mini";
+const DEFAULT_OPENAI_ADVANCED_MODEL = "gpt-5.4";
 const DEFAULT_MAX_TOOL_ITERATIONS = 6;
 
 function parseEnvFile(filePath: string): Record<string, string> {
@@ -152,9 +154,35 @@ function buildOpenAiLlmConfig(env: NodeJS.ProcessEnv): LlmProviderConfig {
   };
 }
 
+function buildOpenAiAdvancedLlmConfig(env: NodeJS.ProcessEnv): LlmProviderConfig | undefined {
+  const apiKey = env.OPENAI_API_KEY?.trim() || undefined;
+  if (!apiKey) {
+    return undefined;
+  }
+
+  return {
+    provider: "openai",
+    baseUrl: normalizeBaseUrl(env.OPENAI_BASE_URL ?? DEFAULT_OPENAI_BASE_URL),
+    model: env.OPENAI_ADVANCED_MODEL?.trim() || DEFAULT_OPENAI_ADVANCED_MODEL,
+    timeoutMs: parsePositiveInteger(env.OPENAI_ADVANCED_TIMEOUT_SECONDS, 90) * 1000,
+    apiKey,
+  };
+}
+
+function buildLlmSmartRoutingConfig(env: NodeJS.ProcessEnv): LlmSmartRoutingConfig {
+  return {
+    enabled: parseBoolean(env.LLM_SMART_ROUTING_ENABLED, true),
+    complexityPromptChars: parsePositiveInteger(env.LLM_COMPLEXITY_PROMPT_CHARS, 180),
+    toolComplexityPromptChars: parsePositiveInteger(env.LLM_TOOL_COMPLEXITY_PROMPT_CHARS, 80),
+    useAdvancedForTools: parseBoolean(env.LLM_USE_ADVANCED_FOR_TOOLS, true),
+  };
+}
+
 function buildLlmConfig(env: NodeJS.ProcessEnv): LlmConfig {
   const ollama = buildOllamaLlmConfig(env);
   const openai = buildOpenAiLlmConfig(env);
+  const advanced = buildOpenAiAdvancedLlmConfig(env);
+  const smartRouting = buildLlmSmartRoutingConfig(env);
   const requestedProvider = env.LLM_PROVIDER?.trim().toLowerCase();
 
   if (requestedProvider === "fallback") {
@@ -173,6 +201,8 @@ function buildLlmConfig(env: NodeJS.ProcessEnv): LlmConfig {
       apiKey: primary.apiKey,
       ollama,
       openai,
+      advanced,
+      smartRouting,
       fallback: {
         primary,
         secondary,
@@ -192,6 +222,8 @@ function buildLlmConfig(env: NodeJS.ProcessEnv): LlmConfig {
     apiKey: selected.apiKey,
     ollama,
     openai,
+    advanced,
+    smartRouting,
   };
 }
 

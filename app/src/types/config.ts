@@ -31,6 +31,13 @@ export interface LlmProviderConfig {
   apiKey?: string;
 }
 
+export interface LlmSmartRoutingConfig {
+  enabled: boolean;
+  complexityPromptChars: number;
+  toolComplexityPromptChars: number;
+  useAdvancedForTools: boolean;
+}
+
 export interface LlmConfig {
   provider: LlmProviderMode;
   baseUrl: string;
@@ -39,6 +46,8 @@ export interface LlmConfig {
   apiKey?: string;
   ollama?: LlmProviderConfig;
   openai?: LlmProviderConfig;
+  advanced?: LlmProviderConfig;
+  smartRouting?: LlmSmartRoutingConfig;
   fallback?: {
     primary: LlmProviderConfig;
     secondary: LlmProviderConfig;
