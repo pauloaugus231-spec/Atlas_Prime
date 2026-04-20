@@ -2557,27 +2557,30 @@ export class TelegramService {
       });
     }
 
-    if (resolvedText && isManualVideoScriptRequest(resolvedText)) {
+    const continuablePendingDraft = this.pendingActionDrafts.get(message.chat.id)
+      ?? this.tryHydrateContinuablePendingDraft(message.chat.id);
+
+    if (resolvedText && !continuablePendingDraft && isManualVideoScriptRequest(resolvedText)) {
       await this.handleManualVideoScriptRequest(message, resolvedText);
       return;
     }
 
-    if (resolvedText && isBatchScriptGenerationRequest(resolvedText)) {
+    if (resolvedText && !continuablePendingDraft && isBatchScriptGenerationRequest(resolvedText)) {
       await this.handleBatchScriptGenerationRequest(message, resolvedText);
       return;
     }
 
-    if (isVideoPipelineStatusRequest(normalizedText)) {
+    if (!continuablePendingDraft && isVideoPipelineStatusRequest(normalizedText)) {
       await this.handleVideoPipelineStatusRequest(message);
       return;
     }
 
-    if (isBatchVideoDraftRenderRequest(resolvedText ?? normalizedText)) {
+    if (!continuablePendingDraft && isBatchVideoDraftRenderRequest(resolvedText ?? normalizedText)) {
       await this.handleBatchVideoDraftRenderRequest(message, resolvedText ?? normalizedText);
       return;
     }
 
-    if (isVideoDraftRenderRequest(normalizedText)) {
+    if (!continuablePendingDraft && isVideoDraftRenderRequest(normalizedText)) {
       await this.handleVideoDraftRenderRequest(message, normalizedText);
       return;
     }
@@ -2600,8 +2603,7 @@ export class TelegramService {
       return;
     }
 
-    const importBatchCandidate = this.pendingActionDrafts.get(message.chat.id)
-      ?? this.tryHydrateContinuablePendingDraft(message.chat.id);
+    const importBatchCandidate = continuablePendingDraft;
     const importBatchDraft = importBatchCandidate?.kind === "google_event_import_batch"
       ? importBatchCandidate
       : undefined;
