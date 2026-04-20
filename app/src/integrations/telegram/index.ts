@@ -3,7 +3,17 @@ import { TelegramApi } from "./telegram-api.js";
 import { TelegramService } from "./telegram-service.js";
 
 async function main(): Promise<void> {
-  const { config, logger, core, contentOps, approvalEngine, clarificationEngine, whatsappMessages, googleAuth } = await createAgentCore();
+  const {
+    config,
+    logger,
+    core,
+    requestOrchestrator,
+    contentOps,
+    approvalEngine,
+    clarificationEngine,
+    whatsappMessages,
+    googleAuth,
+  } = await createAgentCore();
 
   if (!config.telegram.botToken) {
     throw new Error("TELEGRAM_BOT_TOKEN is not configured");
@@ -23,6 +33,7 @@ async function main(): Promise<void> {
     config,
     logger.child({ scope: "telegram" }),
     core,
+    requestOrchestrator,
     contentOps,
     googleAuth,
     api,

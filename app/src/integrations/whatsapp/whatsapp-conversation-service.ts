@@ -1,4 +1,9 @@
 import type { AgentCore } from "../../core/agent-core.js";
+import { buildWhatsAppChannelPrompt, type ChannelConversationTurn } from "../../core/channel-message-adapter.js";
+import {
+  type PendingActionDraft,
+} from "../../core/draft-action-service.js";
+import type { RequestOrchestrator } from "../../core/request-orchestrator.js";
 import {
   type PendingGoogleEventDeleteBatchDraft,
   type PendingGoogleEventDeleteDraft,
@@ -7,7 +12,6 @@ import {
   type PendingGoogleEventUpdateDraft,
   type PendingGoogleTaskDraft,
 } from "../../core/google-draft-utils.js";
-import { parseAssistantDecisionReply } from "../../core/assistant-decision.js";
 import type { WhatsAppMessageStore } from "../../core/whatsapp-message-store.js";
 import type { AppConfig } from "../../types/config.js";
 import type { Logger } from "../../types/logger.js";
@@ -20,11 +24,11 @@ interface WhatsAppSender {
 }
 
 interface ChatTurn {
-  role: "user" | "assistant";
+  role: ChannelConversationTurn["role"];
   text: string;
 }
 
-type PendingActionDraft =
+type WhatsAppPendingActionDraft =
   | PendingGoogleTaskDraft
   | PendingGoogleEventDraft
   | PendingGoogleEventUpdateDraft
@@ -111,71 +115,6 @@ function isCancelText(text: string): boolean {
   ].some((item) => normalized === item || normalized.includes(item));
 }
 
-function stripPendingDraftMarkers(text: string): string {
-  return text
-    .replace(/GOOGLE_TASK_DRAFT[\s\S]*?END_GOOGLE_TASK_DRAFT/gi, "")
-    .replace(/GOOGLE_EVENT_DRAFT[\s\S]*?END_GOOGLE_EVENT_DRAFT/gi, "")
-    .replace(/GOOGLE_EVENT_UPDATE_DRAFT[\s\S]*?END_GOOGLE_EVENT_UPDATE_DRAFT/gi, "")
-    .replace(/GOOGLE_EVENT_DELETE_DRAFT[\s\S]*?END_GOOGLE_EVENT_DELETE_DRAFT/gi, "")
-    .replace(/GOOGLE_EVENT_IMPORT_BATCH_DRAFT[\s\S]*?END_GOOGLE_EVENT_IMPORT_BATCH_DRAFT/gi, "")
-    .replace(/GOOGLE_EVENT_DELETE_BATCH_DRAFT[\s\S]*?END_GOOGLE_EVENT_DELETE_BATCH_DRAFT/gi, "")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
-}
-
-function parseJsonDraft<T>(text: string, marker: string): T | undefined {
-  const escaped = marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const match = text.match(new RegExp(`${escaped}\\s*([\\s\\S]*?)\\s*END_${escaped}`, "i"));
-  if (!match?.[1]?.trim()) {
-    return undefined;
-  }
-  try {
-    return JSON.parse(match[1].trim()) as T;
-  } catch {
-    return undefined;
-  }
-}
-
-function extractPendingActionDraft(text: string): PendingActionDraft | undefined {
-  const task = parseJsonDraft<PendingGoogleTaskDraft>(text, "GOOGLE_TASK_DRAFT");
-  if (task?.kind === "google_task" && task.title?.trim()) {
-    return task;
-  }
-
-  const event = parseJsonDraft<PendingGoogleEventDraft>(text, "GOOGLE_EVENT_DRAFT");
-  if (event?.kind === "google_event" && event.summary?.trim() && event.start && event.end) {
-    return event;
-  }
-
-  const update = parseJsonDraft<PendingGoogleEventUpdateDraft>(text, "GOOGLE_EVENT_UPDATE_DRAFT");
-  if (
-    update?.kind === "google_event_update" &&
-    update.summary?.trim() &&
-    update.start &&
-    update.end &&
-    update.eventId?.trim()
-  ) {
-    return update;
-  }
-
-  const importBatch = parseJsonDraft<PendingGoogleEventImportBatchDraft>(text, "GOOGLE_EVENT_IMPORT_BATCH_DRAFT");
-  if (importBatch?.kind === "google_event_import_batch" && Array.isArray(importBatch.events) && importBatch.events.length > 0) {
-    return importBatch;
-  }
-
-  const deleteBatch = parseJsonDraft<PendingGoogleEventDeleteBatchDraft>(text, "GOOGLE_EVENT_DELETE_BATCH_DRAFT");
-  if (deleteBatch?.kind === "google_event_delete_batch" && Array.isArray(deleteBatch.events) && deleteBatch.events.length > 0) {
-    return deleteBatch;
-  }
-
-  const deleteDraft = parseJsonDraft<PendingGoogleEventDeleteDraft>(text, "GOOGLE_EVENT_DELETE_DRAFT");
-  if (deleteDraft?.kind === "google_event_delete" && deleteDraft.summary?.trim() && deleteDraft.eventId?.trim()) {
-    return deleteDraft;
-  }
-
-  return undefined;
-}
-
 function formatLocalDateTime(value: string | undefined, timeZone = "America/Sao_Paulo"): string | undefined {
   if (!value) {
     return undefined;
@@ -194,7 +133,16 @@ function formatLocalDateTime(value: string | undefined, timeZone = "America/Sao_
   }).format(date);
 }
 
-function buildPendingActionReply(draft: PendingActionDraft): string {
+function isWhatsAppPendingActionDraft(draft: PendingActionDraft | undefined): draft is WhatsAppPendingActionDraft {
+  return draft?.kind === "google_task"
+    || draft?.kind === "google_event"
+    || draft?.kind === "google_event_update"
+    || draft?.kind === "google_event_delete"
+    || draft?.kind === "google_event_delete_batch"
+    || draft?.kind === "google_event_import_batch";
+}
+
+function buildPendingActionReply(draft: WhatsAppPendingActionDraft): string {
   if (draft.kind === "google_task") {
     return [
       `Tarefa pronta: ${draft.title}.`,
@@ -243,7 +191,7 @@ function buildPendingActionReply(draft: PendingActionDraft): string {
   ].join("\n");
 }
 
-function buildExecutionSuccessMessage(draft: PendingActionDraft, rawResult: unknown): string {
+function buildExecutionSuccessMessage(draft: WhatsAppPendingActionDraft, rawResult: unknown): string {
   const record = rawResult && typeof rawResult === "object" ? rawResult as Record<string, unknown> : undefined;
   const event = record?.event && typeof record.event === "object" ? record.event as Record<string, unknown> : undefined;
   const task = record?.task && typeof record.task === "object" ? record.task as Record<string, unknown> : undefined;
@@ -300,39 +248,6 @@ function hasNumberedOptions(text: string | undefined): boolean {
   return Boolean(text && /(?:^|\n)\s*(?:1[\).\s-]|1\s*—)/.test(text));
 }
 
-function buildWhatsAppAgentPrompt(input: {
-  chatId: string;
-  remoteJid: string;
-  number: string;
-  pushName?: string;
-  text: string;
-  history: ChatTurn[];
-}): string {
-  const lines = [
-    "Contexto do WhatsApp:",
-    "canal=whatsapp",
-    "chat_type=private",
-    `chat_id=${input.chatId}`,
-    `remote_jid=${input.remoteJid}`,
-    `number=${input.number}`,
-    input.pushName ? `push_name=${input.pushName}` : undefined,
-    "responda de forma curta, natural e operacional para WhatsApp",
-    "",
-  ].filter(Boolean) as string[];
-
-  if (input.history.length > 0) {
-    lines.push("Histórico recente do chat:");
-    for (const turn of input.history) {
-      lines.push(`${turn.role === "user" ? "Usuário" : "Assistente"}: ${turn.text}`);
-    }
-    lines.push("");
-  }
-
-  lines.push("Mensagem atual do usuário:");
-  lines.push(input.text);
-  return lines.join("\n");
-}
-
 function normalizeChoiceContinuation(text: string, history: ChatTurn[]): string {
   const normalized = normalizeText(text);
   const lastAssistant = [...history].reverse().find((turn) => turn.role === "assistant")?.text;
@@ -375,12 +290,13 @@ function normalizeChoiceContinuation(text: string, history: ChatTurn[]): string 
 
 export class WhatsAppConversationService {
   private readonly chatHistory = new Map<string, ChatTurn[]>();
-  private readonly pendingActionDrafts = new Map<string, PendingActionDraft>();
+  private readonly pendingActionDrafts = new Map<string, WhatsAppPendingActionDraft>();
 
   constructor(
     private readonly config: AppConfig,
     private readonly logger: Logger,
     private readonly core: AgentCore,
+    private readonly requestOrchestrator: RequestOrchestrator,
     private readonly evolution: WhatsAppSender,
     private readonly whatsappMessages: WhatsAppMessageStore,
   ) {}
@@ -439,8 +355,9 @@ export class WhatsAppConversationService {
 
     const history = this.getHistory(chatKey);
     const effectiveText = normalizeChoiceContinuation(text, history);
-    const result = await this.core.runUserPrompt(
-      buildWhatsAppAgentPrompt({
+    const orchestrated = await this.requestOrchestrator.run({
+      channel: "whatsapp",
+      agentPrompt: buildWhatsAppChannelPrompt({
         chatId: chatKey,
         remoteJid: input.remoteJid,
         number: normalizedNumber,
@@ -448,19 +365,20 @@ export class WhatsAppConversationService {
         text: effectiveText,
         history,
       }),
-      { chatId: stableChatId(chatKey) },
-    );
+      recentMessages: history.map((turn) => turn.text).slice(-6),
+      options: { chatId: stableChatId(chatKey) },
+    });
 
-    const structuredDecision = await this.resolveStructuredAssistantDecisionReply(result.reply, chatKey);
-    if (structuredDecision.handled) {
+    if (orchestrated.structuredReplyHandled) {
       this.appendHistory(chatKey, { role: "user", text });
-      this.appendHistory(chatKey, { role: "assistant", text: structuredDecision.visibleReply });
-      return this.reply(input, structuredDecision.visibleReply);
+      this.appendHistory(chatKey, { role: "assistant", text: orchestrated.visibleReply });
+      return this.reply(input, orchestrated.visibleReply);
     }
 
-    const nextPendingDraft = extractPendingActionDraft(result.reply);
-    const visibleReply = stripPendingDraftMarkers(result.reply) || result.reply;
-    const finalReply = nextPendingDraft ? buildPendingActionReply(nextPendingDraft) : visibleReply;
+    const nextPendingDraft = isWhatsAppPendingActionDraft(orchestrated.pendingDraft)
+      ? orchestrated.pendingDraft
+      : undefined;
+    const finalReply = nextPendingDraft ? buildPendingActionReply(nextPendingDraft) : orchestrated.visibleReply;
     if (nextPendingDraft) {
       this.pendingActionDrafts.set(chatKey, nextPendingDraft);
     } else {
@@ -511,7 +429,7 @@ export class WhatsAppConversationService {
   private async handlePendingAction(
     chatKey: string,
     input: WhatsAppConversationInput,
-    pending: PendingActionDraft,
+    pending: WhatsAppPendingActionDraft,
     text: string,
   ): Promise<WhatsAppConversationResult | null> {
     if (isCancelText(text)) {
@@ -543,7 +461,7 @@ export class WhatsAppConversationService {
     return null;
   }
 
-  private async executePendingActionDraft(draft: PendingActionDraft): Promise<{ ok: boolean; rawResult: unknown }> {
+  private async executePendingActionDraft(draft: WhatsAppPendingActionDraft): Promise<{ ok: boolean; rawResult: unknown }> {
     const execution =
       draft.kind === "google_task"
         ? await this.core.executeToolDirect("execute_task_operation", {
@@ -650,63 +568,4 @@ export class WhatsAppConversationService {
     return { ok, rawResult: execution.rawResult };
   }
 
-  private async resolveStructuredAssistantDecisionReply(rawReply: string, chatKey: string): Promise<{
-    handled: boolean;
-    visibleReply: string;
-  }> {
-    const parsed = parseAssistantDecisionReply(rawReply);
-    if (parsed.kind === "absent") {
-      return { handled: false, visibleReply: "" };
-    }
-
-    if (parsed.kind === "invalid") {
-      this.logger.warn("Rejected invalid WhatsApp structured assistant decision", {
-        error: parsed.error,
-      });
-      return {
-        handled: true,
-        visibleReply: ["Decisão estruturada inválida. Nada foi executado.", `Detalhe: ${parsed.error}`].join("\n"),
-      };
-    }
-
-    if (!parsed.decision.should_execute || !parsed.decision.execution) {
-      return { handled: true, visibleReply: parsed.decision.assistant_reply };
-    }
-
-    const resolvedPayload = parsed.decision.execution.tool === "execute_task_operation"
-      ? await this.core.resolveStructuredTaskOperationPayload(parsed.decision.execution.payload, {
-          recentMessages: this.getHistory(chatKey).map((turn) => turn.text).slice(-6),
-        })
-      : null;
-
-    if (resolvedPayload?.kind === "clarify") {
-      return { handled: true, visibleReply: resolvedPayload.message };
-    }
-
-    if (resolvedPayload?.kind === "invalid") {
-      return {
-        handled: true,
-        visibleReply: ["Não consegui executar a decisão estruturada local.", `Detalhe: ${resolvedPayload.error}`].join("\n"),
-      };
-    }
-
-    const execution = await this.core.executeToolDirect(
-      parsed.decision.execution.tool,
-      resolvedPayload?.kind === "resolved" ? resolvedPayload.payload : parsed.decision.execution.payload,
-    );
-    const rawResult = execution.rawResult && typeof execution.rawResult === "object"
-      ? execution.rawResult as Record<string, unknown>
-      : undefined;
-    if (rawResult?.ok === false) {
-      return {
-        handled: true,
-        visibleReply: [
-          "Não consegui executar a decisão estruturada local.",
-          `Detalhe: ${typeof rawResult.error === "string" ? rawResult.error : "Falha na execução local."}`,
-        ].join("\n"),
-      };
-    }
-
-    return { handled: true, visibleReply: parsed.decision.assistant_reply };
-  }
 }

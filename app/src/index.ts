@@ -1,4 +1,5 @@
 import { createAgentCore } from "./core/create-agent-core.js";
+import { buildCliChannelPrompt } from "./core/channel-message-adapter.js";
 import { FileAccessPolicy } from "./core/file-access-policy.js";
 import { EvolutionApiClient } from "./integrations/whatsapp/evolution-api.js";
 
@@ -31,6 +32,7 @@ async function main(): Promise<void> {
     loadedPlugins,
     client,
     core,
+    requestOrchestrator,
     memory,
     preferences,
     email,
@@ -122,12 +124,17 @@ async function main(): Promise<void> {
       throw new Error("Missing prompt. Use --prompt \"...\"");
     }
 
-    const result = await core.runUserPrompt(prompt);
+    const orchestrated = await requestOrchestrator.run({
+      channel: "cli",
+      agentPrompt: buildCliChannelPrompt({ text: prompt }),
+      recentMessages: [prompt],
+    });
+    const result = orchestrated.result;
     console.log(
       JSON.stringify(
         {
           requestId: result.requestId,
-          reply: result.reply,
+          reply: orchestrated.visibleReply,
           toolExecutions: result.toolExecutions,
         },
         null,

@@ -47,6 +47,8 @@ import { ResponseOS } from "./response-os.js";
 import { ContextPackService } from "./context-pack.js";
 import { ContextMemoryService } from "./context-memory.js";
 import { PersonalOperationalMemoryStore } from "./personal-operational-memory.js";
+import { AssistantActionDispatcher } from "./action-dispatcher.js";
+import { RequestOrchestrator } from "./request-orchestrator.js";
 
 function withLlmProviderConfig(config: AppConfig, providerConfig: LlmProviderConfig): AppConfig {
   return {
@@ -369,6 +371,15 @@ export async function createAgentCore() {
     projectOps,
     safeExec,
   );
+  const actionDispatcher = new AssistantActionDispatcher(
+    core,
+    logger.child({ scope: "assistant-action-dispatcher" }),
+  );
+  const requestOrchestrator = new RequestOrchestrator(
+    core,
+    actionDispatcher,
+    logger.child({ scope: "request-orchestrator" }),
+  );
 
   return {
     config,
@@ -398,6 +409,8 @@ export async function createAgentCore() {
     registry,
     capabilityRegistry,
     client,
+    actionDispatcher,
+    requestOrchestrator,
     core,
     googleAuth,
     googleWorkspace,

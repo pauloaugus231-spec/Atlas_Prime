@@ -18619,3 +18619,8 @@ export class AgentCore {
     ].join("\n\n");
   }
 }
+
+export interface AgentCoreRequestRuntime extends Pick<
+  AgentCore,
+  "runUserPrompt" | "resolveStructuredTaskOperationPayload" | "executeToolDirect"
+> {}

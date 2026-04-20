@@ -1,3 +1,5 @@
+import { AssistantActionDispatcher } from "../src/core/action-dispatcher.js";
+import { RequestOrchestrator } from "../src/core/request-orchestrator.js";
 import { WhatsAppConversationService } from "../src/integrations/whatsapp/whatsapp-conversation-service.js";
 import { resolveWhatsAppInboundMode } from "../src/core/whatsapp-routing.js";
 import type { AppConfig } from "../src/types/config.js";
@@ -67,6 +69,16 @@ function makeSender() {
   };
 }
 
+function makeRequestOrchestrator(core: {
+  runUserPrompt(prompt: string, options?: unknown): Promise<unknown>;
+  executeToolDirect(toolName: string, payload: unknown): Promise<unknown>;
+  resolveStructuredTaskOperationPayload(payload: unknown, options?: unknown): Promise<unknown>;
+}) {
+  const logger = makeLogger();
+  const dispatcher = new AssistantActionDispatcher(core as never, logger);
+  return new RequestOrchestrator(core as never, dispatcher, logger);
+}
+
 async function run(): Promise<void> {
   const results: EvalResult[] = [];
 
@@ -93,6 +105,7 @@ async function run(): Promise<void> {
       makeConfig(),
       makeLogger(),
       core as never,
+      makeRequestOrchestrator(core),
       sender,
       store as never,
     );
@@ -154,6 +167,7 @@ async function run(): Promise<void> {
       makeConfig(),
       makeLogger(),
       core as never,
+      makeRequestOrchestrator(core),
       sender,
       store as never,
     );
@@ -216,6 +230,7 @@ async function run(): Promise<void> {
       makeConfig(),
       makeLogger(),
       core as never,
+      makeRequestOrchestrator(core),
       sender,
       store as never,
     );
@@ -231,14 +246,22 @@ async function run(): Promise<void> {
   {
     const store = makeStore();
     const sender = makeSender();
+    const core = {
+      async runUserPrompt() {
+        throw new Error("should not run for unauthorized");
+      },
+      async executeToolDirect() {
+        throw new Error("should not execute");
+      },
+      async resolveStructuredTaskOperationPayload(payload: Record<string, unknown>) {
+        return { kind: "resolved", payload };
+      },
+    };
     const service = new WhatsAppConversationService(
       makeConfig({ allowedNumbers: ["5551888888888"] }),
       makeLogger(),
-      {
-        async runUserPrompt() {
-          throw new Error("should not run for unauthorized");
-        },
-      } as never,
+      core as never,
+      makeRequestOrchestrator(core),
       sender,
       store as never,
     );
@@ -292,6 +315,7 @@ async function run(): Promise<void> {
       makeConfig(),
       makeLogger(),
       core as never,
+      makeRequestOrchestrator(core),
       sender,
       store as never,
     );

@@ -1,5 +1,15 @@
 import { setTimeout as delay } from "node:timers/promises";
 import type { AgentCore } from "../../core/agent-core.js";
+import { buildTelegramChannelPrompt, type ChannelConversationTurn } from "../../core/channel-message-adapter.js";
+import {
+  parsePendingActionDraftPayload,
+  stripPendingDraftMarkers,
+  type PendingActionDraft,
+  type PendingEmailDraft,
+  type PendingWhatsAppReplyDraft,
+  type PendingYouTubePublishDraft,
+} from "../../core/draft-action-service.js";
+import type { RequestOrchestrator } from "../../core/request-orchestrator.js";
 import type { ContentOpsStore } from "../../core/content-ops.js";
 import type {
   PendingGoogleEventDeleteBatchDraft,
@@ -44,7 +54,6 @@ import {
 } from "../../core/conversation-interpreter.js";
 import { normalizeVoiceTranscriptForTelegram } from "../../core/voice-semantic-normalizer.js";
 import { extractLatestShortPackage, type ParsedShortPackage } from "../../core/short-video-package.js";
-import { parseAssistantDecisionReply } from "../../core/assistant-decision.js";
 import type { AppConfig } from "../../types/config.js";
 import type { ApprovalInboxItemRecord } from "../../types/approval-inbox.js";
 import type { ContentItemRecord } from "../../types/content-ops.js";
@@ -105,51 +114,9 @@ const RECENT_PENDING_CONFIRMATION_WINDOW_MS = 30 * 60 * 1000;
 const PENDING_CHOICE_WINDOW_MS = 30 * 60 * 1000;
 
 interface ChatTurn {
-  role: "user" | "assistant";
+  role: ChannelConversationTurn["role"];
   text: string;
 }
-
-interface PendingEmailDraft {
-  kind: "email_reply";
-  uid: string;
-  body: string;
-  subjectOverride?: string;
-}
-
-interface PendingWhatsAppReplyDraft {
-  kind: "whatsapp_reply";
-  instanceName?: string;
-  account?: string;
-  remoteJid: string;
-  number: string;
-  pushName?: string;
-  inboundText: string;
-  replyText: string;
-  relationship?: string;
-  persona?: string;
-}
-
-interface PendingYouTubePublishDraft {
-  kind: "youtube_publish";
-  contentItemId: number;
-  filePath: string;
-  title: string;
-  description: string;
-  privacyStatus: "private" | "public" | "unlisted";
-  tags: string[];
-}
-
-type PendingActionDraft =
-  | PendingEmailDraft
-  | PendingWhatsAppReplyDraft
-  | PendingMonitoredChannelAlertDraft
-  | PendingYouTubePublishDraft
-  | PendingGoogleTaskDraft
-  | PendingGoogleEventDraft
-  | PendingGoogleEventUpdateDraft
-  | PendingGoogleEventDeleteDraft
-  | PendingGoogleEventDeleteBatchDraft
-  | PendingGoogleEventImportBatchDraft;
 
 interface OperationalModeState {
   kind: "field";
@@ -865,307 +832,6 @@ function isUndoLastCalendarChangeRequest(text: string): boolean {
   ].some((token) => normalized.includes(token));
 }
 
-function extractPendingEmailDraft(text: string): PendingEmailDraft | undefined {
-  const match = text.match(
-    /EMAIL_REPLY_DRAFT\s+uid=([^\s]+)\s*(?:subject=(.+?)\s*)?body:\s*([\s\S]*?)\s*END_EMAIL_REPLY_DRAFT/i,
-  );
-
-  if (!match) {
-    return undefined;
-  }
-
-  const uid = match[1]?.trim() ?? "";
-  const subjectOverride = match[2]?.trim() || undefined;
-  const body = match[3]?.trim() || "";
-  if (!uid || !body) {
-    return undefined;
-  }
-
-  return {
-    kind: "email_reply",
-    uid,
-    body,
-    subjectOverride,
-  };
-}
-
-function extractPendingGoogleTaskDraft(text: string): PendingGoogleTaskDraft | undefined {
-  const match = text.match(/GOOGLE_TASK_DRAFT\s*([\s\S]*?)\s*END_GOOGLE_TASK_DRAFT/i);
-  if (!match?.[1]?.trim()) {
-    return undefined;
-  }
-
-  try {
-    const parsed = JSON.parse(match[1].trim()) as PendingGoogleTaskDraft;
-    if (parsed?.kind !== "google_task" || !parsed.title?.trim()) {
-      return undefined;
-    }
-    return parsed;
-  } catch {
-    return undefined;
-  }
-}
-
-function extractPendingGoogleEventDraft(text: string): PendingGoogleEventDraft | undefined {
-  const match = text.match(/GOOGLE_EVENT_DRAFT\s*([\s\S]*?)\s*END_GOOGLE_EVENT_DRAFT/i);
-  if (!match?.[1]?.trim()) {
-    return undefined;
-  }
-
-  try {
-    const parsed = JSON.parse(match[1].trim()) as PendingGoogleEventDraft;
-    if (parsed?.kind !== "google_event" || !parsed.summary?.trim() || !parsed.start || !parsed.end) {
-      return undefined;
-    }
-    return parsed;
-  } catch {
-    return undefined;
-  }
-}
-
-function extractPendingGoogleEventDeleteDraft(text: string): PendingGoogleEventDeleteDraft | undefined {
-  const match = text.match(/GOOGLE_EVENT_DELETE_DRAFT\s*([\s\S]*?)\s*END_GOOGLE_EVENT_DELETE_DRAFT/i);
-  if (!match?.[1]?.trim()) {
-    return undefined;
-  }
-
-  try {
-    const parsed = JSON.parse(match[1].trim()) as PendingGoogleEventDeleteDraft;
-    if (parsed?.kind !== "google_event_delete" || !parsed.summary?.trim() || !parsed.eventId?.trim()) {
-      return undefined;
-    }
-    return parsed;
-  } catch {
-    return undefined;
-  }
-}
-
-function extractPendingGoogleEventUpdateDraft(text: string): PendingGoogleEventUpdateDraft | undefined {
-  const match = text.match(/GOOGLE_EVENT_UPDATE_DRAFT\s*([\s\S]*?)\s*END_GOOGLE_EVENT_UPDATE_DRAFT/i);
-  if (!match?.[1]?.trim()) {
-    return undefined;
-  }
-
-  try {
-    const parsed = JSON.parse(match[1].trim()) as PendingGoogleEventUpdateDraft;
-    if (
-      parsed?.kind !== "google_event_update" ||
-      !parsed.summary?.trim() ||
-      !parsed.start ||
-      !parsed.end ||
-      !parsed.eventId?.trim()
-    ) {
-      return undefined;
-    }
-    return parsed;
-  } catch {
-    return undefined;
-  }
-}
-
-function extractPendingGoogleEventDeleteBatchDraft(text: string): PendingGoogleEventDeleteBatchDraft | undefined {
-  const match = text.match(/GOOGLE_EVENT_DELETE_BATCH_DRAFT\s*([\s\S]*?)\s*END_GOOGLE_EVENT_DELETE_BATCH_DRAFT/i);
-  if (!match?.[1]?.trim()) {
-    return undefined;
-  }
-
-  try {
-    const parsed = JSON.parse(match[1].trim()) as PendingGoogleEventDeleteBatchDraft;
-    if (
-      parsed?.kind !== "google_event_delete_batch" ||
-      !Array.isArray(parsed.events) ||
-      parsed.events.length === 0
-    ) {
-      return undefined;
-    }
-    return parsed;
-  } catch {
-    return undefined;
-  }
-}
-
-function extractPendingGoogleEventImportBatchDraft(text: string): PendingGoogleEventImportBatchDraft | undefined {
-  const match = text.match(/GOOGLE_EVENT_IMPORT_BATCH_DRAFT\s*([\s\S]*?)\s*END_GOOGLE_EVENT_IMPORT_BATCH_DRAFT/i);
-  if (!match?.[1]?.trim()) {
-    return undefined;
-  }
-
-  try {
-    const parsed = JSON.parse(match[1].trim()) as PendingGoogleEventImportBatchDraft;
-    if (
-      parsed?.kind !== "google_event_import_batch" ||
-      !Array.isArray(parsed.events) ||
-      parsed.events.length === 0
-    ) {
-      return undefined;
-    }
-    return parsed;
-  } catch {
-    return undefined;
-  }
-}
-
-function extractPendingWhatsAppReplyDraft(text: string): PendingWhatsAppReplyDraft | undefined {
-  const match = text.match(/WHATSAPP_REPLY_DRAFT\s*([\s\S]*?)\s*END_WHATSAPP_REPLY_DRAFT/i);
-  if (!match?.[1]?.trim()) {
-    return undefined;
-  }
-
-  try {
-    const parsed = JSON.parse(match[1].trim()) as PendingWhatsAppReplyDraft;
-    if (
-      parsed?.kind !== "whatsapp_reply" ||
-      !parsed.remoteJid?.trim() ||
-      !parsed.number?.trim() ||
-      typeof parsed.replyText !== "string"
-    ) {
-      return undefined;
-    }
-    return parsed;
-  } catch {
-    return undefined;
-  }
-}
-
-function extractPendingActionDraft(text: string): PendingActionDraft | undefined {
-  return (
-    extractPendingEmailDraft(text) ??
-    extractPendingWhatsAppReplyDraft(text) ??
-    extractPendingGoogleTaskDraft(text) ??
-    extractPendingGoogleEventDraft(text) ??
-    extractPendingGoogleEventUpdateDraft(text) ??
-    extractPendingGoogleEventImportBatchDraft(text) ??
-    extractPendingGoogleEventDeleteBatchDraft(text) ??
-    extractPendingGoogleEventDeleteDraft(text)
-  );
-}
-
-function parsePendingActionDraftPayload(payload: string): PendingActionDraft | undefined {
-  try {
-    const parsed = JSON.parse(payload) as Record<string, unknown>;
-    if (!parsed || typeof parsed.kind !== "string") {
-      return undefined;
-    }
-
-    if (parsed.kind === "email_reply" && typeof parsed.uid === "string" && typeof parsed.body === "string") {
-      return {
-        kind: "email_reply",
-        uid: parsed.uid,
-        body: parsed.body,
-        subjectOverride: typeof parsed.subjectOverride === "string" ? parsed.subjectOverride : undefined,
-      };
-    }
-
-    if (
-      parsed.kind === "whatsapp_reply" &&
-      typeof parsed.remoteJid === "string" &&
-      typeof parsed.number === "string" &&
-      typeof parsed.inboundText === "string" &&
-      typeof parsed.replyText === "string"
-    ) {
-      return {
-        kind: "whatsapp_reply",
-        instanceName: typeof parsed.instanceName === "string" ? parsed.instanceName : undefined,
-        account: typeof parsed.account === "string" ? parsed.account : undefined,
-        remoteJid: parsed.remoteJid,
-        number: parsed.number,
-        pushName: typeof parsed.pushName === "string" ? parsed.pushName : undefined,
-        inboundText: parsed.inboundText,
-        replyText: parsed.replyText,
-        relationship: typeof parsed.relationship === "string" ? parsed.relationship : undefined,
-        persona: typeof parsed.persona === "string" ? parsed.persona : undefined,
-      };
-    }
-
-    if (
-      parsed.kind === "monitored_channel_alert" &&
-      parsed.sourceProvider === "whatsapp" &&
-      typeof parsed.sourceChannelId === "string" &&
-      typeof parsed.sourceDisplayName === "string" &&
-      typeof parsed.sourceRemoteJid === "string" &&
-      typeof parsed.sourceNumber === "string" &&
-      typeof parsed.sourceText === "string" &&
-      typeof parsed.classification === "string" &&
-      typeof parsed.summary === "string" &&
-      Array.isArray(parsed.reasons) &&
-      typeof parsed.suggestedAction === "string"
-    ) {
-      return parsed as unknown as PendingMonitoredChannelAlertDraft;
-    }
-
-    if (
-      parsed.kind === "youtube_publish" &&
-      typeof parsed.contentItemId === "number" &&
-      typeof parsed.filePath === "string" &&
-      typeof parsed.title === "string" &&
-      typeof parsed.description === "string"
-    ) {
-      return {
-        kind: "youtube_publish",
-        contentItemId: parsed.contentItemId,
-        filePath: parsed.filePath,
-        title: parsed.title,
-        description: parsed.description,
-        privacyStatus:
-          parsed.privacyStatus === "private" || parsed.privacyStatus === "unlisted" || parsed.privacyStatus === "public"
-            ? parsed.privacyStatus
-            : "public",
-        tags: Array.isArray(parsed.tags)
-          ? parsed.tags.map((value) => String(value).trim()).filter(Boolean).slice(0, 10)
-          : [],
-      };
-    }
-
-    if (parsed.kind === "google_task" && typeof parsed.title === "string") {
-      return parsed as unknown as PendingGoogleTaskDraft;
-    }
-
-    if (parsed.kind === "google_event" && typeof parsed.summary === "string" && typeof parsed.start === "string" && typeof parsed.end === "string") {
-      return parsed as unknown as PendingGoogleEventDraft;
-    }
-
-    if (
-      parsed.kind === "google_event_update" &&
-      typeof parsed.eventId === "string" &&
-      typeof parsed.summary === "string" &&
-      typeof parsed.start === "string" &&
-      typeof parsed.end === "string"
-    ) {
-      return parsed as unknown as PendingGoogleEventUpdateDraft;
-    }
-
-    if (parsed.kind === "google_event_delete" && typeof parsed.eventId === "string" && typeof parsed.summary === "string") {
-      return parsed as unknown as PendingGoogleEventDeleteDraft;
-    }
-
-    if (parsed.kind === "google_event_delete_batch" && Array.isArray(parsed.events) && parsed.events.length > 0) {
-      return parsed as unknown as PendingGoogleEventDeleteBatchDraft;
-    }
-
-    if (parsed.kind === "google_event_import_batch" && Array.isArray(parsed.events) && parsed.events.length > 0) {
-      return parsed as unknown as PendingGoogleEventImportBatchDraft;
-    }
-  } catch {
-    return undefined;
-  }
-
-  return undefined;
-}
-
-function stripPendingDraftMarkers(text: string): string {
-  return text
-    .replace(/EMAIL_REPLY_DRAFT[\s\S]*?END_EMAIL_REPLY_DRAFT/gi, "")
-    .replace(/WHATSAPP_REPLY_DRAFT[\s\S]*?END_WHATSAPP_REPLY_DRAFT/gi, "")
-    .replace(/GOOGLE_TASK_DRAFT[\s\S]*?END_GOOGLE_TASK_DRAFT/gi, "")
-    .replace(/GOOGLE_EVENT_DRAFT[\s\S]*?END_GOOGLE_EVENT_DRAFT/gi, "")
-    .replace(/GOOGLE_EVENT_UPDATE_DRAFT[\s\S]*?END_GOOGLE_EVENT_UPDATE_DRAFT/gi, "")
-    .replace(/GOOGLE_EVENT_DELETE_DRAFT[\s\S]*?END_GOOGLE_EVENT_DELETE_DRAFT/gi, "")
-    .replace(/GOOGLE_EVENT_IMPORT_BATCH_DRAFT[\s\S]*?END_GOOGLE_EVENT_IMPORT_BATCH_DRAFT/gi, "")
-    .replace(/GOOGLE_EVENT_DELETE_BATCH_DRAFT[\s\S]*?END_GOOGLE_EVENT_DELETE_BATCH_DRAFT/gi, "")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
-}
-
 function buildApprovalCallbackData(action: "send" | "edit" | "discard", id: number): string {
   return `approval:${action}:${id}`;
 }
@@ -1196,39 +862,6 @@ function buildApprovalInlineKeyboard(id: number): TelegramInlineKeyboardMarkup {
       { text: "Ignorar", callback_data: buildApprovalCallbackData("discard", id) },
     ]],
   };
-}
-
-function sanitizeToolPayloadLeak(text: string): string {
-  const trimmed = text.trim();
-  const normalized = trimmed
-    .replace(/^```(?:json)?\s*/i, "")
-    .replace(/\s*```$/i, "")
-    .trim();
-
-  if (!(normalized.startsWith("{") && normalized.endsWith("}"))) {
-    return text;
-  }
-
-  try {
-    const parsed = JSON.parse(normalized) as Record<string, unknown>;
-    const functionName =
-      (typeof parsed.function_name === "string" && parsed.function_name) ||
-      (typeof parsed.name === "string" && parsed.name) ||
-      undefined;
-    const hasArguments = parsed.arguments && typeof parsed.arguments === "object";
-
-    if (!functionName || !hasArguments) {
-      return text;
-    }
-
-    return [
-      "O agente tentou executar uma ferramenta, mas não consolidou a resposta final.",
-      `Ferramenta detectada: ${functionName}`,
-      "Reformule de forma mais específica ou tente novamente.",
-    ].join("\n");
-  } catch {
-    return text;
-  }
 }
 
 function buildEmailSendSuccessMessage(rawResult: unknown, fallbackUid: string): string {
@@ -1588,40 +1221,6 @@ function buildGenericControlledActionFailureMessage(label: string, rawResult: un
   return [`Não foi possível concluir ${label} nesta tentativa.`, `Detalhe: ${message}`].join("\n");
 }
 
-function buildAgentPrompt(
-  message: TelegramMessage,
-  text: string,
-  history: ChatTurn[],
-  mode?: OperationalModeState | null,
-): string {
-  const promptLines = [
-    "Contexto do Telegram:",
-    `chat_type=${message.chat.type}`,
-    `chat_id=${message.chat.id}`,
-    `user_id=${message.from?.id ?? "unknown"}`,
-    "",
-  ];
-
-  if (history.length > 0) {
-    promptLines.push("Histórico recente do chat:");
-    for (const turn of history) {
-      promptLines.push(`${turn.role === "user" ? "Usuário" : "Assistente"}: ${turn.text}`);
-    }
-    promptLines.push("");
-  }
-
-  if (mode) {
-    promptLines.push("Modo operacional ativo:");
-    promptLines.push(`modo_operacional=${mode.kind}`);
-    promptLines.push(`motivo=${mode.reason}`);
-    promptLines.push("");
-  }
-
-  promptLines.push("Mensagem atual do usuário:");
-  promptLines.push(text);
-  return promptLines.join("\n");
-}
-
 function extractOperationalModeIntent(text: string): { action: "activate" | "deactivate"; reason: string } | null {
   const normalized = normalizeIntentText(text);
   if (!normalized) {
@@ -1768,6 +1367,7 @@ export class TelegramService {
     private readonly config: AppConfig,
     private readonly logger: Logger,
     private readonly core: AgentCore,
+    private readonly requestOrchestrator: RequestOrchestrator,
     private readonly contentOps: ContentOpsStore,
     googleAuth: GoogleWorkspaceAuthService,
     private readonly api: TelegramApi,
@@ -2900,7 +2500,14 @@ export class TelegramService {
           chatId: message.chat.id,
           channel: "telegram",
           prompt: normalizedText,
-          intent: this.core.resolveIntent(buildAgentPrompt(message, normalizedText, history, this.getOperationalMode(message.chat.id))),
+          intent: this.core.resolveIntent(buildTelegramChannelPrompt({
+            chatType: message.chat.type,
+            chatId: message.chat.id,
+            userId: message.from?.id,
+            text: normalizedText,
+            history,
+            operationalMode: this.getOperationalMode(message.chat.id),
+          })),
         });
         if (clarification) {
           const reply = this.clarificationEngine.buildQuestionMessage(clarification);
@@ -2935,13 +2542,24 @@ export class TelegramService {
         this.clearPendingActionDraft(message.chat.id);
       }
       try {
-        const result = await this.core.runUserPrompt(
-          buildAgentPrompt(message, effectiveText, history, this.getOperationalMode(message.chat.id)),
-          { chatId: message.chat.id },
-        );
-        const structuredDecisionReply = await this.resolveStructuredAssistantDecisionReply(result.reply, message.chat.id);
+        const orchestrated = await this.requestOrchestrator.run({
+          channel: "telegram",
+          agentPrompt: buildTelegramChannelPrompt({
+            chatType: message.chat.type,
+            chatId: message.chat.id,
+            userId: message.from?.id,
+            text: effectiveText,
+            history,
+            operationalMode: this.getOperationalMode(message.chat.id),
+          }),
+          recentMessages: history.map((turn) => turn.text).slice(-6),
+          options: { chatId: message.chat.id },
+          draftReplyFormatter: audioAttachment
+            ? (draft) => buildCompactPendingActionReply(draft)
+            : undefined,
+        });
         await this.endTypingFeedback(message.chat.id, typingSession);
-        if (structuredDecisionReply.handled) {
+        if (orchestrated.structuredReplyHandled) {
           this.appendChatTurn(message.chat.id, {
             role: "user",
             text: pendingEmailDraft
@@ -2952,20 +2570,16 @@ export class TelegramService {
           });
           this.appendChatTurn(message.chat.id, {
             role: "assistant",
-            text: structuredDecisionReply.visibleReply,
+            text: orchestrated.visibleReply,
           });
-          await this.sendText(message.chat.id, structuredDecisionReply.visibleReply, {
+          await this.sendText(message.chat.id, orchestrated.visibleReply, {
             reply_to_message_id: message.message_id,
             disable_web_page_preview: true,
           });
           return;
         }
-        const nextPendingDraft = extractPendingActionDraft(result.reply);
-        const baseVisibleReply = sanitizeToolPayloadLeak(stripPendingDraftMarkers(result.reply) || result.reply);
-        const visibleReply =
-          audioAttachment && nextPendingDraft
-            ? buildCompactPendingActionReply(nextPendingDraft) ?? baseVisibleReply
-            : baseVisibleReply;
+        const nextPendingDraft = orchestrated.pendingDraft;
+        const visibleReply = orchestrated.visibleReply;
         const approval = nextPendingDraft
           ? this.persistPendingApproval(message.chat.id, nextPendingDraft)
           : undefined;
@@ -3266,30 +2880,38 @@ export class TelegramService {
       replyToMessageId: input.replyToMessageId,
     });
     try {
-      const result = await this.core.runUserPrompt(
-        buildAgentPrompt(message, input.effectiveText, history, this.getOperationalMode(message.chat.id)),
-        { chatId: message.chat.id },
-      );
-      const structuredDecisionReply = await this.resolveStructuredAssistantDecisionReply(result.reply, message.chat.id);
+      const orchestrated = await this.requestOrchestrator.run({
+        channel: "telegram",
+        agentPrompt: buildTelegramChannelPrompt({
+          chatType: message.chat.type,
+          chatId: message.chat.id,
+          userId: message.from?.id,
+          text: input.effectiveText,
+          history,
+          operationalMode: this.getOperationalMode(message.chat.id),
+        }),
+        recentMessages: history.map((turn) => turn.text).slice(-6),
+        options: { chatId: message.chat.id },
+      });
       await this.endTypingFeedback(message.chat.id, typingSession);
-      if (structuredDecisionReply.handled) {
+      if (orchestrated.structuredReplyHandled) {
         this.appendChatTurn(message.chat.id, {
           role: "user",
           text: input.userHistoryText,
         });
         this.appendChatTurn(message.chat.id, {
           role: "assistant",
-          text: structuredDecisionReply.visibleReply,
+          text: orchestrated.visibleReply,
         });
-        await this.sendText(message.chat.id, structuredDecisionReply.visibleReply, {
+        await this.sendText(message.chat.id, orchestrated.visibleReply, {
           reply_to_message_id: input.replyToMessageId,
           disable_web_page_preview: true,
         });
         return;
       }
 
-      const nextPendingDraft = extractPendingActionDraft(result.reply);
-      const visibleReply = sanitizeToolPayloadLeak(stripPendingDraftMarkers(result.reply) || result.reply);
+      const nextPendingDraft = orchestrated.pendingDraft;
+      const visibleReply = orchestrated.visibleReply;
       const approval = nextPendingDraft
         ? this.persistPendingApproval(message.chat.id, nextPendingDraft)
         : undefined;
@@ -5453,102 +5075,6 @@ export class TelegramService {
       subject: latestApproval.subject,
     });
     return hydratedDraft;
-  }
-
-  private async resolveStructuredAssistantDecisionReply(rawReply: string, chatId?: number): Promise<{
-    handled: boolean;
-    visibleReply: string;
-  }> {
-    const parsed = parseAssistantDecisionReply(rawReply);
-    if (parsed.kind === "absent") {
-      return {
-        handled: false,
-        visibleReply: "",
-      };
-    }
-
-    if (parsed.kind === "invalid") {
-      this.logger.warn("Rejected invalid structured assistant decision", {
-        error: parsed.error,
-      });
-      return {
-        handled: true,
-        visibleReply: [
-          "Recebi uma decisão estruturada inválida para execução local.",
-          "Nada foi executado.",
-          `Detalhe: ${parsed.error}`,
-        ].join("\n"),
-      };
-    }
-
-    if (!parsed.decision.should_execute || !parsed.decision.execution) {
-      return {
-        handled: true,
-        visibleReply: parsed.decision.assistant_reply,
-      };
-    }
-
-    try {
-      const resolvedPayload = parsed.decision.execution.tool === "execute_task_operation"
-        ? await this.core.resolveStructuredTaskOperationPayload(parsed.decision.execution.payload, {
-            recentMessages: chatId !== undefined
-              ? this.getChatHistory(chatId).map((turn) => turn.text).slice(-6)
-              : [],
-          })
-        : null;
-
-      if (resolvedPayload?.kind === "clarify") {
-        return {
-          handled: true,
-          visibleReply: resolvedPayload.message,
-        };
-      }
-
-      if (resolvedPayload?.kind === "invalid") {
-        return {
-          handled: true,
-          visibleReply: [
-            "Não consegui executar a decisão estruturada local.",
-            `Detalhe: ${resolvedPayload.error}`,
-          ].join("\n"),
-        };
-      }
-
-      const execution = await this.core.executeToolDirect(
-        parsed.decision.execution.tool,
-        resolvedPayload?.kind === "resolved"
-          ? resolvedPayload.payload
-          : parsed.decision.execution.payload,
-      );
-      const rawResult = execution.rawResult && typeof execution.rawResult === "object"
-        ? execution.rawResult as Record<string, unknown>
-        : undefined;
-      if (rawResult?.ok === false) {
-        return {
-          handled: true,
-          visibleReply: [
-            "Não consegui executar a decisão estruturada local.",
-            `Detalhe: ${typeof rawResult.error === "string" ? rawResult.error : "Falha na execução local."}`,
-          ].join("\n"),
-        };
-      }
-
-      return {
-        handled: true,
-        visibleReply: parsed.decision.assistant_reply,
-      };
-    } catch (error) {
-      this.logger.error("Structured assistant decision execution failed", {
-        error: error instanceof Error ? error.message : String(error),
-      });
-      return {
-        handled: true,
-        visibleReply: [
-          "Não consegui executar a decisão estruturada local.",
-          `Detalhe: ${error instanceof Error ? error.message : String(error)}`,
-        ].join("\n"),
-      };
-    }
   }
 
   private persistPendingApproval(chatId: number, draft: PendingActionDraft) {

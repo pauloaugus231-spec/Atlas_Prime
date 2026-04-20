@@ -19,6 +19,7 @@ As fases entregues até agora incluem:
 - orquestrador inicial de domínios com policy engine por risco e autonomia
 - pacote inicial de secretario operacional com Google Calendar, Tasks e Contacts em leitura e escrita controlada
 - presenca conversacional no Telegram com `typing`, timeout e cleanup para requests mais lentos
+- camada de orquestracao incremental entre canal e core, com adaptadores de mensagem por canal, despacho estruturado de acoes e tratamento compartilhado de rascunhos
 - workspace isolado
 - leitura apenas de diretorios autorizados
 - plugins de base, growth e email com confirmacao explicita de envio
@@ -31,6 +32,10 @@ As fases entregues até agora incluem:
     /src
       /config
       /core
+        channel-message-adapter.ts
+        request-orchestrator.ts
+        action-dispatcher.ts
+        draft-action-service.ts
       /integrations
         /telegram
       /plugins
