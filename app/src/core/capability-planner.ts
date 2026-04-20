@@ -20,6 +20,7 @@ export type CapabilityPlannerAction =
   | "respond_direct"
   | "run_web_search"
   | "run_maps_route"
+  | "run_maps_places_search"
   | "inspect_gaps"
   | "inspect_capabilities";
 
@@ -42,13 +43,21 @@ export interface CapabilityPlan {
     destination: string;
     includeTolls: boolean;
     objective: TravelRequest["objective"];
+    roundTrip: boolean;
     fuelPricePerLiter?: number;
     consumptionKmPerLiter?: number;
     vehicle?: string;
   };
+  placesRequest?: {
+    query: string;
+    category: NearbyPlaceRequest["category"];
+    categoryLabel: string;
+    locationQuery: string;
+    maxResults: number;
+  };
 }
 
-interface TravelRequest {
+export interface TravelRequest {
   objective: "travel_cost_estimate" | "route_distance" | "route_tolls";
   origin?: string;
   destination?: string;
@@ -57,12 +66,30 @@ interface TravelRequest {
   consumptionKmPerLiter?: number;
   vehicle?: string;
   wantsTolls: boolean;
+  roundTrip: boolean;
 }
 
 interface WebResearchRequest {
   objective: "recent_information_lookup" | "web_comparison" | "source_validation";
   query: string;
   mode: WebResearchMode;
+}
+
+interface NearbyPlaceRequest {
+  objective: "place_discovery";
+  category: "restaurant" | "hotel" | "pharmacy" | "hospital" | "market" | "fuel" | "parking";
+  categoryLabel: string;
+  locationQuery?: string;
+}
+
+interface TravelResearchRequest {
+  objective: "flight_search" | "bus_search" | "hotel_search";
+  query: string;
+  mode: WebResearchMode;
+  origin?: string;
+  destination?: string;
+  city?: string;
+  periodHint?: string;
 }
 
 function normalize(value: string): string {
@@ -114,7 +141,11 @@ export function looksLikeCapabilityAwareTravelPrompt(prompt: string): boolean {
 }
 
 export function looksLikeCapabilityAwareWebPrompt(prompt: string): boolean {
-  return extractWebResearchRequest(prompt) !== null;
+  return extractWebResearchRequest(prompt) !== null || extractTravelResearchRequest(prompt) !== null;
+}
+
+export function looksLikeCapabilityAwarePlacePrompt(prompt: string): boolean {
+  return extractNearbyPlaceRequest(prompt) !== null;
 }
 
 function parseNumber(value: string | undefined): number | undefined {
@@ -238,7 +269,153 @@ function extractWebResearchRequest(prompt: string): WebResearchRequest | null {
   };
 }
 
-function extractTravelRequest(prompt: string): TravelRequest | null {
+const MONTH_PATTERN = /\b(?:janeiro|fevereiro|marco|março|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro)\b/i;
+
+function extractPeriodHint(prompt: string): string | undefined {
+  const monthMatch = prompt.match(MONTH_PATTERN);
+  if (monthMatch?.[0]) {
+    return monthMatch[0].trim();
+  }
+  const dateMatch = prompt.match(/\b\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?\b/);
+  if (dateMatch?.[0]) {
+    return dateMatch[0].trim();
+  }
+  const relativeMatch = prompt.match(/\b(?:hoje|amanha|amanhã|semana que vem|proximo fim de semana|próximo fim de semana|fim de semana|mes que vem|mês que vem)\b/i);
+  return relativeMatch?.[0]?.trim();
+}
+
+function extractTravelRoutePair(prompt: string): { origin?: string; destination?: string } {
+  const directRouteMatch = prompt.match(
+    /\bde\s+(.+?)\s+(?:para|ate|até)\s+(.+?)(?=(?:\s+(?:em|no|na)\s+\b(?:janeiro|fevereiro|marco|março|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro)\b|[,.!?]|$))/i,
+  );
+  return {
+    origin: directRouteMatch?.[1]?.trim(),
+    destination: directRouteMatch?.[2]?.trim(),
+  };
+}
+
+function extractTravelCity(prompt: string): string | undefined {
+  const cityMatch = prompt.match(
+    /\b(?:em|na|no)\s+(.+?)(?=(?:\s+(?:em|no|na)\s+\b(?:janeiro|fevereiro|marco|março|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro)\b|[,.!?]|$))/i,
+  );
+  return cityMatch?.[1]?.trim();
+}
+
+function extractTravelResearchRequest(prompt: string): TravelResearchRequest | null {
+  const normalized = normalize(prompt);
+  const wantsFlights = includesAny(normalized, ["passagem aerea", "passagem aérea", "passagens aereas", "passagens aéreas", "voo", "voos"]);
+  const wantsBuses = includesAny(normalized, ["onibus", "ônibus", "rodoviario", "rodoviário", "passagem de onibus", "passagem de ônibus"]);
+  const wantsHotels = includesAny(normalized, ["hotel", "hoteis", "hotéis", "hospedagem", "pousada"]);
+  if (!wantsFlights && !wantsBuses && !wantsHotels) {
+    return null;
+  }
+
+  const hasSearchIntent = includesAny(normalized, [
+    "compare",
+    "comparar",
+    "buscar",
+    "busque",
+    "procure",
+    "pesquise",
+    "encontre",
+    "quero ver",
+    "me mostra",
+    "mostra",
+    "veja",
+  ]);
+  if (!hasSearchIntent) {
+    return null;
+  }
+
+  const routePair = extractTravelRoutePair(prompt);
+  const periodHint = extractPeriodHint(prompt);
+  const city = wantsHotels ? (extractTravelCity(prompt) ?? routePair.destination) : undefined;
+  const objective = wantsFlights ? "flight_search" : wantsBuses ? "bus_search" : "hotel_search";
+
+  return {
+    objective,
+    query: prompt.trim(),
+    mode: includesAny(normalized, ["compare", "comparar"]) ? "executive" : inferResearchMode(normalized),
+    origin: routePair.origin,
+    destination: routePair.destination,
+    city,
+    periodHint,
+  };
+}
+
+function extractNearbyPlaceRequest(prompt: string): NearbyPlaceRequest | null {
+  const normalized = normalize(prompt);
+  const proximityFocusedSignal = includesAny(normalized, [
+    "perto de mim",
+    "perto daqui",
+    "proximo de",
+    "próximo de",
+    "perto do",
+    "perto da",
+  ]);
+  const category = includesAny(normalized, ["restaurante", "restaurantes", "janta", "jantar", "almoco", "almoço", "comida", "pizza", "hamburguer", "hambúrguer", "cafe", "café"])
+    ? { category: "restaurant" as const, categoryLabel: "restaurantes" }
+    : includesAny(normalized, ["hotel", "hoteis", "hotéis", "pousada", "hospedagem"])
+        ? { category: "hotel" as const, categoryLabel: "hotéis" }
+      : includesAny(normalized, ["farmacia", "farmácia", "drogaria"])
+        ? { category: "pharmacy" as const, categoryLabel: "farmácias" }
+        : includesAny(normalized, ["hospital", "upa", "ubs", "posto de saude", "posto de saúde"])
+          ? { category: "hospital" as const, categoryLabel: "hospitais" }
+          : includesAny(normalized, ["mercado", "supermercado"])
+            ? { category: "market" as const, categoryLabel: "mercados" }
+            : includesAny(normalized, ["posto de gasolina", "combustivel", "combustível"])
+              ? { category: "fuel" as const, categoryLabel: "postos de combustível" }
+              : includesAny(normalized, ["estacionamento", "parking"])
+                ? { category: "parking" as const, categoryLabel: "estacionamentos" }
+                : null;
+  if (!category) {
+    return null;
+  }
+  if (category.category === "hotel" && !proximityFocusedSignal && !includesAny(normalized, ["maps", "google maps"])) {
+    return null;
+  }
+
+  const hasLocalDiscoverySignal = includesAny(normalized, [
+    "perto de mim",
+    "perto daqui",
+    "proximo de",
+    "próximo de",
+    "perto do",
+    "perto da",
+    "na ",
+    "no ",
+    "em ",
+    "me mostra",
+    "mostra",
+    "onde tem",
+    "quais ",
+    "qual ",
+    "buscar",
+    "busque",
+    "procure",
+    "encontre",
+  ]);
+  if (!hasLocalDiscoverySignal) {
+    return null;
+  }
+
+  const locationMatch = prompt.match(
+    /\b(?:perto de|proximo de|próximo de|perto do|perto da|na|no|em)\s+(.+?)(?=(?:\s+(?:aberto|bons?|baratos?|com)\b|[.?!,;:]|$))/i,
+  );
+  const locationQuery = locationMatch?.[1]?.trim();
+
+  return {
+    objective: "place_discovery",
+    category: category.category,
+    categoryLabel: category.categoryLabel,
+    locationQuery:
+      locationQuery && !includesAny(normalized, ["perto de mim", "perto daqui", "próximo de mim", "proximo de mim"])
+        ? locationQuery
+        : undefined,
+  };
+}
+
+export function extractTravelRequest(prompt: string): TravelRequest | null {
   const normalized = normalize(prompt);
   const hasTravelSignal = includesAny(normalized, [
     "quanto vou gastar",
@@ -266,6 +443,7 @@ function extractTravelRequest(prompt: string): TravelRequest | null {
   const fuelPriceMatch = prompt.match(/\b(?:gasolina|etanol|diesel|combust[ií]vel)\b.*?(?:r\$?\s*)?(\d+(?:[.,]\d+)?)/i);
   const consumptionMatch = prompt.match(/\b(\d+(?:[.,]\d+)?)\s*(?:km\/l|km por litro)\b/i);
   const vehicleMatch = prompt.match(/\b(?:meu|minha)\s+([a-z0-9][^,.!?]+?)\s*(?=(?:\?|$| com |\s+de\s+.+?(?:ate|até|para)\s+))/i);
+  const roundTrip = includesAny(normalized, ["ida e volta", "ir e voltar", "ida/volta", "retorno", "volta tambem", "volta também"]);
 
   const wantsCost = includesAny(normalized, ["quanto vou gastar", "quanto vai gastar", "custo", "gasto"]);
   const wantsTolls = includesAny(normalized, ["pedagio", "pedágio"]);
@@ -280,6 +458,7 @@ function extractTravelRequest(prompt: string): TravelRequest | null {
     consumptionKmPerLiter: parseNumber(consumptionMatch?.[1]),
     vehicle: vehicleMatch?.[1]?.trim(),
     wantsTolls: wantsTolls || (wantsCost && !wantsDistance && includesAny(normalized, ["viagem", "rota"])),
+    roundTrip,
   };
 }
 
@@ -294,10 +473,14 @@ function buildTravelDirectReply(request: TravelRequest): string | undefined {
   }
 
   const litersNeeded = request.distanceKm / request.consumptionKmPerLiter;
-  const fuelCost = litersNeeded * request.fuelPricePerLiter;
+  const totalLiters = request.roundTrip ? litersNeeded * 2 : litersNeeded;
+  const distanceLabel = request.roundTrip
+    ? `${formatNumber(request.distanceKm * 2)} km ida e volta`
+    : `${formatNumber(request.distanceKm)} km`;
+  const fuelCost = totalLiters * request.fuelPricePerLiter;
   const lines = [
     `Consigo estimar isso com os dados que você passou.`,
-    `Para ${formatNumber(request.distanceKm)} km, o consumo estimado fica em ${formatNumber(litersNeeded)} L e o gasto com combustível em ${formatMoney(fuelCost)}.`,
+    `Para ${distanceLabel}, o consumo estimado fica em ${formatNumber(totalLiters)} L e o gasto com combustível em ${formatMoney(fuelCost)}.`,
   ];
   if (request.wantsTolls) {
     lines.push("Esse valor ainda está sem pedágios.");
@@ -321,7 +504,9 @@ export class CapabilityPlanner {
   }
 
   isPlanningCandidate(prompt: string): boolean {
-    return looksLikeCapabilityAwareTravelPrompt(prompt) || looksLikeCapabilityAwareWebPrompt(prompt);
+    return looksLikeCapabilityAwareTravelPrompt(prompt)
+      || looksLikeCapabilityAwareWebPrompt(prompt)
+      || looksLikeCapabilityAwarePlacePrompt(prompt);
   }
 
   listCapabilityAvailability(): CapabilityAvailabilityRecord[] {
@@ -347,6 +532,32 @@ export class CapabilityPlanner {
       return plan;
     }
 
+    const nearbyPlaceRequest = extractNearbyPlaceRequest(prompt);
+    if (nearbyPlaceRequest) {
+      const plan = this.planNearbyPlaceRequest(nearbyPlaceRequest);
+      this.logger.info("Capability planner produced nearby place plan", {
+        objective: plan.objective,
+        suggestedAction: plan.suggestedAction,
+        missingRequirements: plan.missingRequirements.map((item) => item.name),
+        missingUserData: plan.missingUserData,
+      });
+      return plan;
+    }
+
+    const travelResearchRequest = extractTravelResearchRequest(prompt);
+    if (travelResearchRequest) {
+      const plan = this.planTravelResearchRequest(travelResearchRequest);
+      this.logger.info("Capability planner produced travel research plan", {
+        objective: plan.objective,
+        suggestedAction: plan.suggestedAction,
+        missingRequirements: plan.missingRequirements.map((item) => item.name),
+        missingUserData: plan.missingUserData,
+        webQuery: plan.webQuery,
+        researchMode: plan.researchMode,
+      });
+      return plan;
+    }
+
     const webResearchRequest = extractWebResearchRequest(prompt);
     if (webResearchRequest) {
       const plan = this.planWebResearchRequest(webResearchRequest);
@@ -366,6 +577,147 @@ export class CapabilityPlanner {
     }
 
     return null;
+  }
+
+  private planNearbyPlaceRequest(request: NearbyPlaceRequest): CapabilityPlan {
+    const availability = [this.resolveAvailabilityByName("maps.places_search")];
+    const placesCapability = availability[0];
+    const missingRequirements: CapabilityGapRequirement[] = [];
+    if (placesCapability.availability !== "available") {
+      missingRequirements.push({
+        kind: placesCapability.availability === "needs_configuration" ? "configuration" : "capability",
+        name: placesCapability.name,
+        label: placesCapability.name,
+        detail: placesCapability.reason,
+      });
+    }
+
+    const missingUserData = request.locationQuery ? [] : ["local de referência"];
+    if (missingRequirements.length === 0 && missingUserData.length > 0) {
+      return {
+        objective: request.objective,
+        summary: "O Atlas consegue buscar lugares próximos se você disser só o ponto de referência.",
+        confidence: 0.83,
+        requiredCapabilities: ["maps.places_search"],
+        availability,
+        missingRequirements: [],
+        missingUserData,
+        suggestedAction: "ask_user_data",
+      };
+    }
+
+    if (missingRequirements.length > 0) {
+      return {
+        objective: request.objective,
+        summary: "O pedido depende de busca de lugares no mapa, que ainda não está pronta neste ambiente.",
+        confidence: 0.83,
+        requiredCapabilities: ["maps.places_search"],
+        availability,
+        missingRequirements,
+        missingUserData,
+        suggestedAction: "handle_gap",
+        gapType: "places_search_missing",
+        shouldLogGap: true,
+      };
+    }
+
+    return {
+      objective: request.objective,
+      summary: "O Atlas consegue buscar lugares próximos com Google Maps.",
+      confidence: 0.89,
+      requiredCapabilities: ["maps.places_search"],
+      availability,
+      missingRequirements: [],
+      missingUserData: [],
+      suggestedAction: "run_maps_places_search",
+      placesRequest: {
+        query: `${request.categoryLabel} perto de ${request.locationQuery}`,
+        category: request.category,
+        categoryLabel: request.categoryLabel,
+        locationQuery: request.locationQuery as string,
+        maxResults: 5,
+      },
+    };
+  }
+
+  private planTravelResearchRequest(request: TravelResearchRequest): CapabilityPlan {
+    const availability = [this.resolveAvailabilityByName("web.search")];
+    const missingRequirements: CapabilityGapRequirement[] = [];
+    const missingUserData: string[] = [];
+    const webSearchCapability = availability[0];
+
+    if (webSearchCapability.availability !== "available") {
+      missingRequirements.push({
+        kind: webSearchCapability.availability === "needs_configuration" ? "configuration" : "capability",
+        name: webSearchCapability.name,
+        label: webSearchCapability.name,
+        detail: webSearchCapability.reason,
+      });
+    }
+
+    if (request.objective === "hotel_search") {
+      if (!request.city) {
+        missingUserData.push("cidade ou região da hospedagem");
+      }
+      if (!request.periodHint) {
+        missingUserData.push("período da viagem");
+      }
+    } else {
+      if (!request.origin) {
+        missingUserData.push("origem");
+      }
+      if (!request.destination) {
+        missingUserData.push("destino");
+      }
+      if (!request.periodHint) {
+        missingUserData.push("período da viagem");
+      }
+    }
+
+    if (missingRequirements.length === 0 && missingUserData.length > 0) {
+      return {
+        objective: request.objective,
+        summary: "O Atlas consegue pesquisar isso se você fechar só os dados mínimos da viagem.",
+        confidence: 0.8,
+        requiredCapabilities: ["web.search"],
+        availability,
+        missingRequirements: [],
+        missingUserData: [...new Set(missingUserData)],
+        suggestedAction: "ask_user_data",
+        webQuery: request.query,
+        researchMode: request.mode,
+      };
+    }
+
+    if (missingRequirements.length > 0) {
+      return {
+        objective: request.objective,
+        summary: "O pedido depende de pesquisa externa que ainda não está disponível neste ambiente.",
+        confidence: 0.82,
+        requiredCapabilities: ["web.search"],
+        availability,
+        missingRequirements,
+        missingUserData,
+        suggestedAction: "handle_gap",
+        gapType: "travel_search_missing",
+        shouldLogGap: true,
+        webQuery: request.query,
+        researchMode: request.mode,
+      };
+    }
+
+    return {
+      objective: request.objective,
+      summary: "O Atlas consegue pesquisar essa opção de viagem na web e sintetizar fontes.",
+      confidence: 0.87,
+      requiredCapabilities: ["web.search"],
+      availability,
+      missingRequirements: [],
+      missingUserData: [],
+      suggestedAction: "run_web_search",
+      webQuery: request.query,
+      researchMode: request.mode,
+    };
   }
 
   private planWebResearchRequest(request: WebResearchRequest): CapabilityPlan {
@@ -521,6 +873,7 @@ export class CapabilityPlanner {
             destination: request.destination,
             includeTolls: true,
             objective: request.objective,
+            roundTrip: request.roundTrip,
             fuelPricePerLiter: request.fuelPricePerLiter,
             consumptionKmPerLiter: request.consumptionKmPerLiter,
             vehicle: request.vehicle,
@@ -542,6 +895,7 @@ export class CapabilityPlanner {
           destination: request.destination,
           includeTolls: request.wantsTolls || request.objective === "travel_cost_estimate",
           objective: request.objective,
+          roundTrip: request.roundTrip,
           fuelPricePerLiter: request.fuelPricePerLiter,
           consumptionKmPerLiter: request.consumptionKmPerLiter,
           vehicle: request.vehicle,
@@ -636,8 +990,9 @@ export class CapabilityPlanner {
         reason = "Pesquisa web direta disponível.";
         break;
       case "maps.geocode":
+      case "maps.places_search":
         availability = mapsStatus.ready ? "available" : "needs_configuration";
-        reason = mapsStatus.ready ? "Google Maps/Places pronto para lookup de locais." : mapsStatus.message;
+        reason = mapsStatus.ready ? "Google Maps/Places pronto para lookup e busca de lugares." : mapsStatus.message;
         break;
       case "maps.route":
       case "maps.distance":
@@ -670,6 +1025,12 @@ export class CapabilityPlanner {
       case "visual.profile_analysis":
         availability = "partial";
         reason = "Há fluxo visual guiado, mas a análise de perfil ainda é parcial.";
+        break;
+      case "travel.flights":
+      case "travel.buses":
+      case "travel.hotels":
+        availability = "partial";
+        reason = "Hoje o Atlas pesquisa isso via web search, sem integração dedicada de reserva/marketplace.";
         break;
       case "identity.read":
       case "memory.learned_preferences.read":

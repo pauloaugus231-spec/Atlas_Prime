@@ -433,6 +433,7 @@ export class WhatsAppConversationService {
     if (normalizeText(text) === "/reset") {
       this.chatHistory.delete(chatKey);
       this.pendingActionDrafts.delete(chatKey);
+      this.core.clearChatState(stableChatId(chatKey));
       return this.reply(input, "Histórico curto deste WhatsApp foi limpo.");
     }
 

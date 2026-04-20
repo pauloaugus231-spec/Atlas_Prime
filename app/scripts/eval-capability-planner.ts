@@ -13,6 +13,7 @@ import { createBuiltInCapabilities } from "../src/core/capabilities/index.js";
 import { createDeclaredCapabilityCatalog } from "../src/core/capabilities/catalog.js";
 import {
   CapabilityPlanner,
+  looksLikeCapabilityAwarePlacePrompt,
   looksLikeCapabilityAwareTravelPrompt,
   looksLikeCapabilityInspectionPrompt,
 } from "../src/core/capability-planner.js";
@@ -143,6 +144,16 @@ async function run(): Promise<void> {
     detail: JSON.stringify(travelCostWithMapsReady, null, 2),
   });
 
+  const roundTripTravelCostWithMapsReady = mapsReadyPlanner.plan("quanto vou gastar de Porto Alegre até Torres ida e volta com gasolina 6,19 e 11 km/l?");
+  results.push({
+    name: "round_trip_travel_cost_marks_route_request_as_round_trip",
+    passed:
+      roundTripTravelCostWithMapsReady?.objective === "travel_cost_estimate"
+      && roundTripTravelCostWithMapsReady.suggestedAction === "run_maps_route"
+      && roundTripTravelCostWithMapsReady.routeRequest?.roundTrip === true,
+    detail: JSON.stringify(roundTripTravelCostWithMapsReady, null, 2),
+  });
+
   const travelGapPlan = planner.plan("quanto vou gastar de Porto Alegre até Torres com meu JAC T40?");
   results.push({
     name: "travel_cost_request_with_missing_maps_routes_to_gap_handler",
@@ -184,6 +195,46 @@ async function run(): Promise<void> {
     detail: JSON.stringify(travelDirectPlan, null, 2),
   });
 
+  const nearbyPlacesPlan = mapsReadyPlanner.plan("me mostra restaurantes na Restinga");
+  results.push({
+    name: "nearby_place_request_uses_maps_places_search_when_maps_is_available",
+    passed:
+      nearbyPlacesPlan?.objective === "place_discovery"
+      && nearbyPlacesPlan.suggestedAction === "run_maps_places_search"
+      && nearbyPlacesPlan.placesRequest?.locationQuery === "Restinga",
+    detail: JSON.stringify(nearbyPlacesPlan, null, 2),
+  });
+
+  const nearbyMissingLocationPlan = mapsReadyPlanner.plan("me mostra restaurantes perto de mim");
+  results.push({
+    name: "nearby_place_request_asks_only_for_reference_location_when_missing",
+    passed:
+      nearbyMissingLocationPlan?.objective === "place_discovery"
+      && nearbyMissingLocationPlan.suggestedAction === "ask_user_data"
+      && nearbyMissingLocationPlan.missingUserData.includes("local de referência"),
+    detail: JSON.stringify(nearbyMissingLocationPlan, null, 2),
+  });
+
+  const flightSearchPlan = planner.plan("compare preços de passagens aéreas de Porto Alegre para Recife em dezembro");
+  results.push({
+    name: "flight_search_request_routes_to_web_search_with_minimal_structure",
+    passed:
+      flightSearchPlan?.objective === "flight_search"
+      && flightSearchPlan.suggestedAction === "run_web_search"
+      && flightSearchPlan.requiredCapabilities.includes("web.search"),
+    detail: JSON.stringify(flightSearchPlan, null, 2),
+  });
+
+  const hotelMissingPeriodPlan = planner.plan("me mostra hotéis em Torres");
+  results.push({
+    name: "hotel_search_request_asks_for_period_when_missing",
+    passed:
+      hotelMissingPeriodPlan?.objective === "hotel_search"
+      && hotelMissingPeriodPlan.suggestedAction === "ask_user_data"
+      && hotelMissingPeriodPlan.missingUserData.includes("período da viagem"),
+    detail: JSON.stringify(hotelMissingPeriodPlan, null, 2),
+  });
+
   results.push({
     name: "inspection_prompt_detector_matches_capability_questions",
     passed:
@@ -196,6 +247,13 @@ async function run(): Promise<void> {
     passed:
       looksLikeCapabilityAwareTravelPrompt("quanto vou gastar de Porto Alegre até Torres?")
       && looksLikeCapabilityAwareTravelPrompt("qual a distância de Porto Alegre até Torres?"),
+  });
+
+  results.push({
+    name: "place_prompt_detector_matches_nearby_requests",
+    passed:
+      looksLikeCapabilityAwarePlacePrompt("me mostra restaurantes na Restinga")
+      && looksLikeCapabilityAwarePlacePrompt("hotel perto do aeroporto"),
   });
 
   const webResearchPlan = planner.plan("qual a cotação do dólar hoje?");

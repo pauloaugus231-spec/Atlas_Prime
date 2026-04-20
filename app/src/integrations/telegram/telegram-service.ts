@@ -2370,6 +2370,7 @@ export class TelegramService {
       this.clearChatHistory(message.chat.id);
       this.clearPendingChoiceState(message.chat.id);
       this.pendingVisualTasks.delete(message.chat.id);
+      this.core.clearChatState(message.chat.id);
       await this.sendText(message.chat.id, buildWelcomeMessage(bot, userId, userAllowed), {
         reply_to_message_id: message.message_id,
       });
@@ -2391,6 +2392,7 @@ export class TelegramService {
       this.clearChatHistory(message.chat.id);
       this.clearPendingChoiceState(message.chat.id);
       this.pendingVisualTasks.delete(message.chat.id);
+      this.core.clearChatState(message.chat.id);
       await this.sendText(message.chat.id, "Histórico curto deste chat foi limpo.", {
         reply_to_message_id: message.message_id,
       });
@@ -2892,28 +2894,30 @@ export class TelegramService {
         return;
       }
 
-      const history = this.getChatHistory(message.chat.id);
-      const clarification = await this.clarificationEngine.maybeRequest({
-        chatId: message.chat.id,
-        channel: "telegram",
-        prompt: normalizedText,
-        intent: this.core.resolveIntent(buildAgentPrompt(message, normalizedText, history, this.getOperationalMode(message.chat.id))),
-      });
-      if (clarification) {
-        const reply = this.clarificationEngine.buildQuestionMessage(clarification);
-        this.appendChatTurn(message.chat.id, {
-          role: "user",
-          text: normalizedText,
+      if (!this.core.shouldBypassClarification(normalizedText, { chatId: message.chat.id })) {
+        const history = this.getChatHistory(message.chat.id);
+        const clarification = await this.clarificationEngine.maybeRequest({
+          chatId: message.chat.id,
+          channel: "telegram",
+          prompt: normalizedText,
+          intent: this.core.resolveIntent(buildAgentPrompt(message, normalizedText, history, this.getOperationalMode(message.chat.id))),
         });
-        this.appendChatTurn(message.chat.id, {
-          role: "assistant",
-          text: reply,
-        });
-        await this.sendText(message.chat.id, reply, {
-          reply_to_message_id: message.message_id,
-          disable_web_page_preview: true,
-        });
-        return;
+        if (clarification) {
+          const reply = this.clarificationEngine.buildQuestionMessage(clarification);
+          this.appendChatTurn(message.chat.id, {
+            role: "user",
+            text: normalizedText,
+          });
+          this.appendChatTurn(message.chat.id, {
+            role: "assistant",
+            text: reply,
+          });
+          await this.sendText(message.chat.id, reply, {
+            reply_to_message_id: message.message_id,
+            disable_web_page_preview: true,
+          });
+          return;
+        }
       }
     }
 

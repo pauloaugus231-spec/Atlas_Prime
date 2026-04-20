@@ -5,8 +5,10 @@ export const PRODUCT_GAP_TYPES = [
   "missing_tooling",
   "product_gap_from_usage",
   "maps_required",
+  "places_search_missing",
   "web_search_missing",
   "travel_estimation_missing",
+  "travel_search_missing",
 ] as const;
 
 export const PRODUCT_GAP_STATUS = [

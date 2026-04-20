@@ -17,6 +17,11 @@ import {
   isGoogleTaskCreatePrompt,
 } from "./google-draft-utils.js";
 import { interpretConversationTurn } from "./conversation-interpreter.js";
+import {
+  looksLikeCapabilityAwarePlacePrompt,
+  looksLikeCapabilityAwareTravelPrompt,
+  looksLikeCapabilityAwareWebPrompt,
+} from "./capability-planner.js";
 
 function normalize(value: string): string {
   return value
@@ -90,6 +95,14 @@ export class ClarificationEngine {
     }
 
     if (looksLikeLowFrictionReadPrompt(input.prompt, input.intent)) {
+      return null;
+    }
+
+    if (
+      looksLikeCapabilityAwareTravelPrompt(input.prompt)
+      || looksLikeCapabilityAwareWebPrompt(input.prompt)
+      || looksLikeCapabilityAwarePlacePrompt(input.prompt)
+    ) {
       return null;
     }
 
@@ -192,6 +205,14 @@ export class ClarificationEngine {
     }
 
     if (looksLikeLowFrictionReadPrompt(prompt, intent)) {
+      return null;
+    }
+
+    if (
+      looksLikeCapabilityAwareTravelPrompt(prompt)
+      || looksLikeCapabilityAwareWebPrompt(prompt)
+      || looksLikeCapabilityAwarePlacePrompt(prompt)
+    ) {
       return null;
     }
 

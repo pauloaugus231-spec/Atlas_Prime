@@ -127,12 +127,25 @@ import { shouldAttemptExternalReasoning, type ExternalReasoningStage } from "./e
 import { CapabilityRegistry } from "./capability-registry.js";
 import {
   CapabilityPlanner,
+  looksLikeCapabilityAwarePlacePrompt,
   looksLikeCapabilityAwareTravelPrompt,
   looksLikeCapabilityAwareWebPrompt,
   looksLikeCapabilityInspectionPrompt,
   type CapabilityPlan,
 } from "./capability-planner.js";
 import type { CapabilityAvailabilityRecord } from "../types/capability.js";
+import {
+  buildPlaceDiscoveryGoalFromPrompt,
+  buildPlaceDiscoveryPrompt,
+  buildTravelPlanningGoalFromPrompt,
+  buildTravelPlanningPrompt,
+  describePlaceDiscoveryGoal,
+  describeTravelPlanningGoal,
+  isActiveGoalCancellationPrompt,
+  mergePlaceDiscoveryGoal,
+  mergeTravelPlanningGoal,
+  type ActivePlanningGoal,
+} from "./active-goal-state.js";
 
 function stripCodeFences(value: string): string {
   const trimmed = value.trim();
@@ -5174,6 +5187,26 @@ function buildPlaceLookupReply(result: GooglePlaceLookupResult): string {
   return lines.join("\n");
 }
 
+function buildPlaceDiscoveryReply(input: {
+  categoryLabel: string;
+  locationQuery: string;
+  results: GooglePlaceLookupResult[];
+}): string {
+  if (input.results.length === 0) {
+    return `Não encontrei ${input.categoryLabel} com segurança perto de ${input.locationQuery}. Se quiser, me diga outro ponto de referência ou bairro.`;
+  }
+
+  return [
+    `Encontrei ${input.results.length} opção(ões) de ${input.categoryLabel} perto de ${input.locationQuery}.`,
+    ...input.results.slice(0, 4).map((item, index) => {
+      const label = item.name ?? item.shortFormattedAddress ?? item.formattedAddress;
+      const address = item.shortFormattedAddress ?? item.formattedAddress;
+      return `${index + 1}. ${label} — ${address}${item.mapsUrl ? ` | Maps: ${item.mapsUrl}` : ""}`;
+    }),
+    "Se quiser, eu comparo melhor essas opções ou uso uma delas no teu calendário/roteiro.",
+  ].join("\n");
+}
+
 function buildUserPreferencesReply(preferences: UserPreferences): string {
   return [
     "Preferências ativas:",
@@ -5335,6 +5368,14 @@ function formatCapabilityObjectiveLabel(objective: CapabilityPlan["objective"]):
       return "calcular a distância da rota";
     case "route_tolls":
       return "estimar pedágios da rota";
+    case "place_discovery":
+      return "buscar lugares próximos";
+    case "flight_search":
+      return "pesquisar passagens aéreas";
+    case "bus_search":
+      return "pesquisar passagens de ônibus";
+    case "hotel_search":
+      return "pesquisar hospedagem";
     case "recent_information_lookup":
       return "buscar informação recente na web";
     case "web_comparison":
@@ -5413,10 +5454,22 @@ function buildProductGapsReply(items: ProductGapRecord[]): string {
 }
 
 function buildCapabilityPlanUserDataReply(plan: CapabilityPlan): string {
-  return [
-    `Entendi que você quer ${formatCapabilityObjectiveLabel(plan.objective)}.`,
-    `Para eu seguir, só me passe: ${plan.missingUserData.join(" e ")}.`,
-  ].join(" ");
+  const fields = plan.missingUserData.join(" e ");
+  switch (plan.objective) {
+    case "travel_cost_estimate":
+      return `Consigo seguir com essa estimativa. Me passe só ${fields}.`;
+    case "route_distance":
+    case "route_tolls":
+      return `Consigo calcular isso. Só preciso de ${fields}.`;
+    case "place_discovery":
+      return `Consigo buscar isso no mapa. Me passe só ${fields}.`;
+    case "flight_search":
+    case "bus_search":
+    case "hotel_search":
+      return `Consigo pesquisar isso. Me passe só ${fields}.`;
+    default:
+      return `Consigo seguir com isso. Me passe só ${fields}.`;
+  }
 }
 
 function buildCapabilityGapReply(plan: CapabilityPlan, gap?: ProductGapRecord): string {
@@ -5472,38 +5525,48 @@ function buildProductGapDetailReply(item: ProductGapRecord): string {
 function buildMapsRouteReply(input: {
   objective: CapabilityPlan["objective"];
   route: GoogleRouteLookupResult;
+  roundTrip?: boolean;
   fuelPricePerLiter?: number;
   consumptionKmPerLiter?: number;
 }): string {
   const lines: string[] = [];
-  const distanceLabel = input.route.localizedDistanceText?.trim() || `${formatKilometers(input.route.distanceMeters)} km`;
-  const durationLabel = input.route.localizedDurationText?.trim() || formatDurationMinutes(input.route.durationSeconds);
+  const multiplier = input.roundTrip ? 2 : 1;
+  const baseDistanceKm = input.route.distanceMeters / 1000;
+  const effectiveDistanceMeters = input.route.distanceMeters * multiplier;
+  const effectiveDurationSeconds = input.route.durationSeconds * multiplier;
+  const distanceLabel = input.roundTrip
+    ? `${formatKilometers(effectiveDistanceMeters)} km ida e volta`
+    : input.route.localizedDistanceText?.trim() || `${formatKilometers(input.route.distanceMeters)} km`;
+  const durationLabel = input.roundTrip
+    ? `${formatDurationMinutes(effectiveDurationSeconds)} no total`
+    : input.route.localizedDurationText?.trim() || formatDurationMinutes(input.route.durationSeconds);
+  const routeLabel = input.roundTrip ? "ida" : "rota";
 
   if (input.objective === "route_distance") {
     lines.push(
-      `A rota entre ${input.route.origin.formattedAddress} e ${input.route.destination.formattedAddress} fica em ${distanceLabel} e leva perto de ${durationLabel}.`,
+      `A ${routeLabel} entre ${input.route.origin.formattedAddress} e ${input.route.destination.formattedAddress} fica em ${distanceLabel} e leva perto de ${durationLabel}.`,
     );
   } else if (input.objective === "route_tolls") {
     if (!input.route.hasTolls) {
       lines.push(
-        `Na rota entre ${input.route.origin.formattedAddress} e ${input.route.destination.formattedAddress}, não encontrei pedágios esperados.`,
+        `Na ${routeLabel} entre ${input.route.origin.formattedAddress} e ${input.route.destination.formattedAddress}, não encontrei pedágios esperados.`,
       );
     } else if (input.route.tollPriceKnown && input.route.tolls && input.route.tolls.length > 0) {
       const tollSummary = input.route.tolls
-        .map((item) => formatMoneyAmount(item.currencyCode, item.amount))
+        .map((item) => formatMoneyAmount(item.currencyCode, item.amount * multiplier))
         .join(" | ");
       lines.push(
-        `Na rota entre ${input.route.origin.formattedAddress} e ${input.route.destination.formattedAddress}, o pedágio estimado fica em ${tollSummary}.`,
+        `Na ${routeLabel} entre ${input.route.origin.formattedAddress} e ${input.route.destination.formattedAddress}, o pedágio estimado fica em ${tollSummary}.`,
       );
     } else {
       lines.push(
-        `A rota entre ${input.route.origin.formattedAddress} e ${input.route.destination.formattedAddress} parece ter pedágio, mas o valor estimado não veio dessa consulta.`,
+        `A ${routeLabel} entre ${input.route.origin.formattedAddress} e ${input.route.destination.formattedAddress} parece ter pedágio, mas o valor estimado não veio dessa consulta.`,
       );
     }
     lines.push(`Distância: ${distanceLabel}. Tempo estimado: ${durationLabel}.`);
   } else {
     lines.push(
-      `A rota entre ${input.route.origin.formattedAddress} e ${input.route.destination.formattedAddress} fica em ${distanceLabel} e leva perto de ${durationLabel}.`,
+      `A ${routeLabel} entre ${input.route.origin.formattedAddress} e ${input.route.destination.formattedAddress} fica em ${distanceLabel} e leva perto de ${durationLabel}.`,
     );
 
     if (
@@ -5511,7 +5574,7 @@ function buildMapsRouteReply(input: {
       && typeof input.consumptionKmPerLiter === "number"
       && input.consumptionKmPerLiter > 0
     ) {
-      const distanceKm = input.route.distanceMeters / 1000;
+      const distanceKm = baseDistanceKm * multiplier;
       const litersNeeded = distanceKm / input.consumptionKmPerLiter;
       const fuelCost = litersNeeded * input.fuelPricePerLiter;
       lines.push(
@@ -5522,13 +5585,13 @@ function buildMapsRouteReply(input: {
         if (input.route.tollPriceKnown && input.route.tolls && input.route.tolls.length > 0) {
           const brlToll = input.route.tolls.find((item) => item.currencyCode === "BRL") ?? input.route.tolls[0];
           if (brlToll.currencyCode === "BRL") {
-            const totalCost = fuelCost + brlToll.amount;
+            const totalCost = fuelCost + (brlToll.amount * multiplier);
             lines.push(
               `Com pedágio, o total estimado fica em ${formatMoneyAmount(brlToll.currencyCode, totalCost)}.`,
             );
           } else {
             lines.push(
-              `Pedágio estimado: ${formatMoneyAmount(brlToll.currencyCode, brlToll.amount)}.`,
+              `Pedágio estimado: ${formatMoneyAmount(brlToll.currencyCode, brlToll.amount * multiplier)}.`,
             );
           }
         } else {
@@ -9814,6 +9877,7 @@ export interface AgentRunOptions {
 
 export class AgentCore {
   private readonly capabilityPlanner: CapabilityPlanner;
+  private readonly activeGoals = new Map<string, ActivePlanningGoal>();
 
   constructor(
     private readonly config: AppConfig,
@@ -9865,6 +9929,37 @@ export class AgentCore {
 
   resolveIntent(userPrompt: string): IntentResolution {
     return this.intentRouter.resolve(userPrompt);
+  }
+
+  shouldBypassClarification(userPrompt: string, options?: AgentRunOptions): boolean {
+    if (this.capabilityPlanner.isPlanningCandidate(userPrompt)) {
+      return true;
+    }
+
+    const activeGoal = this.getActiveGoal(options?.chatId);
+    if (!activeGoal) {
+      return false;
+    }
+
+    if (isActiveGoalCancellationPrompt(userPrompt)) {
+      return true;
+    }
+
+    const merged = activeGoal.kind === "travel_planning"
+      ? mergeTravelPlanningGoal(activeGoal, userPrompt)
+      : mergePlaceDiscoveryGoal(activeGoal, userPrompt);
+    if (merged.hasMeaningfulUpdate) {
+      return true;
+    }
+    const interpreted = interpretConversationTurn({ text: userPrompt });
+    return !interpreted.isTopLevelRequest;
+  }
+
+  clearChatState(chatId?: string | number): void {
+    if (chatId === undefined || chatId === null) {
+      return;
+    }
+    this.activeGoals.delete(String(chatId));
   }
 
   async runDailyEditorialResearch(input?: {
@@ -10249,6 +10344,320 @@ export class AgentCore {
     };
   }
 
+  private getActiveGoal(chatId?: string | number): ActivePlanningGoal | undefined {
+    if (chatId === undefined || chatId === null) {
+      return undefined;
+    }
+    return this.activeGoals.get(String(chatId));
+  }
+
+  private setActiveGoal(chatId: string | number, goal: ActivePlanningGoal): void {
+    this.activeGoals.set(String(chatId), goal);
+  }
+
+  private buildActiveGoalUserDataReply(goal: ActivePlanningGoal, plan: CapabilityPlan): string {
+    if (goal.kind === "place_discovery") {
+      const known = describePlaceDiscoveryGoal(goal);
+      const missing = plan.missingUserData.join(" e ");
+      if (known.length === 0) {
+        return buildCapabilityPlanUserDataReply(plan);
+      }
+      return `Já peguei ${known.join(", ")}. Agora só falta ${missing}.`;
+    }
+
+    const known = describeTravelPlanningGoal(goal);
+    const missing = plan.missingUserData.join(" e ");
+    if (known.length === 0) {
+      return buildCapabilityPlanUserDataReply(plan);
+    }
+    return `Já peguei ${known.join(", ")}. Agora só falta ${missing}.`;
+  }
+
+  private async executeCapabilityPlan(input: {
+    userPrompt: string;
+    requestId: string;
+    requestLogger: Logger;
+    orchestration: OrchestrationContext;
+    preferences: UserPreferences;
+    plan: CapabilityPlan;
+    relatedSkill?: string;
+    activeGoal?: ActivePlanningGoal;
+    activeGoalChatId?: string | number;
+  }): Promise<AgentRunResult | null> {
+    const { plan } = input;
+
+    if (plan.suggestedAction === "respond_direct") {
+      if (input.activeGoalChatId !== undefined) {
+        this.clearChatState(input.activeGoalChatId);
+      }
+      return {
+        requestId: input.requestId,
+        reply: plan.directReply ?? plan.summary,
+        messages: buildBaseMessages(input.userPrompt, input.orchestration, input.preferences),
+        toolExecutions: [
+          {
+            toolName: "capability_planner",
+            resultPreview: JSON.stringify({
+              objective: plan.objective,
+              suggestedAction: plan.suggestedAction,
+            }),
+          },
+        ],
+      };
+    }
+
+    if (plan.suggestedAction === "run_web_search") {
+      return this.executeDirectWebResearch({
+        userPrompt: input.userPrompt,
+        query: plan.webQuery ?? input.userPrompt,
+        requestId: input.requestId,
+        requestLogger: input.requestLogger,
+        orchestration: input.orchestration,
+        researchMode: plan.researchMode ?? "executive",
+      });
+    }
+
+    if (plan.suggestedAction === "run_maps_route") {
+      if (!plan.routeRequest) {
+        return null;
+      }
+
+      const route = await this.googleMaps.computeRoute({
+        origin: plan.routeRequest.origin,
+        destination: plan.routeRequest.destination,
+        includeTolls: plan.routeRequest.includeTolls,
+      });
+
+      if (!route) {
+        return {
+          requestId: input.requestId,
+          reply: "Não consegui fechar essa rota com segurança. Me confirma origem e destino do jeito mais direto possível.",
+          messages: buildBaseMessages(input.userPrompt, input.orchestration, input.preferences),
+          toolExecutions: [
+            {
+              toolName: "maps.route",
+              resultPreview: JSON.stringify({
+                origin: plan.routeRequest.origin,
+                destination: plan.routeRequest.destination,
+                found: false,
+              }),
+            },
+          ],
+        };
+      }
+
+      if (input.activeGoalChatId !== undefined) {
+        this.clearChatState(input.activeGoalChatId);
+      }
+
+      return {
+        requestId: input.requestId,
+        reply: buildMapsRouteReply({
+          objective: plan.objective,
+          route,
+          roundTrip: plan.routeRequest.roundTrip,
+          fuelPricePerLiter: plan.routeRequest.fuelPricePerLiter,
+          consumptionKmPerLiter: plan.routeRequest.consumptionKmPerLiter,
+        }),
+        messages: buildBaseMessages(input.userPrompt, input.orchestration, input.preferences),
+        toolExecutions: [
+          {
+            toolName: "maps.route",
+            resultPreview: JSON.stringify({
+              origin: route.origin.formattedAddress,
+              destination: route.destination.formattedAddress,
+              distanceMeters: route.distanceMeters,
+              durationSeconds: route.durationSeconds,
+              hasTolls: route.hasTolls,
+              tolls: route.tolls,
+              roundTrip: plan.routeRequest.roundTrip,
+            }).slice(0, 240),
+          },
+        ],
+      };
+    }
+
+    if (plan.suggestedAction === "run_maps_places_search") {
+      if (!plan.placesRequest) {
+        return null;
+      }
+
+      const placesResult = await this.googleMaps.searchPlaces(plan.placesRequest.query, {
+        maxResults: plan.placesRequest.maxResults,
+      });
+
+      if (input.activeGoalChatId !== undefined) {
+        this.clearChatState(input.activeGoalChatId);
+      }
+
+      return {
+        requestId: input.requestId,
+        reply: buildPlaceDiscoveryReply({
+          categoryLabel: plan.placesRequest.categoryLabel,
+          locationQuery: plan.placesRequest.locationQuery,
+          results: placesResult.results,
+        }),
+        messages: buildBaseMessages(input.userPrompt, input.orchestration, input.preferences),
+        toolExecutions: [
+          {
+            toolName: "maps.places_search",
+            resultPreview: JSON.stringify({
+              query: plan.placesRequest.query,
+              total: placesResult.results.length,
+              topResult: placesResult.results[0]?.formattedAddress ?? null,
+            }).slice(0, 240),
+          },
+        ],
+      };
+    }
+
+    if (plan.suggestedAction === "ask_user_data") {
+      return {
+        requestId: input.requestId,
+        reply: input.activeGoal
+          ? this.buildActiveGoalUserDataReply(input.activeGoal, plan)
+          : buildCapabilityPlanUserDataReply(plan),
+        messages: buildBaseMessages(input.userPrompt, input.orchestration, input.preferences),
+        toolExecutions: [
+          {
+            toolName: "capability_planner",
+            resultPreview: JSON.stringify({
+              objective: plan.objective,
+              suggestedAction: plan.suggestedAction,
+              missingUserData: plan.missingUserData,
+            }),
+          },
+        ],
+      };
+    }
+
+    if (plan.suggestedAction !== "handle_gap") {
+      return null;
+    }
+
+    const missingCapabilities = [...new Set(plan.missingRequirements
+      .filter((item) => item.kind !== "user_data")
+      .map((item) => item.name))];
+    const missingRequirementKinds = [...new Set(plan.missingRequirements
+      .filter((item) => item.kind !== "user_data")
+      .map((item) => item.kind))];
+    const gap = plan.shouldLogGap
+      ? this.personalMemory.recordProductGapObservation({
+          signature: buildCapabilityGapSignature(plan),
+          type: plan.gapType ?? "capability_gap",
+          description: input.userPrompt,
+          inferredObjective: plan.objective,
+          missingCapabilities,
+          missingRequirementKinds,
+          contextSummary: plan.summary,
+          relatedSkill: input.relatedSkill,
+          impact: plan.objective === "travel_cost_estimate" ? "high" : "medium",
+        })
+      : undefined;
+
+    return {
+      requestId: input.requestId,
+      reply: buildCapabilityGapReply(plan, gap),
+      messages: buildBaseMessages(input.userPrompt, input.orchestration, input.preferences),
+      toolExecutions: [
+        {
+          toolName: "capability_planner",
+          resultPreview: JSON.stringify({
+            objective: plan.objective,
+            suggestedAction: plan.suggestedAction,
+            gapId: gap?.id ?? null,
+            missingCapabilities,
+            missingUserData: plan.missingUserData,
+          }),
+        },
+      ],
+    };
+  }
+
+  private async tryRunActiveGoalTurn(
+    userPrompt: string,
+    requestId: string,
+    requestLogger: Logger,
+    orchestration: OrchestrationContext,
+    preferences: UserPreferences,
+    options?: AgentRunOptions,
+  ): Promise<AgentRunResult | null> {
+    const activeGoal = this.getActiveGoal(options?.chatId);
+    if (!activeGoal) {
+      return null;
+    }
+
+    if (isActiveGoalCancellationPrompt(userPrompt)) {
+      this.clearChatState(options?.chatId);
+      return {
+        requestId,
+        reply: activeGoal.kind === "travel_planning"
+          ? "Certo, descartei essa estimativa de viagem. Pode mandar o próximo pedido."
+          : "Certo, descartei essa busca de lugares. Pode mandar o próximo pedido.",
+        messages: buildBaseMessages(userPrompt, orchestration, preferences),
+        toolExecutions: [],
+      };
+    }
+
+    const interpreted = interpretConversationTurn({ text: userPrompt });
+    const promptLooksCompatible = activeGoal.kind === "travel_planning"
+      ? looksLikeCapabilityAwareTravelPrompt(userPrompt)
+      : looksLikeCapabilityAwarePlacePrompt(userPrompt);
+    const merged = activeGoal.kind === "travel_planning"
+      ? mergeTravelPlanningGoal(activeGoal, userPrompt)
+      : mergePlaceDiscoveryGoal(activeGoal, userPrompt);
+
+    if (!merged.hasMeaningfulUpdate && !promptLooksCompatible && interpreted.isTopLevelRequest) {
+      requestLogger.info("Clearing active goal due to clear topic shift", {
+        chatId: options?.chatId,
+        intent: interpreted.intent,
+        skill: interpreted.skill,
+        kind: activeGoal.kind,
+      });
+      this.clearChatState(options?.chatId);
+      return null;
+    }
+
+    if (!merged.hasMeaningfulUpdate && !promptLooksCompatible) {
+      if (!interpreted.isShortConfirmation) {
+        return null;
+      }
+    }
+
+    if (options?.chatId !== undefined) {
+      this.setActiveGoal(options.chatId, merged.goal);
+    }
+
+    const planningPrompt = merged.goal.kind === "travel_planning"
+      ? buildTravelPlanningPrompt(merged.goal)
+      : buildPlaceDiscoveryPrompt(merged.goal);
+    const plan = this.capabilityPlanner.plan(planningPrompt, interpreted);
+    if (!plan) {
+      return null;
+    }
+
+    requestLogger.info("Continuing active travel goal", {
+      chatId: options?.chatId,
+      objective: merged.goal.objective,
+      kind: merged.goal.kind,
+      changedKeys: merged.changedKeys,
+      suggestedAction: plan.suggestedAction,
+      missingUserData: plan.missingUserData,
+    });
+
+    return this.executeCapabilityPlan({
+      userPrompt: planningPrompt,
+      requestId,
+      requestLogger,
+      orchestration,
+      preferences,
+      plan,
+      relatedSkill: interpreted.skill,
+      activeGoal: merged.goal,
+      activeGoalChatId: options?.chatId,
+    });
+  }
+
   async runUserPrompt(userPrompt: string, options?: AgentRunOptions): Promise<AgentRunResult> {
     const requestId = randomUUID();
     const requestLogger = this.logger.child({ requestId });
@@ -10373,12 +10782,24 @@ export class AgentCore {
     if (directCapabilityInspectionResult) {
       return directCapabilityInspectionResult;
     }
+    const activeGoalResult = await this.tryRunActiveGoalTurn(
+      activeUserPrompt,
+      requestId,
+      requestLogger,
+      orchestration,
+      preferences,
+      options,
+    );
+    if (activeGoalResult) {
+      return activeGoalResult;
+    }
     const directCapabilityPlanningResult = await this.tryRunDirectCapabilityAwarePlanning(
       activeUserPrompt,
       requestId,
       requestLogger,
       orchestration,
       preferences,
+      options,
     );
     if (directCapabilityPlanningResult) {
       return directCapabilityPlanningResult;
@@ -15986,6 +16407,7 @@ export class AgentCore {
     requestLogger: Logger,
     orchestration: OrchestrationContext,
     preferences: UserPreferences,
+    options?: AgentRunOptions,
   ): Promise<AgentRunResult | null> {
     if (!this.capabilityPlanner.isPlanningCandidate(userPrompt)) {
       return null;
@@ -15995,7 +16417,20 @@ export class AgentCore {
       text: userPrompt,
       operationalMode: this.personalMemory.getOperationalState().mode,
     });
-    const plan = this.capabilityPlanner.plan(userPrompt, interpreted);
+    let effectivePrompt = userPrompt;
+    let activeGoal: ActivePlanningGoal | undefined;
+    if (options?.chatId !== undefined) {
+      const seededGoal = buildTravelPlanningGoalFromPrompt(userPrompt) ?? buildPlaceDiscoveryGoalFromPrompt(userPrompt);
+      if (seededGoal) {
+        activeGoal = seededGoal;
+        this.setActiveGoal(options.chatId, seededGoal);
+        effectivePrompt = seededGoal.kind === "travel_planning"
+          ? buildTravelPlanningPrompt(seededGoal)
+          : buildPlaceDiscoveryPrompt(seededGoal);
+      }
+    }
+
+    const plan = this.capabilityPlanner.plan(effectivePrompt, interpreted);
     if (!plan) {
       return null;
     }
@@ -16003,154 +16438,24 @@ export class AgentCore {
     requestLogger.info("Using direct capability planning route", {
       objective: plan.objective,
       suggestedAction: plan.suggestedAction,
+      prompt: effectivePrompt,
       missingRequirements: plan.missingRequirements.map((item) => ({
         name: item.name,
         kind: item.kind,
       })),
       missingUserData: plan.missingUserData,
     });
-
-    if (plan.suggestedAction === "respond_direct") {
-      return {
-        requestId,
-        reply: plan.directReply ?? plan.summary,
-        messages: buildBaseMessages(userPrompt, orchestration, preferences),
-        toolExecutions: [
-          {
-            toolName: "capability_planner",
-            resultPreview: JSON.stringify({
-              objective: plan.objective,
-              suggestedAction: plan.suggestedAction,
-            }),
-          },
-        ],
-      };
-    }
-
-    if (plan.suggestedAction === "run_web_search") {
-      return this.executeDirectWebResearch({
-        userPrompt,
-        query: plan.webQuery ?? userPrompt,
-        requestId,
-        requestLogger,
-        orchestration,
-        researchMode: plan.researchMode ?? "executive",
-      });
-    }
-
-    if (plan.suggestedAction === "run_maps_route") {
-      if (!plan.routeRequest) {
-        return null;
-      }
-
-      const route = await this.googleMaps.computeRoute({
-        origin: plan.routeRequest.origin,
-        destination: plan.routeRequest.destination,
-        includeTolls: plan.routeRequest.includeTolls,
-      });
-
-      if (!route) {
-        return {
-          requestId,
-          reply: "Não consegui fechar essa rota com segurança. Me confirma origem e destino do jeito mais direto possível.",
-          messages: buildBaseMessages(userPrompt, orchestration, preferences),
-          toolExecutions: [
-            {
-              toolName: "maps.route",
-              resultPreview: JSON.stringify({
-                origin: plan.routeRequest.origin,
-                destination: plan.routeRequest.destination,
-                found: false,
-              }),
-            },
-          ],
-        };
-      }
-
-      return {
-        requestId,
-        reply: buildMapsRouteReply({
-          objective: plan.objective,
-          route,
-          fuelPricePerLiter: plan.routeRequest.fuelPricePerLiter,
-          consumptionKmPerLiter: plan.routeRequest.consumptionKmPerLiter,
-        }),
-        messages: buildBaseMessages(userPrompt, orchestration, preferences),
-        toolExecutions: [
-          {
-            toolName: "maps.route",
-            resultPreview: JSON.stringify({
-              origin: route.origin.formattedAddress,
-              destination: route.destination.formattedAddress,
-              distanceMeters: route.distanceMeters,
-              durationSeconds: route.durationSeconds,
-              hasTolls: route.hasTolls,
-              tolls: route.tolls,
-            }).slice(0, 240),
-          },
-        ],
-      };
-    }
-
-    if (plan.suggestedAction === "ask_user_data") {
-      return {
-        requestId,
-        reply: buildCapabilityPlanUserDataReply(plan),
-        messages: buildBaseMessages(userPrompt, orchestration, preferences),
-        toolExecutions: [
-          {
-            toolName: "capability_planner",
-            resultPreview: JSON.stringify({
-              objective: plan.objective,
-              suggestedAction: plan.suggestedAction,
-              missingUserData: plan.missingUserData,
-            }),
-          },
-        ],
-      };
-    }
-
-    if (plan.suggestedAction !== "handle_gap") {
-      return null;
-    }
-
-    const missingCapabilities = [...new Set(plan.missingRequirements
-      .filter((item) => item.kind !== "user_data")
-      .map((item) => item.name))];
-    const missingRequirementKinds = [...new Set(plan.missingRequirements
-      .filter((item) => item.kind !== "user_data")
-      .map((item) => item.kind))];
-    const gap = plan.shouldLogGap
-      ? this.personalMemory.recordProductGapObservation({
-          signature: buildCapabilityGapSignature(plan),
-          type: plan.gapType ?? "capability_gap",
-          description: userPrompt,
-          inferredObjective: plan.objective,
-          missingCapabilities,
-          missingRequirementKinds,
-          contextSummary: plan.summary,
-          relatedSkill: interpreted.skill,
-          impact: plan.objective === "travel_cost_estimate" ? "high" : "medium",
-        })
-      : undefined;
-
-    return {
+    return this.executeCapabilityPlan({
+      userPrompt: effectivePrompt,
       requestId,
-      reply: buildCapabilityGapReply(plan, gap),
-      messages: buildBaseMessages(userPrompt, orchestration, preferences),
-      toolExecutions: [
-        {
-          toolName: "capability_planner",
-          resultPreview: JSON.stringify({
-            objective: plan.objective,
-            suggestedAction: plan.suggestedAction,
-            gapId: gap?.id ?? null,
-            missingCapabilities,
-            missingUserData: plan.missingUserData,
-          }),
-        },
-      ],
-    };
+      requestLogger,
+      orchestration,
+      preferences,
+      plan,
+      relatedSkill: interpreted.skill,
+      activeGoal,
+      activeGoalChatId: activeGoal ? options?.chatId : undefined,
+    });
   }
 
   private async tryRunDirectPersonalOperationalProfileUpdate(

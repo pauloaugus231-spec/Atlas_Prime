@@ -23,6 +23,11 @@ export interface GooglePlaceLookupResult {
   types: string[];
 }
 
+export interface GooglePlaceSearchResult {
+  query: string;
+  results: GooglePlaceLookupResult[];
+}
+
 export interface GoogleMoneyAmount {
   currencyCode: string;
   amount: number;
@@ -277,6 +282,33 @@ export class GoogleMapsService {
     return null;
   }
 
+  async searchPlaces(
+    query: string,
+    input?: {
+      regionCode?: string;
+      languageCode?: string;
+      maxResults?: number;
+    },
+  ): Promise<GooglePlaceSearchResult> {
+    const normalizedQuery = normalizeWhitespace(query);
+    if (!normalizedQuery) {
+      return {
+        query,
+        results: [],
+      };
+    }
+    this.assertReady();
+
+    const regionCode = (input?.regionCode?.trim() || this.config.defaultRegionCode).toUpperCase();
+    const languageCode = input?.languageCode?.trim() || this.config.defaultLanguageCode;
+    const maxResults = Math.min(Math.max(input?.maxResults ?? 5, 1), 8);
+    const results = await this.searchTextResults(normalizedQuery, languageCode, regionCode, maxResults);
+    return {
+      query: normalizedQuery,
+      results,
+    };
+  }
+
   async computeRoute(input: {
     origin: string;
     destination: string;
@@ -423,6 +455,16 @@ export class GoogleMapsService {
     languageCode: string,
     regionCode: string,
   ): Promise<GooglePlaceLookupResult | null> {
+    const results = await this.searchTextResults(query, languageCode, regionCode, 5);
+    return results[0] ?? null;
+  }
+
+  private async searchTextResults(
+    query: string,
+    languageCode: string,
+    regionCode: string,
+    maxResults: number,
+  ): Promise<GooglePlaceLookupResult[]> {
     const response = await fetch("https://places.googleapis.com/v1/places:searchText", {
       method: "POST",
       headers: {
@@ -435,7 +477,7 @@ export class GoogleMapsService {
         textQuery: query,
         languageCode,
         regionCode,
-        maxResultCount: 5,
+        maxResultCount: maxResults,
       }),
     });
 
@@ -444,33 +486,33 @@ export class GoogleMapsService {
       throw new Error(payload.error?.message || `Places search failed with status ${response.status}`);
     }
 
-    const place = payload.places?.[0];
-    if (!place?.formattedAddress) {
-      return null;
-    }
-
-    const latitude = place.location?.latitude;
-    const longitude = place.location?.longitude;
-    const placeId = place.id?.trim() || undefined;
-    return {
-      source: "places",
-      query,
-      name: place.displayName?.text?.trim() || undefined,
-      formattedAddress: place.formattedAddress.trim(),
-      shortFormattedAddress: place.shortFormattedAddress?.trim() || undefined,
-      mapsUrl:
-        place.googleMapsUri?.trim() ||
-        buildFallbackMapsUrl({
+    return (payload.places ?? [])
+      .filter((place) => Boolean(place.formattedAddress))
+      .map((place) => {
+        const latitude = place.location?.latitude;
+        const longitude = place.location?.longitude;
+        const placeId = place.id?.trim() || undefined;
+        const formattedAddress = place.formattedAddress?.trim() || "";
+        return {
+          source: "places" as const,
+          query,
+          name: place.displayName?.text?.trim() || undefined,
+          formattedAddress,
+          shortFormattedAddress: place.shortFormattedAddress?.trim() || undefined,
+          mapsUrl:
+            place.googleMapsUri?.trim() ||
+            buildFallbackMapsUrl({
+              placeId,
+              latitude,
+              longitude,
+              formattedAddress,
+            }),
           placeId,
-          latitude,
-          longitude,
-          formattedAddress: place.formattedAddress.trim(),
-        }),
-      placeId,
-      latitude: typeof latitude === "number" ? latitude : undefined,
-      longitude: typeof longitude === "number" ? longitude : undefined,
-      types: place.types ?? [],
-    };
+          latitude: typeof latitude === "number" ? latitude : undefined,
+          longitude: typeof longitude === "number" ? longitude : undefined,
+          types: place.types ?? [],
+        };
+      });
   }
 
   private async geocode(
