@@ -48,6 +48,7 @@ import { ContextPackService } from "./context-pack.js";
 import { ContextMemoryService } from "./context-memory.js";
 import { PersonalOperationalMemoryStore } from "./personal-operational-memory.js";
 import { AssistantActionDispatcher } from "./action-dispatcher.js";
+import { DraftApprovalService } from "./draft-approval-service.js";
 import { RequestOrchestrator } from "./request-orchestrator.js";
 
 function withLlmProviderConfig(config: AppConfig, providerConfig: LlmProviderConfig): AppConfig {
@@ -375,6 +376,10 @@ export async function createAgentCore() {
     core,
     logger.child({ scope: "assistant-action-dispatcher" }),
   );
+  const draftApprovalService = new DraftApprovalService(
+    approvalEngine,
+    logger.child({ scope: "draft-approval-service" }),
+  );
   const requestOrchestrator = new RequestOrchestrator(
     core,
     actionDispatcher,
@@ -395,6 +400,7 @@ export async function createAgentCore() {
     memoryEntities,
     approvalPolicy,
     approvalEngine,
+    draftApprovalService,
     clarificationEngine,
     workflowRuntime,
     entityLinker,

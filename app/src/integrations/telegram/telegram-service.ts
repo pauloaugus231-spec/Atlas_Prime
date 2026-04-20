@@ -2,13 +2,13 @@ import { setTimeout as delay } from "node:timers/promises";
 import type { AgentCore } from "../../core/agent-core.js";
 import { buildTelegramChannelPrompt, type ChannelConversationTurn } from "../../core/channel-message-adapter.js";
 import {
-  parsePendingActionDraftPayload,
   stripPendingDraftMarkers,
   type PendingActionDraft,
   type PendingEmailDraft,
   type PendingWhatsAppReplyDraft,
   type PendingYouTubePublishDraft,
 } from "../../core/draft-action-service.js";
+import type { DraftApprovalService } from "../../core/draft-approval-service.js";
 import type { RequestOrchestrator } from "../../core/request-orchestrator.js";
 import type { ContentOpsStore } from "../../core/content-ops.js";
 import type {
@@ -22,8 +22,8 @@ import type {
 import {
   adjustEventDraftFromInstruction,
   buildEventDraftFromPrompt,
-  buildGoogleTaskDraftReply,
   buildGoogleEventImportBatchDraftReply,
+  buildGoogleTaskDraftReply,
   buildGoogleEventDraftReply,
   buildGoogleEventUpdateDraftReply,
   buildTaskDraftFromPrompt,
@@ -31,15 +31,12 @@ import {
   isGoogleTaskCreatePrompt,
 } from "../../core/google-draft-utils.js";
 import {
-  refineScheduleImportEvents,
   resolveScheduleImportReplyCommand,
   resolveScheduleImportModeReply,
   selectScheduleImportEvents,
-  type ScheduleImportIgnoredItem,
   type ScheduleImportMode,
 } from "../../core/schedule-import-refinement.js";
 import {
-  buildMonitoredChannelAlertReply,
   buildMonitoredChannelAlertSummaryReply,
   resolveMonitoredAlertReplyAction,
   type MonitoredWhatsAppReplyDraft,
@@ -52,7 +49,6 @@ import {
   interpretConversationTurn,
   looksLikeNewTopLevelConversationTurn,
 } from "../../core/conversation-interpreter.js";
-import { normalizeVoiceTranscriptForTelegram } from "../../core/voice-semantic-normalizer.js";
 import { extractLatestShortPackage, type ParsedShortPackage } from "../../core/short-video-package.js";
 import type { AppConfig } from "../../types/config.js";
 import type { ApprovalInboxItemRecord } from "../../types/approval-inbox.js";
@@ -61,7 +57,6 @@ import type { Logger } from "../../types/logger.js";
 import type { OperationalState } from "../../types/operational-state.js";
 import type { GoogleWorkspaceAuthService } from "../google/google-auth.js";
 import { ShortVideoRenderService } from "../media/short-video-renderer.js";
-import { OpenAiScheduleImportService } from "../openai/schedule-import.js";
 import { YouTubePublisherService } from "../youtube/youtube-publisher.js";
 import {
   buildPendingChoiceContinuationPrompt,
@@ -70,42 +65,35 @@ import {
   type PendingChoiceState,
 } from "./pending-choice.js";
 import { resolveMonitoredAlertTurnBehavior } from "./monitored-alert-continuation.js";
-import type { ApprovalEngine } from "../../core/approval-engine.js";
 import type { ClarificationEngine } from "../../core/clarification-engine.js";
 import type { WhatsAppMessageStore } from "../../core/whatsapp-message-store.js";
 import { rankApprovals } from "../../core/approval-priority.js";
-import { matchPersonalCalendarTerms } from "../../core/calendar-relevance.js";
 import {
   extractExplicitGoogleAccountAlias,
   refersToBothGoogleAccounts,
   resolveShortGoogleAccountReply,
 } from "../../core/google-account-resolution.js";
 import { EvolutionApiClient } from "../whatsapp/evolution-api.js";
-import {
-  buildVoiceUserErrorMessage,
-  createVoiceMessageHandler,
-  type VoiceMessageHandler,
-} from "../voice/voice-message-handler.js";
-import { extractTelegramVoiceAttachment } from "../voice/telegram-voice.js";
 import { TelegramApi } from "./telegram-api.js";
 import type { PresenceSession } from "../presence/chat-presence.js";
 import { createTelegramPresenceSession } from "./telegram-presence.js";
 import {
-  buildVisualTaskFailureReply,
-  buildVisualTaskState,
-  buildVisualTaskStrategyReply,
-  buildVisualTaskUnsupportedReply,
-  detectVisualTaskPlan,
-  markVisualTaskDraftReady,
-  markVisualTaskExtractionFailed,
-  shouldAttemptScheduleImport,
-  type VisualTaskState,
-} from "./visual-task-flow.js";
+  normalizeTelegramText,
+  TelegramMessageRouter,
+  type TelegramCommandRoute,
+  type TelegramTextRoute,
+  type TelegramUnauthorizedRoute,
+  type TelegramUnsupportedRoute,
+} from "./telegram-message-router.js";
+import {
+  buildApprovalInlineKeyboard,
+  buildCompactPendingActionReply,
+  TelegramApprovalUi,
+} from "./telegram-approval-ui.js";
+import { TelegramMediaFlow } from "./telegram-media-flow.js";
 import type {
-  TelegramCallbackQuery,
   TelegramInlineKeyboardMarkup,
   TelegramMessage,
-  TelegramUpdate,
   TelegramUser,
 } from "./types.js";
 
@@ -184,13 +172,6 @@ type CalendarUndoAction =
       title?: string;
     };
 
-interface TelegramImportAttachment {
-  fileId: string;
-  fileName: string;
-  mimeType: string;
-  kind: "pdf" | "image";
-}
-
 function splitTelegramText(text: string, maxLength = 4000): string[] {
   if (text.length <= maxLength) {
     return [text];
@@ -212,87 +193,6 @@ function splitTelegramText(text: string, maxLength = 4000): string[] {
   }
 
   return parts;
-}
-
-function normalizeTelegramText(text: string, botUsername?: string): string {
-  if (!botUsername) {
-    return text.trim();
-  }
-  const mentionPattern = new RegExp(`@${botUsername}\\b`, "gi");
-  return text.replace(mentionPattern, "").trim();
-}
-
-function extractMessageText(message: TelegramMessage): string | undefined {
-  return message.text?.trim() || message.caption?.trim() || undefined;
-}
-
-function extractImportAttachment(message: TelegramMessage): TelegramImportAttachment | undefined {
-  const document = message.document;
-  if (document?.file_id) {
-    const normalizedName = document.file_name?.trim().toLowerCase() ?? "";
-    const mimeType = document.mime_type?.trim().toLowerCase() ?? "";
-    if (mimeType === "application/pdf" || normalizedName.endsWith(".pdf")) {
-      return {
-        fileId: document.file_id,
-        fileName: document.file_name?.trim() || `document_${message.message_id}.pdf`,
-        mimeType: "application/pdf",
-        kind: "pdf",
-      };
-    }
-    if (mimeType.startsWith("image/")) {
-      return {
-        fileId: document.file_id,
-        fileName: document.file_name?.trim() || `image_${message.message_id}.${mimeType.split("/")[1] || "png"}`,
-        mimeType,
-        kind: "image",
-      };
-    }
-  }
-
-  const bestPhoto = message.photo?.at(-1);
-  if (bestPhoto?.file_id) {
-    return {
-      fileId: bestPhoto.file_id,
-      fileName: `photo_${message.message_id}.jpg`,
-      mimeType: "image/jpeg",
-      kind: "image",
-    };
-  }
-
-  return undefined;
-}
-
-function containsBotMention(message: TelegramMessage, botUsername?: string): boolean {
-  if (!botUsername) {
-    return false;
-  }
-
-  const allEntities = [...(message.entities ?? []), ...(message.caption_entities ?? [])];
-  const sourceText = message.text ?? message.caption ?? "";
-
-  for (const entity of allEntities) {
-    if (entity.type !== "mention") {
-      continue;
-    }
-    const value = sourceText.slice(entity.offset, entity.offset + entity.length);
-    if (value.toLowerCase() === `@${botUsername.toLowerCase()}`) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
-function isReplyToBot(message: TelegramMessage, botUserId: number): boolean {
-  return message.reply_to_message?.from?.id === botUserId;
-}
-
-function shouldHandleMessage(message: TelegramMessage, bot: TelegramUser): boolean {
-  if (message.chat.type === "private") {
-    return true;
-  }
-
-  return containsBotMention(message, bot.username) || isReplyToBot(message, bot.id);
 }
 
 function buildUnauthorizedMessage(userId: number, hasAllowlist: boolean): string {
@@ -832,38 +732,6 @@ function isUndoLastCalendarChangeRequest(text: string): boolean {
   ].some((token) => normalized.includes(token));
 }
 
-function buildApprovalCallbackData(action: "send" | "edit" | "discard", id: number): string {
-  return `approval:${action}:${id}`;
-}
-
-function parseApprovalCallbackData(data: string | undefined): { action: "send" | "edit" | "discard"; id: number } | null {
-  if (!data) {
-    return null;
-  }
-  const match = data.match(/^approval:(send|edit|discard):(\d+)$/);
-  if (!match) {
-    return null;
-  }
-  const id = Number.parseInt(match[2], 10);
-  if (!Number.isFinite(id)) {
-    return null;
-  }
-  return {
-    action: match[1] as "send" | "edit" | "discard",
-    id,
-  };
-}
-
-function buildApprovalInlineKeyboard(id: number): TelegramInlineKeyboardMarkup {
-  return {
-    inline_keyboard: [[
-      { text: "Enviar", callback_data: buildApprovalCallbackData("send", id) },
-      { text: "Editar", callback_data: buildApprovalCallbackData("edit", id) },
-      { text: "Ignorar", callback_data: buildApprovalCallbackData("discard", id) },
-    ]],
-  };
-}
-
 function buildEmailSendSuccessMessage(rawResult: unknown, fallbackUid: string): string {
   const record = rawResult && typeof rawResult === "object" ? (rawResult as Record<string, unknown>) : undefined;
   const sent = record?.sent && typeof record.sent === "object"
@@ -955,105 +823,6 @@ function buildGoogleTaskCreateSuccessMessage(rawResult: unknown): string {
     lines.push(`ID: ${task.id}`);
   }
   return lines.join("\n");
-}
-
-function buildCompactPendingActionReply(draft: PendingActionDraft): string | undefined {
-  if (draft.kind === "whatsapp_reply") {
-    return [
-      `Rascunho WhatsApp pronto para ${draft.pushName ?? draft.number}.`,
-      ...(draft.account ? [`Conta: ${draft.account}.`] : []),
-      ...(draft.instanceName ? [`Instância: ${draft.instanceName}.`] : []),
-      `Resposta: ${draft.replyText}`,
-      "Use os botões `Enviar`, `Editar` ou `Ignorar`.",
-    ].join("\n");
-  }
-
-  if (draft.kind === "monitored_channel_alert") {
-    return buildMonitoredChannelAlertReply(draft);
-  }
-
-  if (draft.kind === "google_event") {
-    return [
-      `Evento pronto: ${draft.summary}.`,
-      `Proposta: ${formatLocalDateTime(draft.start, draft.timezone) ?? draft.start}–${formatLocalDateTime(draft.end, draft.timezone)?.split(" ").pop() ?? draft.end}${draft.location ? `, local ${draft.location}` : ""}.`,
-      "Confirme com `agendar`.",
-    ].join("\n");
-  }
-
-  if (draft.kind === "google_event_update") {
-    return [
-      `Evento identificado: ${draft.originalSummary ?? draft.summary}.`,
-      `Proposta: ${formatLocalDateTime(draft.start, draft.timezone) ?? draft.start}–${formatLocalDateTime(draft.end, draft.timezone)?.split(" ").pop() ?? draft.end}${draft.location ? `, local ${draft.location}` : ""}.`,
-      "Confirme com `agendar`.",
-    ].join("\n");
-  }
-
-  if (draft.kind === "google_event_delete") {
-    return [
-      `Cancelar: ${draft.summary}.`,
-      `${draft.start ? `Horário: ${formatLocalDateTime(draft.start, draft.timezone)}` : ""}`,
-      "Confirme com `agendar`.",
-    ].filter(Boolean).join("\n");
-  }
-
-  if (draft.kind === "google_task") {
-    return [
-      `Tarefa pronta: ${draft.title}.`,
-      draft.due ? `Prazo: ${formatLocalDateTime(draft.due) ?? draft.due}.` : undefined,
-      "Confirme com `agendar`.",
-    ].filter(Boolean).join("\n");
-  }
-
-  if (draft.kind === "google_event_import_batch") {
-    return [
-      `Importação pronta: ${draft.events.length} evento(s) para ${draft.account ?? "default"}.`,
-      typeof draft.relevantCount === "number" ? `Relevantes para você: ${draft.relevantCount}.` : undefined,
-      ...draft.events.map((event) => `- ${event.summary} | ${formatLocalDateTime(event.start, draft.timezone) ?? event.start}`),
-      "Confirme com `agendar`.",
-    ].filter(Boolean).join("\n");
-  }
-
-  if (draft.kind === "youtube_publish") {
-    return [
-      `Upload do YouTube pronto para o item #${draft.contentItemId}.`,
-      `Título: ${draft.title}`,
-      `Privacidade: ${draft.privacyStatus}`,
-      "Use `Enviar` para publicar no YouTube.",
-    ].join("\n");
-  }
-
-  return undefined;
-}
-
-function buildPendingActionSubject(draft: PendingActionDraft): string {
-  if (draft.kind === "email_reply") {
-    return `Email UID ${draft.uid}`;
-  }
-  if (draft.kind === "whatsapp_reply") {
-    return `WhatsApp${draft.account ? ` ${draft.account}` : ""}: ${draft.pushName ?? draft.number}`;
-  }
-  if (draft.kind === "monitored_channel_alert") {
-    return `Alerta monitorado${draft.sourceAccount ? ` ${draft.sourceAccount}` : ""}: ${draft.sourcePushName ?? draft.sourceNumber}`;
-  }
-  if (draft.kind === "google_task") {
-    return `Tarefa Google: ${draft.title}`;
-  }
-  if (draft.kind === "google_event") {
-    return `Evento Google: ${draft.summary}`;
-  }
-  if (draft.kind === "google_event_update") {
-    return `Atualização de evento: ${draft.summary}`;
-  }
-  if (draft.kind === "google_event_delete") {
-    return `Cancelar evento: ${draft.summary}`;
-  }
-  if (draft.kind === "google_event_import_batch") {
-    return `Importação de agenda: ${draft.events.length} evento(s)`;
-  }
-  if (draft.kind === "youtube_publish") {
-    return `YouTube: item #${draft.contentItemId}`;
-  }
-  return `Cancelamento em lote (${draft.events.length} eventos)`;
 }
 
 function buildWhatsAppSendSuccessMessage(rawResult: unknown, draft: PendingWhatsAppReplyDraft): string {
@@ -1348,17 +1117,16 @@ function buildConcretePromptFromPendingChoice(history: ChatTurn[], optionLabel: 
 export class TelegramService {
   private readonly hasAllowlist: boolean;
   private readonly chatHistory = new Map<number, ChatTurn[]>();
-  private readonly pendingActionDrafts = new Map<number, PendingActionDraft>();
   private readonly pendingChoiceStates = new Map<number, PendingChoiceState>();
-  private readonly pendingVisualTasks = new Map<number, VisualTaskState>();
   private readonly lastCalendarUndoActions = new Map<number, CalendarUndoAction>();
   private readonly operationalModes = new Map<number, OperationalModeState>();
   private readonly typingSessions = new Map<number, PresenceSession>();
-  private readonly voiceHandler?: VoiceMessageHandler;
-  private readonly scheduleImport?: OpenAiScheduleImportService;
   private readonly whatsapp: EvolutionApiClient;
   private readonly videoRenderer: ShortVideoRenderService;
   private readonly youtubePublisher: YouTubePublisherService;
+  private readonly messageRouter: TelegramMessageRouter;
+  private readonly approvalUi: TelegramApprovalUi;
+  private readonly mediaFlow: TelegramMediaFlow;
   private backgroundJobsStarted = false;
   private lastMorningBriefRunKey?: string;
   private lastEditorialCutoffRunKey?: string;
@@ -1371,7 +1139,7 @@ export class TelegramService {
     private readonly contentOps: ContentOpsStore,
     googleAuth: GoogleWorkspaceAuthService,
     private readonly api: TelegramApi,
-    private readonly approvalEngine: ApprovalEngine,
+    private readonly draftApprovalService: DraftApprovalService,
     private readonly clarificationEngine: ClarificationEngine,
     private readonly whatsappMessages: WhatsAppMessageStore,
   ) {
@@ -1388,19 +1156,69 @@ export class TelegramService {
       googleAuth,
       this.logger.child({ scope: "youtube-publisher" }),
     );
-    this.voiceHandler = createVoiceMessageHandler(
-      this.config,
-      this.logger.child({ scope: "telegram-voice" }),
+    this.approvalUi = new TelegramApprovalUi(
+      this.config.telegram.allowedUserIds,
+      this.logger.child({ scope: "telegram-approval-ui" }),
+      this.api,
+      this.draftApprovalService,
+      {
+        sendText: async (chatId, text, options) => this.sendText(chatId, text, options),
+        executeDraft: async (draft) => this.executePendingActionDraft(draft),
+        onExecuted: async ({ chatId, draft, rawResult }) => {
+          this.captureCalendarUndoAction(chatId, draft, rawResult);
+        },
+      },
     );
-    const openai = this.config.llm.openai ?? (this.config.llm.provider === "openai" ? this.config.llm : undefined);
-    if (openai?.apiKey) {
-      this.scheduleImport = new OpenAiScheduleImportService(
-        openai.apiKey,
-        openai.baseUrl,
-        openai.model,
-        this.logger.child({ scope: "schedule-import" }),
-      );
-    }
+    this.mediaFlow = new TelegramMediaFlow(
+      this.config,
+      this.logger.child({ scope: "telegram-media-flow" }),
+      this.api,
+      {
+        sendText: async (chatId, text, options) => this.sendText(chatId, text, options),
+        beginTypingFeedback: (chatId, options) => this.beginTypingFeedback(chatId, options),
+        endTypingFeedback: async (chatId, session) => this.endTypingFeedback(chatId, session),
+        continueConversation: async (input) => this.handleConversationText(
+          input.message,
+          input.userId,
+          input.resolvedText,
+          input.normalizedText,
+          input.audioInput,
+        ),
+        appendChatTurn: (chatId, turn) => this.appendChatTurn(chatId, turn),
+        getPendingDraft: (chatId) => this.draftApprovalService.peek(chatId),
+        replaceDraft: (chatId, draft, options = {}) => {
+          if (options.supersedeStatus) {
+            this.draftApprovalService.clear(chatId, options.supersedeStatus);
+          }
+          this.draftApprovalService.remember(chatId, draft);
+          return this.draftApprovalService.persist({
+            chatId,
+            channel: "telegram",
+            draft,
+          });
+        },
+        clearDraft: (chatId, status) => this.draftApprovalService.clear(chatId, status),
+        resolveScheduleImportAccountAlias: (contextText) => this.resolveScheduleImportAccountAlias(contextText),
+        getGoogleAccountConfig: (accountAlias) => this.getGoogleAccountConfig(accountAlias),
+        resolvePreferredScheduleImportMode: async () => this.resolvePreferredScheduleImportMode(),
+        resolveCalendarInterpretationRule: async (key) => this.resolveCalendarInterpretationRule(key),
+      },
+    );
+    this.messageRouter = new TelegramMessageRouter(
+      this.logger.child({ scope: "telegram-message-router" }),
+      {
+        allowedUserIds: this.config.telegram.allowedUserIds,
+      },
+      {
+        onCallbackQuery: async (callback) => this.approvalUi.handleCallbackQuery(callback),
+        onUnauthorizedMessage: async (input) => this.handleUnauthorizedRoute(input),
+        onUnsupportedMessage: async (input) => this.handleUnsupportedRoute(input),
+        onCommand: async (input) => this.handleCommandRoute(input),
+        onTextMessage: async (input) => this.handleTextRoute(input),
+        onVoiceMessage: async (input) => this.mediaFlow.handleVoiceMessage(input),
+        onImportAttachment: async (input) => this.mediaFlow.handleImportAttachment(input),
+      },
+    );
   }
 
   private getOperationalMode(chatId: number): OperationalModeState | null {
@@ -1507,7 +1325,7 @@ export class TelegramService {
 
         for (const update of updates) {
           offset = update.update_id + 1;
-          await this.handleUpdate(update, bot);
+          await this.messageRouter.routeUpdate(update, bot);
         }
       } catch (error) {
         if (signal.aborted) {
@@ -1925,158 +1743,65 @@ export class TelegramService {
     return { item, shortPackage };
   }
 
-  private async handleUpdate(update: TelegramUpdate, bot: TelegramUser): Promise<void> {
-    if (update.callback_query) {
-      await this.handleCallbackQuery(update.callback_query);
+  private async handleUnauthorizedRoute(input: TelegramUnauthorizedRoute): Promise<void> {
+    await this.sendText(input.message.chat.id, buildUnauthorizedMessage(input.userId, this.hasAllowlist), {
+      reply_to_message_id: input.message.message_id,
+    });
+  }
+
+  private async handleUnsupportedRoute(input: TelegramUnsupportedRoute): Promise<void> {
+    await this.sendText(
+      input.message.chat.id,
+      "Esta versão processa texto, links, áudio, PDF e print de agenda.",
+      {
+        reply_to_message_id: input.message.message_id,
+      },
+    );
+  }
+
+  private async handleCommandRoute(input: TelegramCommandRoute): Promise<void> {
+    if (input.command === "start") {
+      this.clearChatHistory(input.message.chat.id);
+      this.clearPendingChoiceState(input.message.chat.id);
+      this.mediaFlow.clearChatState(input.message.chat.id);
+      this.core.clearChatState(input.message.chat.id);
+      await this.sendText(input.message.chat.id, buildWelcomeMessage(input.bot, input.userId, true), {
+        reply_to_message_id: input.message.message_id,
+      });
       return;
     }
 
-    const message = update.message;
-    if (!message?.from) {
-      return;
-    }
-
-    if (!shouldHandleMessage(message, bot)) {
-      return;
-    }
-
-    const userId = message.from.id;
-    const userAllowed = this.config.telegram.allowedUserIds.includes(userId);
-
-    if (!userAllowed) {
-      if (message.chat.type === "private") {
-        await this.sendText(message.chat.id, buildUnauthorizedMessage(userId, this.hasAllowlist), {
-          reply_to_message_id: message.message_id,
-        });
-      }
-      return;
-    }
-
-    let text = extractMessageText(message);
-    const importAttachment = extractImportAttachment(message);
-    const audioAttachment = importAttachment ? undefined : (text ? undefined : extractTelegramVoiceAttachment(message));
-    if (!text && !audioAttachment && !importAttachment) {
+    if (input.command === "id") {
       await this.sendText(
-        message.chat.id,
-        "Esta versão processa texto, links, áudio, PDF e print de agenda.",
+        input.message.chat.id,
+        `user_id=${input.userId}\nchat_id=${input.message.chat.id}\nchat_type=${input.message.chat.type}`,
         {
-          reply_to_message_id: message.message_id,
+          reply_to_message_id: input.message.message_id,
         },
       );
       return;
     }
 
-    if (text === "/start") {
-      this.clearChatHistory(message.chat.id);
-      this.clearPendingChoiceState(message.chat.id);
-      this.pendingVisualTasks.delete(message.chat.id);
-      this.core.clearChatState(message.chat.id);
-      await this.sendText(message.chat.id, buildWelcomeMessage(bot, userId, userAllowed), {
-        reply_to_message_id: message.message_id,
-      });
-      return;
-    }
+    this.clearChatHistory(input.message.chat.id);
+    this.clearPendingChoiceState(input.message.chat.id);
+    this.mediaFlow.clearChatState(input.message.chat.id);
+    this.core.clearChatState(input.message.chat.id);
+    await this.sendText(input.message.chat.id, "Histórico curto deste chat foi limpo.", {
+      reply_to_message_id: input.message.message_id,
+    });
+  }
 
-    if (text === "/id") {
-      await this.sendText(
-        message.chat.id,
-        `user_id=${userId}\nchat_id=${message.chat.id}\nchat_type=${message.chat.type}`,
-        {
-          reply_to_message_id: message.message_id,
-        },
-      );
-      return;
-    }
+  private async handleTextRoute(input: TelegramTextRoute): Promise<void> {
+    await this.handleConversationText(input.message, input.userId, input.text, input.normalizedText);
+  }
 
-    if (text === "/reset") {
-      this.clearChatHistory(message.chat.id);
-      this.clearPendingChoiceState(message.chat.id);
-      this.pendingVisualTasks.delete(message.chat.id);
-      this.core.clearChatState(message.chat.id);
-      await this.sendText(message.chat.id, "Histórico curto deste chat foi limpo.", {
-        reply_to_message_id: message.message_id,
-      });
-      return;
-    }
-
-    if (!text && audioAttachment) {
-      if (!this.voiceHandler) {
-        await this.sendText(
-          message.chat.id,
-          "O processamento de voz ainda não está ativo neste ambiente. Manda em texto por enquanto.",
-          {
-            reply_to_message_id: message.message_id,
-          },
-        );
-        return;
-      }
-
-      const typingSession = this.beginTypingFeedback(message.chat.id, {
-        flow: "voice_transcription",
-        replyToMessageId: message.message_id,
-        progressText: "Estou ouvindo esse áudio agora.",
-        fallbackText: "Esse áudio está demorando mais do que deveria. Ainda estou tentando transcrever.",
-      });
-      try {
-        const transcription = await this.voiceHandler.handleTelegramVoice({
-          chatId: message.chat.id,
-          userId,
-          attachment: audioAttachment,
-          telegram: this.api,
-        });
-        const voiceNormalization = normalizeVoiceTranscriptForTelegram(
-          transcription.text,
-          this.config.google.defaultTimezone,
-        );
-        text = voiceNormalization.text;
-        this.logger.info("Telegram audio accepted as text input", {
-          chatId: message.chat.id,
-          userId,
-          kind: audioAttachment.kind,
-          provider: transcription.provider,
-          model: transcription.model,
-          sizeBytes: transcription.sizeBytes,
-          semanticIntent: voiceNormalization.intentHint,
-          normalized: voiceNormalization.changed,
-          contextualReply: voiceNormalization.intentHint === "contextual_reply",
-          hasEventDraftPreview: Boolean(voiceNormalization.eventDraftPreview),
-          hasTaskDraftPreview: Boolean(voiceNormalization.taskDraftPreview),
-        });
-      } catch (error) {
-        this.logger.warn("Telegram audio processing failed", {
-          chatId: message.chat.id,
-          userId,
-          kind: audioAttachment.kind,
-          error: error instanceof Error ? error.message : String(error),
-        });
-        await this.sendText(
-          message.chat.id,
-          buildVoiceUserErrorMessage(error),
-          {
-            reply_to_message_id: message.message_id,
-            disable_web_page_preview: true,
-          },
-        );
-        return;
-      } finally {
-        await this.endTypingFeedback(message.chat.id, typingSession);
-      }
-    }
-
-    const resolvedText = text?.trim();
-    if (!resolvedText && !importAttachment) {
-      return;
-    }
-
-    const normalizedText = normalizeTelegramText(resolvedText ?? "", bot.username);
-    if (!normalizedText && !importAttachment) {
-      return;
-    }
-
-    if (importAttachment) {
-      await this.handleVisualDocumentAttachment(message, importAttachment, normalizedText || undefined);
-      return;
-    }
+  private async handleConversationText(
+    message: TelegramMessage,
+    userId: number,
+    resolvedText: string,
+    normalizedText: string,
+    audioInput = false,
+  ): Promise<void> {
 
     const operationalModeIntent = extractOperationalModeIntent(normalizedText);
     if (operationalModeIntent) {
@@ -2124,12 +1849,12 @@ export class TelegramService {
     const currentOperationalMode = this.getOperationalMode(message.chat.id);
     const baseInterpretation = interpretConversationTurn({
       text: normalizedText,
-      attachments: audioAttachment ? [{ kind: "audio" }] : [],
+      attachments: audioInput ? [{ kind: "audio" }] : [],
       recentMessages: this.getChatHistory(message.chat.id).map((turn) => turn.text).slice(-6),
       operationalMode: currentOperationalMode?.kind === "field" ? "field" : "normal",
     });
     if (
-      audioAttachment
+      audioInput
       || baseInterpretation.skill !== "other"
       || baseInterpretation.isCorrection
       || baseInterpretation.isShortConfirmation
@@ -2159,7 +1884,7 @@ export class TelegramService {
       });
     }
 
-    const continuablePendingDraft = this.pendingActionDrafts.get(message.chat.id)
+    const continuablePendingDraft = this.draftApprovalService.peek(message.chat.id)
       ?? this.tryHydrateContinuablePendingDraft(message.chat.id);
 
     if (resolvedText && !continuablePendingDraft && isManualVideoScriptRequest(resolvedText)) {
@@ -2187,8 +1912,8 @@ export class TelegramService {
       return;
     }
 
-    if (text === "/approvals" || isApprovalListRequest(normalizedText)) {
-      const items = this.approvalEngine.listPending(message.chat.id, 10);
+    if (resolvedText === "/approvals" || isApprovalListRequest(normalizedText)) {
+      const items = this.draftApprovalService.listPendingApprovals(message.chat.id, 10);
       await this.sendText(
         message.chat.id,
         buildApprovalListReply(items),
@@ -2225,8 +1950,12 @@ export class TelegramService {
           source: "confirmation",
           confidence: 0.78,
         });
-        this.pendingActionDrafts.set(message.chat.id, workingDraft);
-        this.persistPendingApproval(message.chat.id, workingDraft);
+        this.draftApprovalService.remember(message.chat.id, workingDraft);
+        this.draftApprovalService.persist({
+          chatId: message.chat.id,
+          channel: "telegram",
+          draft: workingDraft,
+        });
       }
       if (importBatchCommand.confirm) {
         await this.handlePendingActionConfirmation(message, normalizedText, workingDraft);
@@ -2256,14 +1985,14 @@ export class TelegramService {
         await this.handlePendingActionConfirmation(message, normalizedText, pendingDraft);
         return;
       }
-    } else if (!this.pendingActionDrafts.has(message.chat.id)) {
-      this.clearPendingActionDraft(message.chat.id);
+    } else if (!this.draftApprovalService.has(message.chat.id)) {
+      this.draftApprovalService.clear(message.chat.id);
     }
 
-    const pendingDraft = this.pendingActionDrafts.get(message.chat.id)
+    const pendingDraft = this.draftApprovalService.peek(message.chat.id)
       ?? this.tryHydrateContinuablePendingDraft(message.chat.id);
     if (pendingDraft && isDraftDiscardRequest(normalizedText)) {
-      this.clearPendingActionDraft(message.chat.id, "discarded");
+      this.draftApprovalService.clear(message.chat.id, "discarded");
       await this.sendText(message.chat.id, "Rascunho pendente descartado. Nenhuma ação foi executada.", {
         reply_to_message_id: message.message_id,
         disable_web_page_preview: true,
@@ -2313,8 +2042,12 @@ export class TelegramService {
           ...pendingDraft,
           account: accountResolution.account,
         };
-        this.pendingActionDrafts.set(message.chat.id, updatedDraft);
-        const approval = this.persistPendingApproval(message.chat.id, updatedDraft);
+        this.draftApprovalService.remember(message.chat.id, updatedDraft);
+        const approval = this.draftApprovalService.persist({
+          chatId: message.chat.id,
+          channel: "telegram",
+          draft: updatedDraft,
+        });
         const reply =
           updatedDraft.kind === "google_event_update"
             ? buildGoogleEventUpdateDraftReply(updatedDraft)
@@ -2345,7 +2078,7 @@ export class TelegramService {
         ...pendingDraft,
         createMeet: true,
       };
-      this.pendingActionDrafts.set(message.chat.id, updatedDraft);
+      this.draftApprovalService.remember(message.chat.id, updatedDraft);
       await this.sendText(message.chat.id, [
         "Rascunho atualizado.",
         `- Título: ${updatedDraft.summary}`,
@@ -2369,7 +2102,7 @@ export class TelegramService {
         ...pendingDraft,
         createMeet: false,
       };
-      this.pendingActionDrafts.set(message.chat.id, updatedDraft);
+      this.draftApprovalService.remember(message.chat.id, updatedDraft);
       await this.sendText(message.chat.id, [
         "Rascunho atualizado.",
         `- Título: ${updatedDraft.summary}`,
@@ -2392,8 +2125,12 @@ export class TelegramService {
           previousDraft: pendingDraft,
           nextDraft: adjustedDraft,
         });
-        this.pendingActionDrafts.set(message.chat.id, adjustedDraft);
-        const approval = this.persistPendingApproval(message.chat.id, adjustedDraft);
+        this.draftApprovalService.remember(message.chat.id, adjustedDraft);
+        const approval = this.draftApprovalService.persist({
+          chatId: message.chat.id,
+          channel: "telegram",
+          draft: adjustedDraft,
+        });
         const reply =
           adjustedDraft.kind === "google_event_update"
             ? buildGoogleEventUpdateDraftReply(adjustedDraft)
@@ -2429,8 +2166,12 @@ export class TelegramService {
           confidence: 0.78,
         });
         const updatedDraft = this.applyScheduleImportMode(pendingDraft, mode);
-        this.pendingActionDrafts.set(message.chat.id, updatedDraft);
-        const approval = this.persistPendingApproval(message.chat.id, updatedDraft);
+        this.draftApprovalService.remember(message.chat.id, updatedDraft);
+        const approval = this.draftApprovalService.persist({
+          chatId: message.chat.id,
+          channel: "telegram",
+          draft: updatedDraft,
+        });
         await this.sendText(
           message.chat.id,
           this.buildScheduleImportModeChangedReply(updatedDraft),
@@ -2447,7 +2188,7 @@ export class TelegramService {
           chatId: message.chat.id,
           draftKind: pendingDraft.kind,
         });
-        this.clearPendingActionDraft(message.chat.id, "superseded");
+        this.draftApprovalService.clear(message.chat.id, "superseded");
       } else {
         await this.sendText(
           message.chat.id,
@@ -2469,8 +2210,12 @@ export class TelegramService {
         ...pendingDraft,
         replyText: normalizedText,
       };
-      this.pendingActionDrafts.set(message.chat.id, updatedDraft);
-      const approval = this.persistPendingApproval(message.chat.id, updatedDraft);
+      this.draftApprovalService.remember(message.chat.id, updatedDraft);
+      const approval = this.draftApprovalService.persist({
+        chatId: message.chat.id,
+        channel: "telegram",
+        draft: updatedDraft,
+      });
       await this.sendText(
         message.chat.id,
         buildCompactPendingActionReply(updatedDraft) ?? `Rascunho WhatsApp atualizado: ${updatedDraft.replyText}`,
@@ -2539,7 +2284,7 @@ export class TelegramService {
         replyToMessageId: message.message_id,
       });
       if (pendingDraft && pendingDraft.kind !== "email_reply") {
-        this.clearPendingActionDraft(message.chat.id);
+        this.draftApprovalService.clear(message.chat.id);
       }
       try {
         const orchestrated = await this.requestOrchestrator.run({
@@ -2554,7 +2299,7 @@ export class TelegramService {
           }),
           recentMessages: history.map((turn) => turn.text).slice(-6),
           options: { chatId: message.chat.id },
-          draftReplyFormatter: audioAttachment
+          draftReplyFormatter: audioInput
             ? (draft) => buildCompactPendingActionReply(draft)
             : undefined,
         });
@@ -2564,7 +2309,7 @@ export class TelegramService {
             role: "user",
             text: pendingEmailDraft
               ? `${normalizedText} [ajuste de rascunho pendente]`
-              : audioAttachment
+              : audioInput
                 ? `[áudio] ${normalizedText}`
                 : normalizedText,
           });
@@ -2581,18 +2326,22 @@ export class TelegramService {
         const nextPendingDraft = orchestrated.pendingDraft;
         const visibleReply = orchestrated.visibleReply;
         const approval = nextPendingDraft
-          ? this.persistPendingApproval(message.chat.id, nextPendingDraft)
+          ? this.draftApprovalService.persist({
+              chatId: message.chat.id,
+              channel: "telegram",
+              draft: nextPendingDraft,
+            })
           : undefined;
         if (nextPendingDraft) {
-          this.pendingActionDrafts.set(message.chat.id, nextPendingDraft);
+          this.draftApprovalService.remember(message.chat.id, nextPendingDraft);
         } else {
-          this.clearPendingActionDraft(message.chat.id);
+          this.draftApprovalService.clear(message.chat.id);
         }
         this.appendChatTurn(message.chat.id, {
           role: "user",
           text: pendingEmailDraft
             ? `${normalizedText} [ajuste de rascunho pendente]`
-            : audioAttachment
+            : audioInput
               ? `[áudio] ${normalizedText}`
               : normalizedText,
         });
@@ -2714,8 +2463,12 @@ export class TelegramService {
           if (!visibleReply) {
             return false;
           }
-          const approval = this.persistPendingApproval(message.chat.id, nextPendingDraft);
-          this.pendingActionDrafts.set(message.chat.id, nextPendingDraft);
+          const approval = this.draftApprovalService.persist({
+            chatId: message.chat.id,
+            channel: "telegram",
+            draft: nextPendingDraft,
+          });
+          this.draftApprovalService.remember(message.chat.id, nextPendingDraft);
           this.appendChatTurn(message.chat.id, {
             role: "user",
             text: normalizedText,
@@ -2913,12 +2666,16 @@ export class TelegramService {
       const nextPendingDraft = orchestrated.pendingDraft;
       const visibleReply = orchestrated.visibleReply;
       const approval = nextPendingDraft
-        ? this.persistPendingApproval(message.chat.id, nextPendingDraft)
+        ? this.draftApprovalService.persist({
+            chatId: message.chat.id,
+            channel: "telegram",
+            draft: nextPendingDraft,
+          })
         : undefined;
       if (nextPendingDraft) {
-        this.pendingActionDrafts.set(message.chat.id, nextPendingDraft);
+        this.draftApprovalService.remember(message.chat.id, nextPendingDraft);
       } else {
-        this.clearPendingActionDraft(message.chat.id);
+        this.draftApprovalService.clear(message.chat.id);
       }
       this.appendChatTurn(message.chat.id, {
         role: "user",
@@ -3164,535 +2921,6 @@ export class TelegramService {
     return extractExplicitGoogleAccountAlias(text, this.getGoogleAccountAliases());
   }
 
-  private async downloadImportAttachmentBuffer(attachment: TelegramImportAttachment): Promise<Buffer> {
-    const remoteFile = await this.api.getFile(attachment.fileId);
-    if (!remoteFile.file_path) {
-      throw new Error("Telegram não retornou file_path para o arquivo enviado.");
-    }
-    return this.api.downloadFile(remoteFile.file_path);
-  }
-
-  private async handleVisualDocumentAttachment(
-    message: TelegramMessage,
-    attachment: TelegramImportAttachment,
-    captionText?: string,
-  ): Promise<void> {
-    const previous = this.pendingVisualTasks.get(message.chat.id);
-    let prefetchedBuffer: Buffer | undefined;
-    let agendaEvidence:
-      | {
-          confidence: number;
-          signals: string[];
-        }
-      | undefined;
-
-    if (this.scheduleImport) {
-      try {
-        prefetchedBuffer = await this.downloadImportAttachmentBuffer(attachment);
-        agendaEvidence = attachment.kind === "pdf"
-          ? await this.scheduleImport.detectAgendaCandidateFromPdf({
-              pdf: prefetchedBuffer,
-              caption: captionText,
-            })
-          : await this.scheduleImport.detectAgendaCandidateFromImage({
-              image: prefetchedBuffer,
-              mimeType: attachment.mimeType,
-              caption: captionText,
-            });
-      } catch (error) {
-        this.logger.warn("Telegram visual agenda evidence detection failed", {
-          chatId: message.chat.id,
-          attachmentKind: attachment.kind,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-    }
-
-    const plan = detectVisualTaskPlan({
-      text: captionText,
-      attachmentKind: attachment.kind,
-      previous,
-      agendaEvidence,
-    });
-    const state = buildVisualTaskState({
-      previous,
-      plan,
-      attachment,
-    });
-    this.pendingVisualTasks.set(message.chat.id, state);
-
-    this.logger.info("Telegram visual/document task detected", {
-      chatId: message.chat.id,
-      kind: state.kind,
-      fileCount: state.files.length,
-      attachmentKind: attachment.kind,
-      shouldAttemptExtraction: plan.shouldAttemptExtraction,
-      agendaSignalConfidence: agendaEvidence?.confidence,
-      agendaSignals: agendaEvidence?.signals,
-    });
-
-    const strategyReply = buildVisualTaskStrategyReply(state, plan);
-    if (plan.shortClarification) {
-      await this.sendText(message.chat.id, strategyReply, {
-        reply_to_message_id: message.message_id,
-        disable_web_page_preview: true,
-      });
-      return;
-    }
-    if (!shouldAttemptScheduleImport(plan)) {
-      const reply = [
-        strategyReply,
-        "",
-        buildVisualTaskUnsupportedReply(state, plan),
-      ].join("\n");
-      this.appendChatTurn(message.chat.id, {
-        role: "user",
-        text: captionText?.trim() ? `[visual] ${captionText.trim()}` : `[visual] ${attachment.fileName}`,
-      });
-      this.appendChatTurn(message.chat.id, {
-        role: "assistant",
-        text: reply,
-      });
-      await this.sendText(message.chat.id, reply, {
-        reply_to_message_id: message.message_id,
-        disable_web_page_preview: true,
-      });
-      return;
-    }
-
-    await this.sendText(message.chat.id, strategyReply, {
-      reply_to_message_id: message.message_id,
-      disable_web_page_preview: true,
-    });
-    await this.handleScheduleImportAttachment(message, attachment, captionText, {
-      visualTask: state,
-      skipInitialReply: true,
-      prefetchedBuffer,
-    });
-  }
-
-  private async handleScheduleImportAttachment(
-    message: TelegramMessage,
-    attachment: TelegramImportAttachment,
-    captionText?: string,
-    options: {
-      visualTask?: VisualTaskState;
-      skipInitialReply?: boolean;
-      prefetchedBuffer?: Buffer;
-    } = {},
-  ): Promise<void> {
-    if (!this.scheduleImport) {
-      if (options.visualTask) {
-        const failedState = markVisualTaskExtractionFailed(
-          options.visualTask,
-          "a extração automática de agenda depende de um provider OpenAI ativo com chave configurada",
-        );
-        this.pendingVisualTasks.set(message.chat.id, failedState);
-        await this.sendText(message.chat.id, buildVisualTaskFailureReply(failedState), {
-          reply_to_message_id: message.message_id,
-          disable_web_page_preview: true,
-        });
-        return;
-      }
-      await this.sendText(
-        message.chat.id,
-        "A importação de agenda por PDF ou print depende de um provider OpenAI ativo com chave configurada.",
-        {
-          reply_to_message_id: message.message_id,
-          disable_web_page_preview: true,
-        },
-      );
-      return;
-    }
-
-    try {
-      const accountAlias = this.resolveScheduleImportAccountAlias(captionText);
-      const accountConfig = this.getGoogleAccountConfig(accountAlias);
-      const timezone = accountConfig.defaultTimezone || this.config.google.defaultTimezone;
-      if (!options.skipInitialReply) {
-        await this.sendText(
-          message.chat.id,
-          [
-            "Vou tentar extrair os eventos desse material de agenda.",
-            `- Arquivo: ${attachment.fileName}`,
-            `- Calendário alvo: ${accountAlias}`,
-            "Se a leitura falhar, continuo com esta tarefa e te digo o melhor próximo formato.",
-          ].join("\n"),
-          {
-            reply_to_message_id: message.message_id,
-            disable_web_page_preview: true,
-          },
-        );
-      }
-      const typingSession = this.beginTypingFeedback(message.chat.id, {
-        flow: "visual_schedule_import",
-        replyToMessageId: message.message_id,
-        progressText: "Estou lendo esse material agora.",
-        fallbackText: "Esse material está demorando mais do que deveria. Ainda estou tentando extrair o que der.",
-      });
-      try {
-        const buffer = options.prefetchedBuffer ?? await this.downloadImportAttachmentBuffer(attachment);
-        const extracted = attachment.kind === "pdf"
-          ? await this.scheduleImport.extractFromPdf({
-              pdf: buffer,
-              sourceLabel: attachment.fileName,
-              caption: captionText,
-              currentDate: new Date().toISOString().slice(0, 10),
-              timezone,
-            })
-          : await this.scheduleImport.extractFromImage({
-              image: buffer,
-              mimeType: attachment.mimeType,
-              sourceLabel: attachment.fileName,
-              caption: captionText,
-              currentDate: new Date().toISOString().slice(0, 10),
-              timezone,
-            });
-
-        const events = extracted.events
-          .map((event) => {
-            const matchedTerms = matchPersonalCalendarTerms({
-              account: accountAlias,
-              summary: event.summary,
-              description: event.description,
-              location: event.location,
-            });
-
-            return {
-              summary: event.summary,
-              description: event.description,
-              location: event.location,
-              start: event.start,
-              end: event.end,
-              timezone: event.timezone,
-              account: accountAlias,
-              calendarId: accountConfig.calendarId,
-              reminderMinutes: event.reminderMinutes,
-              confidence: event.confidence,
-              sourceLabel: event.sourceLabel,
-              category: event.category,
-              rawText: event.rawText,
-              assumedTime: event.assumedTime,
-              personallyRelevant: matchedTerms.length > 0,
-              matchedTerms,
-            };
-          })
-          .sort((left, right) => left.start.localeCompare(right.start));
-
-        if (events.length === 0) {
-          throw new Error("Não consegui identificar eventos válidos para importar.");
-        }
-
-        const existingDraft = this.pendingActionDrafts.get(message.chat.id);
-        const previousImport = existingDraft?.kind === "google_event_import_batch" &&
-          existingDraft.account === accountAlias
-          ? existingDraft
-          : undefined;
-        const extractedNonEvents: ScheduleImportIgnoredItem[] = extracted.nonEvents.map((item) => ({
-          summary: item.summary,
-          category: item.category,
-          reason: item.reason ?? "bloco não importado como evento",
-          date: item.date,
-          shift: item.shift,
-          sourceLabel: item.rawText,
-        }));
-        const previousCandidates = previousImport?.allImportableEvents ?? previousImport?.events ?? [];
-        const mergedEvents = [
-          ...previousCandidates.map((event) => ({
-            ...event,
-            category: event.importCategory ?? ("event_importable" as const),
-          })),
-          ...events,
-        ];
-        const dedupedEvents = Array.from(
-          new Map(
-            mergedEvents.map((event) => [
-              `${event.start}|${event.end}|${event.summary.trim().toLowerCase()}`,
-              event,
-            ]),
-          ).values(),
-        ).sort((left, right) => left.start.localeCompare(right.start));
-        const ignoredItems = Array.from(
-          new Map(
-            [
-              ...(previousImport?.ignoredItems ?? []),
-              ...extractedNonEvents,
-            ].map((item) => [
-              `${item.category}|${item.shift ?? ""}|${item.summary.trim().toLowerCase()}`,
-              item,
-            ]),
-          ).values(),
-        );
-        const assumptions = [
-          ...(previousImport?.assumptions ?? []),
-          ...extracted.assumptions,
-          ...extracted.uncertainties.map((item) => `incerteza: ${item}`),
-        ].filter((item, index, list) => list.indexOf(item) === index).slice(0, 8);
-        const preferredMode = previousImport?.importMode ?? await this.resolvePreferredScheduleImportMode();
-        const pseudoLocationRule = await this.resolveCalendarInterpretationRule("pseudo_location_rua");
-        const titleSeparatorRule = await this.resolveCalendarInterpretationRule("title_separator_preference");
-        const refinedImport = refineScheduleImportEvents(dedupedEvents, {
-          mode: preferredMode,
-          nonEvents: ignoredItems,
-          assumptions,
-        });
-        if (
-          pseudoLocationRule === "drop_location"
-          && dedupedEvents.some((event) => /^(?:rua|na rua)$/i.test((event.location ?? "").trim()))
-        ) {
-          this.logger.info("Applying learned calendar interpretation rule during schedule import", {
-            chatId: message.chat.id,
-            rule: "pseudo_location_rua",
-          });
-          refinedImport.observations = [
-            'Regra aprendida aplicada: "Rua" continua fora do campo local.',
-            ...refinedImport.observations,
-          ].filter((item, index, list) => list.indexOf(item) === index).slice(0, 10);
-        }
-        if (
-          titleSeparatorRule === "prefer_dash_separator"
-          && refinedImport.allImportableEvents.some((event) => (event.originalSummary ?? "").includes(":"))
-        ) {
-          this.logger.info("Applying learned calendar interpretation rule during schedule import", {
-            chatId: message.chat.id,
-            rule: "title_separator_preference",
-          });
-          refinedImport.observations = [
-            "Regra aprendida aplicada: títulos compostos seguem com separador em traço.",
-            ...refinedImport.observations,
-          ].filter((item, index, list) => list.indexOf(item) === index).slice(0, 10);
-        }
-
-        const draft: PendingGoogleEventImportBatchDraft = {
-          kind: "google_event_import_batch",
-          timezone,
-          account: accountAlias,
-          calendarId: accountConfig.calendarId,
-          sourceLabel: previousImport
-            ? `${previousImport.sourceLabel}; ${attachment.fileName}`
-            : attachment.fileName,
-          totalExtracted: refinedImport.blockCounts.total,
-          relevantCount: refinedImport.selectedEvents.filter((event) => event.personallyRelevant || event.relevanceLevel === "high").length,
-          skippedCount: refinedImport.ignoredItems.length + Math.max(0, refinedImport.allImportableEvents.length - refinedImport.selectedEvents.length),
-          assumptions: refinedImport.observations,
-          importMode: refinedImport.mode,
-          allImportableEvents: refinedImport.allImportableEvents,
-          ignoredItems: refinedImport.ignoredItems,
-          demands: refinedImport.demands,
-          ambiguousItems: refinedImport.ambiguousItems,
-          blockCounts: refinedImport.blockCounts,
-          modeCounts: refinedImport.modeCounts,
-          events: refinedImport.selectedEvents,
-        };
-
-        this.clearPendingActionDraft(message.chat.id, "superseded");
-        this.pendingActionDrafts.set(message.chat.id, draft);
-        if (options.visualTask) {
-          this.pendingVisualTasks.set(message.chat.id, markVisualTaskDraftReady(options.visualTask));
-        }
-        const approval = this.persistPendingApproval(message.chat.id, draft);
-        const visibleReply = stripPendingDraftMarkers(buildGoogleEventImportBatchDraftReply(draft));
-
-        await this.endTypingFeedback(message.chat.id, typingSession);
-        this.appendChatTurn(message.chat.id, {
-          role: "user",
-          text: captionText?.trim() ? `[agenda_anexo] ${captionText.trim()}` : `[agenda_anexo] ${attachment.fileName}`,
-        });
-        this.appendChatTurn(message.chat.id, {
-          role: "assistant",
-          text: visibleReply,
-        });
-
-        await this.sendText(message.chat.id, visibleReply, {
-          reply_to_message_id: message.message_id,
-          disable_web_page_preview: true,
-          reply_markup: approval ? buildApprovalInlineKeyboard(approval.id) : undefined,
-        });
-      } finally {
-        await this.endTypingFeedback(message.chat.id, typingSession);
-      }
-    } catch (error) {
-      this.logger.error("Telegram schedule import failed", {
-        chatId: message.chat.id,
-        fileName: attachment.fileName,
-        kind: attachment.kind,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      if (options.visualTask) {
-        const failedState = markVisualTaskExtractionFailed(
-          options.visualTask,
-          error instanceof Error ? error.message : String(error),
-        );
-        this.pendingVisualTasks.set(message.chat.id, failedState);
-        const reply = buildVisualTaskFailureReply(failedState);
-        this.appendChatTurn(message.chat.id, {
-          role: "user",
-          text: captionText?.trim() ? `[agenda_visual] ${captionText.trim()}` : `[agenda_visual] ${attachment.fileName}`,
-        });
-        this.appendChatTurn(message.chat.id, {
-          role: "assistant",
-          text: reply,
-        });
-        await this.sendText(message.chat.id, reply, {
-          reply_to_message_id: message.message_id,
-          disable_web_page_preview: true,
-        });
-        return;
-      }
-      await this.sendText(
-        message.chat.id,
-        [
-          "Não consegui transformar este arquivo em agenda nesta tentativa.",
-          `Detalhe: ${error instanceof Error ? error.message : String(error)}`,
-          "Se puder, tente enviar um PDF pesquisável ou um print mais nítido.",
-        ].join("\n"),
-        {
-          reply_to_message_id: message.message_id,
-          disable_web_page_preview: true,
-        },
-      );
-    }
-  }
-
-  private async handleCallbackQuery(callback: TelegramCallbackQuery): Promise<void> {
-    const userId = callback.from.id;
-    const userAllowed = this.config.telegram.allowedUserIds.includes(userId);
-    const chatId = callback.message?.chat.id;
-
-    if (!userAllowed || !chatId) {
-      await this.api.answerCallbackQuery(callback.id, {
-        text: "Ação não autorizada.",
-        show_alert: false,
-      }).catch(() => undefined);
-      return;
-    }
-
-    const parsed = parseApprovalCallbackData(callback.data);
-    if (!parsed) {
-      await this.api.answerCallbackQuery(callback.id, {
-        text: "Ação inválida.",
-      }).catch(() => undefined);
-      return;
-    }
-
-    const item = this.approvalEngine.getById(parsed.id);
-    if (!item || item.chatId !== chatId) {
-      await this.api.answerCallbackQuery(callback.id, {
-        text: "Aprovação não encontrada.",
-      }).catch(() => undefined);
-      return;
-    }
-
-    if (item.status !== "pending") {
-      await this.api.answerCallbackQuery(callback.id, {
-        text: "Essa aprovação já foi tratada.",
-      }).catch(() => undefined);
-      return;
-    }
-
-    const draft = parsePendingActionDraftPayload(item.draftPayload);
-    if (!draft) {
-      this.approvalEngine.updateStatus(item.id, "failed");
-      await this.api.answerCallbackQuery(callback.id, {
-        text: "Rascunho inválido.",
-        show_alert: true,
-      }).catch(() => undefined);
-      return;
-    }
-
-    if (parsed.action === "discard") {
-      this.approvalEngine.updateStatus(item.id, "discarded");
-      this.pendingActionDrafts.delete(chatId);
-      await this.api.answerCallbackQuery(callback.id, {
-        text: "Rascunho descartado.",
-      }).catch(() => undefined);
-      await this.sendText(chatId, "Rascunho pendente descartado. Nenhuma ação foi executada.", {
-        reply_to_message_id: callback.message?.message_id,
-        disable_web_page_preview: true,
-      });
-      return;
-    }
-
-    if (parsed.action === "edit") {
-      if (draft.kind === "youtube_publish") {
-        await this.api.answerCallbackQuery(callback.id, {
-          text: "Para ajustar o vídeo, gere um novo rascunho.",
-        }).catch(() => undefined);
-        await this.sendText(
-          chatId,
-          [
-            "A publicação do YouTube não tem edição inline neste MVP.",
-            "Se quiser ajustar roteiro, título ou vídeo, gere um novo rascunho do item.",
-          ].join("\n"),
-          {
-            reply_to_message_id: callback.message?.message_id,
-            disable_web_page_preview: true,
-          },
-        );
-        return;
-      }
-
-      this.pendingActionDrafts.set(chatId, draft);
-      await this.api.answerCallbackQuery(callback.id, {
-        text: "Envie a alteração em texto. Vou atualizar o rascunho.",
-      }).catch(() => undefined);
-      await this.sendText(
-        chatId,
-        draft.kind === "whatsapp_reply"
-          ? [
-              `Rascunho carregado para edição: WhatsApp para ${draft.pushName ?? draft.number}.`,
-              ...(draft.account ? [`Conta: ${draft.account}.`] : []),
-              ...(draft.instanceName ? [`Instância: ${draft.instanceName}.`] : []),
-              `Mensagem atual: ${draft.replyText}`,
-              "Envie a alteração em texto e eu atualizo antes de enviar.",
-            ].join("\n")
-          : draft.kind === "google_event_import_batch"
-            ? [
-                "Rascunho de importação carregado.",
-                "Para alterar o lote, o caminho mais seguro é reenviar o PDF ou o print com a agenda corrigida.",
-                "Se quiser abortar o lote atual, use `cancelar rascunho`.",
-              ].join("\n")
-            : "Rascunho carregado para edição. Envie a alteração em texto.",
-        {
-          reply_to_message_id: callback.message?.message_id,
-          disable_web_page_preview: true,
-        },
-      );
-      return;
-    }
-
-    await this.api.answerCallbackQuery(callback.id, {
-      text: "Executando aprovação...",
-    }).catch(() => undefined);
-
-    try {
-      const execution = await this.executePendingActionDraft(draft);
-      this.approvalEngine.updateStatus(item.id, execution.ok ? "executed" : "failed");
-      if (execution.ok) {
-        this.captureCalendarUndoAction(chatId, draft, execution.rawResult);
-        this.pendingActionDrafts.delete(chatId);
-      }
-
-      await this.sendText(chatId, execution.reply, {
-        reply_to_message_id: callback.message?.message_id,
-        disable_web_page_preview: true,
-      });
-    } catch (error) {
-      this.approvalEngine.updateStatus(item.id, "failed");
-      await this.sendText(
-        chatId,
-        [
-          "Falha ao executar a ação aprovada.",
-          `Detalhe: ${error instanceof Error ? error.message : String(error)}`,
-        ].join("\n"),
-        {
-          reply_to_message_id: callback.message?.message_id,
-          disable_web_page_preview: true,
-        },
-      );
-    }
-  }
-
   private buildYouTubePublishDraft(input: {
     contentItemId: number;
     filePath: string;
@@ -3815,7 +3043,11 @@ export class TelegramService {
         .join("\n\n"),
       tags: this.buildYouTubeTags(updated),
     });
-    const approval = this.persistPendingApproval(input.chatId, publishDraft);
+    const approval = this.draftApprovalService.persist({
+      chatId: input.chatId,
+      channel: "telegram",
+      draft: publishDraft,
+    });
     const slotLabel = input.slotKey ? getEditorialSlotSchedule(input.slotKey).label : undefined;
 
     await this.sendText(
@@ -4479,7 +3711,7 @@ export class TelegramService {
         chatId: message.chat.id,
         classification: pendingDraft.classification,
       });
-      this.clearPendingActionDraft(message.chat.id, "superseded");
+      this.draftApprovalService.clear(message.chat.id, "superseded");
       return false;
     }
 
@@ -4497,7 +3729,7 @@ export class TelegramService {
     }
 
     if (resolution.kind === "ignore") {
-      this.clearPendingActionDraft(message.chat.id, "discarded");
+      this.draftApprovalService.clear(message.chat.id, "discarded");
       await this.recordLearnedPreference({
         type: "alert_action",
         key: `monitored_alert:${pendingDraft.classification}`,
@@ -4546,7 +3778,7 @@ export class TelegramService {
     }
 
     if (resolution.kind === "register") {
-      this.clearPendingActionDraft(message.chat.id, "executed");
+      this.draftApprovalService.clear(message.chat.id, "executed");
       await this.recordLearnedPreference({
         type: "alert_action",
         key: `monitored_alert:${pendingDraft.classification}`,
@@ -4602,7 +3834,7 @@ export class TelegramService {
       return true;
     }
 
-    this.clearPendingActionDraft(message.chat.id, "executed");
+    this.draftApprovalService.clear(message.chat.id, "executed");
     await this.recordLearnedPreference({
       type: "alert_action",
       key: `monitored_alert:${pendingDraft.classification}`,
@@ -4615,8 +3847,12 @@ export class TelegramService {
       draft: pendingDraft,
       resolution: resolution.kind,
     });
-    this.pendingActionDrafts.set(message.chat.id, nextDraft);
-    const approval = this.persistPendingApproval(message.chat.id, nextDraft);
+    this.draftApprovalService.remember(message.chat.id, nextDraft);
+    const approval = this.draftApprovalService.persist({
+      chatId: message.chat.id,
+      channel: "telegram",
+      draft: nextDraft,
+    });
     await this.sendText(
       message.chat.id,
       buildCompactPendingActionReply(nextDraft)
@@ -4648,9 +3884,9 @@ export class TelegramService {
       await this.endTypingFeedback(message.chat.id, typingSession);
       if (execution.ok) {
         this.captureCalendarUndoAction(message.chat.id, pendingDraft, execution.rawResult);
-        this.clearPendingActionDraft(message.chat.id, "executed");
+        this.draftApprovalService.clear(message.chat.id, "executed");
       } else {
-        this.approvalEngine.markLatestPending(message.chat.id, "failed");
+        this.draftApprovalService.markLatestPending(message.chat.id, "failed");
       }
 
       this.appendChatTurn(message.chat.id, {
@@ -4979,52 +4215,15 @@ export class TelegramService {
     this.pendingChoiceStates.delete(chatId);
   }
 
-  private clearPendingActionDraft(chatId: number, status?: "discarded" | "executed" | "superseded"): void {
-    this.pendingActionDrafts.delete(chatId);
-    if (status) {
-      this.approvalEngine.markLatestPending(chatId, status);
-    }
-  }
-
   private tryHydratePendingDraftForConfirmation(chatId: number): PendingActionDraft | undefined {
-    const pendingDraft = this.pendingActionDrafts.get(chatId);
-    if (pendingDraft) {
-      return pendingDraft;
-    }
-
-    const latestApproval = this.approvalEngine.getLatestPending(chatId);
-    if (!latestApproval) {
-      return undefined;
-    }
-
-    const approvalUpdatedAt = Date.parse(latestApproval.updatedAt || latestApproval.createdAt);
-    if (Number.isFinite(approvalUpdatedAt) && Date.now() - approvalUpdatedAt > RECENT_PENDING_CONFIRMATION_WINDOW_MS) {
-      return undefined;
-    }
-
     const latestClarification = this.clarificationEngine.getLatestPending(chatId);
-    const clarificationUpdatedAt = latestClarification
-      ? Date.parse(latestClarification.updatedAt || latestClarification.createdAt)
-      : Number.NaN;
-    if (Number.isFinite(approvalUpdatedAt) && Number.isFinite(clarificationUpdatedAt) && clarificationUpdatedAt > approvalUpdatedAt) {
-      return undefined;
-    }
-
-    const hydratedDraft = parsePendingActionDraftPayload(latestApproval.draftPayload);
-    if (!hydratedDraft) {
-      return undefined;
-    }
-    if (hydratedDraft.kind === "monitored_channel_alert") {
-      return undefined;
-    }
-
-    this.pendingActionDrafts.set(chatId, hydratedDraft);
-    this.logger.info("Hydrated pending action draft from approval inbox for explicit confirmation", {
-      chatId,
-      approvalId: latestApproval.id,
-      kind: hydratedDraft.kind,
+    return this.draftApprovalService.hydrateLatest(chatId, {
+      windowMs: RECENT_PENDING_CONFIRMATION_WINDOW_MS,
+      excludeKinds: ["monitored_channel_alert"],
+      blockIfUpdatedAfter: latestClarification
+        ? (latestClarification.updatedAt || latestClarification.createdAt)
+        : undefined,
     });
-    return hydratedDraft;
   }
 
   private tryHydrateDeleteDraftFromRecentAssistantTurn(chatId: number): PendingGoogleEventDeleteDraft | undefined {
@@ -5039,7 +4238,7 @@ export class TelegramService {
       return undefined;
     }
 
-    this.pendingActionDrafts.set(chatId, draft);
+    this.draftApprovalService.remember(chatId, draft);
     this.logger.info("Hydrated calendar delete draft from recent assistant turn", {
       chatId,
       eventId: draft.eventId,
@@ -5049,46 +4248,10 @@ export class TelegramService {
   }
 
   private tryHydrateContinuablePendingDraft(chatId: number): PendingActionDraft | undefined {
-    const pendingDraft = this.pendingActionDrafts.get(chatId);
-    if (pendingDraft) {
-      return pendingDraft;
-    }
-
-    const latestApproval = this.approvalEngine.getLatestPending(chatId);
-    if (!latestApproval) {
-      return undefined;
-    }
-
-    const approvalUpdatedAt = Date.parse(latestApproval.updatedAt || latestApproval.createdAt);
-    if (Number.isFinite(approvalUpdatedAt) && Date.now() - approvalUpdatedAt > RECENT_PENDING_CONFIRMATION_WINDOW_MS) {
-      return undefined;
-    }
-
-    const hydratedDraft = parsePendingActionDraftPayload(latestApproval.draftPayload);
-    if (!hydratedDraft || hydratedDraft.kind !== "monitored_channel_alert") {
-      return undefined;
-    }
-
-    this.pendingActionDrafts.set(chatId, hydratedDraft);
-    this.logger.info("Hydrated continuable monitored alert draft from approval inbox", {
-      chatId,
-      subject: latestApproval.subject,
+    return this.draftApprovalService.hydrateLatest(chatId, {
+      windowMs: RECENT_PENDING_CONFIRMATION_WINDOW_MS,
+      includeKinds: ["monitored_channel_alert"],
     });
-    return hydratedDraft;
-  }
-
-  private persistPendingApproval(chatId: number, draft: PendingActionDraft) {
-    const result = this.approvalEngine.request({
-      chatId,
-      channel: "telegram",
-      actionKind: draft.kind,
-      subject: buildPendingActionSubject(draft),
-      draftPayload: JSON.stringify(draft),
-    });
-    if (!result.approvalItem) {
-      throw new Error(`Approval request for ${draft.kind} was not persisted.`);
-    }
-    return result.approvalItem;
   }
 
   private async sendText(

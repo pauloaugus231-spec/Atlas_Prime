@@ -271,3 +271,34 @@ export function sanitizeToolPayloadLeak(text: string): string {
     return text;
   }
 }
+
+export function buildPendingActionSubject(draft: PendingActionDraft): string {
+  if (draft.kind === "email_reply") {
+    return `Email UID ${draft.uid}`;
+  }
+  if (draft.kind === "whatsapp_reply") {
+    return `WhatsApp${draft.account ? ` ${draft.account}` : ""}: ${draft.pushName ?? draft.number}`;
+  }
+  if (draft.kind === "monitored_channel_alert") {
+    return `Alerta monitorado${draft.sourceAccount ? ` ${draft.sourceAccount}` : ""}: ${draft.sourcePushName ?? draft.sourceNumber}`;
+  }
+  if (draft.kind === "google_task") {
+    return `Tarefa Google: ${draft.title}`;
+  }
+  if (draft.kind === "google_event") {
+    return `Evento Google: ${draft.summary}`;
+  }
+  if (draft.kind === "google_event_update") {
+    return `Atualização de evento: ${draft.summary}`;
+  }
+  if (draft.kind === "google_event_delete") {
+    return `Cancelar evento: ${draft.summary}`;
+  }
+  if (draft.kind === "google_event_import_batch") {
+    return `Importação de agenda: ${draft.events.length} evento(s)`;
+  }
+  if (draft.kind === "youtube_publish") {
+    return `YouTube: item #${draft.contentItemId}`;
+  }
+  return `Cancelamento em lote (${draft.events.length} eventos)`;
+}
