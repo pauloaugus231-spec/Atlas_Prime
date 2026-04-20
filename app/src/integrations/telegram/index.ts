@@ -9,7 +9,7 @@ async function main(): Promise<void> {
     core,
     requestOrchestrator,
     contentOps,
-    approvalEngine,
+    draftApprovalService,
     clarificationEngine,
     whatsappMessages,
     googleAuth,
@@ -37,7 +37,7 @@ async function main(): Promise<void> {
     contentOps,
     googleAuth,
     api,
-    approvalEngine,
+    draftApprovalService,
     clarificationEngine,
     whatsappMessages,
   );

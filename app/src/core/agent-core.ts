@@ -124,6 +124,11 @@ import {
 import {
   TurnPlanner,
 } from "./turn-planner.js";
+import {
+  DirectRouteRunner,
+  type DirectRouteDefinition,
+  type DirectRouteExecutionInput,
+} from "./direct-route-runner.js";
 import type {
   PersonalOperationalMemoryItem,
   PersonalOperationalMemoryItemKind,
@@ -9891,6 +9896,7 @@ export class AgentCore {
   private readonly contextAssembler: ContextAssembler;
   private readonly responseSynthesizer: ResponseSynthesizer;
   private readonly turnPlanner: TurnPlanner;
+  private readonly directRouteRunner: DirectRouteRunner;
   private readonly activeGoals = new Map<string, ActivePlanningGoal>();
 
   constructor(
@@ -9973,6 +9979,9 @@ export class AgentCore {
         rewriteStructuredReply: false,
       },
     );
+    this.directRouteRunner = new DirectRouteRunner(
+      this.logger.child({ scope: "direct-route-runner" }),
+    );
   }
 
   resolveIntent(userPrompt: string): IntentResolution {
@@ -10042,6 +10051,594 @@ export class AgentCore {
     );
   }
 
+  private createDirectRoute(
+    key: string,
+    group: string,
+    run: (input: DirectRouteExecutionInput) => Promise<AgentRunResult | null>,
+  ): DirectRouteDefinition {
+    return { key, group, run };
+  }
+
+  private buildDirectConversationRoutes(): DirectRouteDefinition[] {
+    return [
+      this.createDirectRoute("ping", "conversation", async (input) => this.tryRunDirectPing(
+        input.activeUserPrompt,
+        input.requestId,
+        input.requestLogger,
+        input.orchestration,
+      )),
+      this.createDirectRoute("greeting", "conversation", async (input) => this.tryRunDirectGreeting(
+        input.activeUserPrompt,
+        input.requestId,
+        input.orchestration,
+      )),
+      this.createDirectRoute("conversation_style_correction", "conversation", async (input) =>
+        this.tryRunDirectConversationStyleCorrection(
+          input.activeUserPrompt,
+          input.requestId,
+          input.orchestration,
+          input.preferences,
+        )),
+      this.createDirectRoute("agent_identity", "conversation", async (input) => this.tryRunDirectAgentIdentity(
+        input.activeUserPrompt,
+        input.requestId,
+        input.orchestration,
+      )),
+    ];
+  }
+
+  private buildDirectCapabilityRoutes(): DirectRouteDefinition[] {
+    return [
+      this.createDirectRoute("personal_profile_show", "capability", async (input) =>
+        this.tryRunDirectPersonalOperationalProfileShow(
+          input.activeUserPrompt,
+          input.requestId,
+          input.orchestration,
+          input.preferences,
+        )),
+      this.createDirectRoute("operational_state_show", "capability", async (input) =>
+        this.tryRunDirectOperationalStateShow(
+          input.activeUserPrompt,
+          input.requestId,
+          input.orchestration,
+          input.preferences,
+        )),
+      this.createDirectRoute("learned_preferences_list", "capability", async (input) =>
+        this.tryRunDirectLearnedPreferencesList(
+          input.activeUserPrompt,
+          input.requestId,
+          input.orchestration,
+          input.preferences,
+        )),
+      this.createDirectRoute("learned_preferences_delete", "capability", async (input) =>
+        this.tryRunDirectLearnedPreferencesDelete(
+          input.activeUserPrompt,
+          input.requestId,
+          input.orchestration,
+          input.preferences,
+        )),
+      this.createDirectRoute("capability_inspection", "capability", async (input) =>
+        this.tryRunDirectCapabilityInspection(
+          input.activeUserPrompt,
+          input.requestId,
+          input.orchestration,
+          input.preferences,
+        )),
+      this.createDirectRoute("active_goal", "capability", async (input) => this.tryRunActiveGoalTurn(
+        input.activeUserPrompt,
+        input.requestId,
+        input.requestLogger,
+        input.orchestration,
+        input.preferences,
+        input.options,
+      )),
+      this.createDirectRoute("capability_planning", "capability", async (input) =>
+        this.tryRunDirectCapabilityAwarePlanning(
+          input.activeUserPrompt,
+          input.requestId,
+          input.requestLogger,
+          input.orchestration,
+          input.preferences,
+          input.options,
+        )),
+    ];
+  }
+
+  private buildDirectMemoryAndPreferenceRoutes(): DirectRouteDefinition[] {
+    return [
+      this.createDirectRoute("personal_profile_update", "memory-preferences", async (input) =>
+        this.tryRunDirectPersonalOperationalProfileUpdate(
+          input.activeUserPrompt,
+          input.requestId,
+          input.orchestration,
+          input.preferences,
+        )),
+      this.createDirectRoute("personal_profile_delete", "memory-preferences", async (input) =>
+        this.tryRunDirectPersonalOperationalProfileDelete(
+          input.activeUserPrompt,
+          input.requestId,
+          input.orchestration,
+          input.preferences,
+        )),
+      this.createDirectRoute("user_preferences", "memory-preferences", async (input) =>
+        this.tryRunDirectUserPreferences(
+          input.activeUserPrompt,
+          input.requestId,
+          input.orchestration,
+        )),
+      this.createDirectRoute("personal_memory_list", "memory-preferences", async (input) =>
+        this.tryRunDirectPersonalMemoryList(
+          input.activeUserPrompt,
+          input.requestId,
+          input.orchestration,
+          input.preferences,
+        )),
+      this.createDirectRoute("personal_memory_save", "memory-preferences", async (input) =>
+        this.tryRunDirectPersonalMemorySave(
+          input.activeUserPrompt,
+          input.requestId,
+          input.orchestration,
+          input.preferences,
+        )),
+      this.createDirectRoute("personal_memory_update", "memory-preferences", async (input) =>
+        this.tryRunDirectPersonalMemoryUpdate(
+          input.activeUserPrompt,
+          input.requestId,
+          input.orchestration,
+          input.preferences,
+        )),
+      this.createDirectRoute("personal_memory_delete", "memory-preferences", async (input) =>
+        this.tryRunDirectPersonalMemoryDelete(
+          input.activeUserPrompt,
+          input.requestId,
+          input.orchestration,
+          input.preferences,
+        )),
+    ];
+  }
+
+  private buildDirectOperationalRoutes(): DirectRouteDefinition[] {
+    return [
+      this.createDirectRoute("morning_brief", "operational", async (input) => this.tryRunDirectMorningBrief(
+        input.activeUserPrompt,
+        input.requestId,
+        input.requestLogger,
+        input.orchestration,
+      )),
+      this.createDirectRoute("operational_planning", "operational", async (input) =>
+        this.tryRunDirectOperationalPlanning(
+          input.activeUserPrompt,
+          input.requestId,
+          input.requestLogger,
+          input.intent,
+          input.preferences,
+        )),
+      this.createDirectRoute("mac_queue_status", "operational", async (input) => this.tryRunDirectMacQueueStatus(
+        input.activeUserPrompt,
+        input.requestId,
+        input.orchestration,
+      )),
+      this.createDirectRoute("mac_queue_list", "operational", async (input) => this.tryRunDirectMacQueueList(
+        input.activeUserPrompt,
+        input.requestId,
+        input.orchestration,
+      )),
+      this.createDirectRoute("mac_queue_enqueue", "operational", async (input) =>
+        this.tryRunDirectMacQueueEnqueue(
+          input.activeUserPrompt,
+          input.requestId,
+          input.orchestration,
+        )),
+      this.createDirectRoute("contact_list", "operational", async (input) => this.tryRunDirectContactList(
+        input.activeUserPrompt,
+        input.requestId,
+        input.orchestration,
+        input.preferences,
+      )),
+      this.createDirectRoute("contact_upsert", "operational", async (input) => this.tryRunDirectContactUpsert(
+        input.activeUserPrompt,
+        input.requestId,
+        input.orchestration,
+        input.preferences,
+      )),
+      this.createDirectRoute("memory_entity_list", "operational", async (input) =>
+        this.tryRunDirectMemoryEntityList(
+          input.activeUserPrompt,
+          input.requestId,
+          input.orchestration,
+          input.preferences,
+        )),
+      this.createDirectRoute("memory_entity_search", "operational", async (input) =>
+        this.tryRunDirectMemoryEntitySearch(
+          input.activeUserPrompt,
+          input.requestId,
+          input.orchestration,
+          input.preferences,
+        )),
+      this.createDirectRoute("intent_resolve", "operational", async (input) => this.tryRunDirectIntentResolve(
+        input.activeUserPrompt,
+        input.requestId,
+        input.orchestration,
+        input.preferences,
+      )),
+    ];
+  }
+
+  private buildDirectWorkflowRoutes(): DirectRouteDefinition[] {
+    return [
+      this.createDirectRoute("workflow_list", "workflow", async (input) => this.tryRunDirectWorkflowList(
+        input.activeUserPrompt,
+        input.requestId,
+        input.orchestration,
+        input.preferences,
+      )),
+      this.createDirectRoute("workflow_show", "workflow", async (input) => this.tryRunDirectWorkflowShow(
+        input.activeUserPrompt,
+        input.requestId,
+        input.orchestration,
+        input.preferences,
+      )),
+      this.createDirectRoute("workflow_artifacts", "workflow", async (input) =>
+        this.tryRunDirectWorkflowArtifacts(
+          input.activeUserPrompt,
+          input.requestId,
+          input.orchestration,
+          input.preferences,
+        )),
+      this.createDirectRoute("workflow_execution", "workflow", async (input) =>
+        this.tryRunDirectWorkflowExecution(
+          input.activeUserPrompt,
+          input.requestId,
+          input.requestLogger,
+          input.orchestration,
+          input.preferences,
+        )),
+      this.createDirectRoute("workflow_step_update", "workflow", async (input) =>
+        this.tryRunDirectWorkflowStepUpdate(
+          input.activeUserPrompt,
+          input.requestId,
+          input.orchestration,
+          input.preferences,
+        )),
+      this.createDirectRoute("workflow_planning", "workflow", async (input) =>
+        this.tryRunDirectWorkflowPlanning(
+          input.activeUserPrompt,
+          input.requestId,
+          input.requestLogger,
+          input.orchestration,
+          input.preferences,
+        )),
+    ];
+  }
+
+  private buildDirectReviewRoutes(): DirectRouteDefinition[] {
+    return [
+      this.createDirectRoute("memory_update_guard", "review", async (input) => this.tryRunDirectMemoryUpdateGuard(
+        input.activeUserPrompt,
+        input.requestId,
+        input.orchestration,
+      )),
+      this.createDirectRoute("support_review", "review", async (input) => this.tryRunDirectSupportReview(
+        input.activeUserPrompt,
+        input.requestId,
+        input.requestLogger,
+        input.orchestration,
+      )),
+      this.createDirectRoute("follow_up_review", "review", async (input) => this.tryRunDirectFollowUpReview(
+        input.activeUserPrompt,
+        input.requestId,
+        input.requestLogger,
+        input.orchestration,
+      )),
+      this.createDirectRoute("inbox_triage", "review", async (input) => this.tryRunDirectInboxTriage(
+        input.activeUserPrompt,
+        input.requestId,
+        input.requestLogger,
+        input.orchestration,
+      )),
+      this.createDirectRoute("operational_brief", "review", async (input) => this.tryRunDirectOperationalBrief(
+        input.activeUserPrompt,
+        input.requestId,
+        input.requestLogger,
+        input.orchestration,
+      )),
+      this.createDirectRoute("next_commitment_prep", "review", async (input) =>
+        this.tryRunDirectNextCommitmentPrep(
+          input.activeUserPrompt,
+          input.requestId,
+          input.requestLogger,
+          input.orchestration,
+        )),
+    ];
+  }
+
+  private buildDirectGoogleWorkspaceRoutes(): DirectRouteDefinition[] {
+    return [
+      this.createDirectRoute("calendar_lookup", "google-workspace", async (input) => this.tryRunDirectCalendarLookup(
+        input.activeUserPrompt,
+        input.requestId,
+        input.requestLogger,
+        input.orchestration,
+      )),
+      this.createDirectRoute("calendar_conflict_review", "google-workspace", async (input) =>
+        this.tryRunDirectCalendarConflictReview(
+          input.activeUserPrompt,
+          input.requestId,
+          input.requestLogger,
+          input.orchestration,
+        )),
+      this.createDirectRoute("calendar_period_list", "google-workspace", async (input) =>
+        this.tryRunDirectCalendarPeriodList(
+          input.activeUserPrompt,
+          input.requestId,
+          input.requestLogger,
+          input.orchestration,
+        )),
+      this.createDirectRoute("google_task_draft", "google-workspace", async (input) =>
+        this.tryRunDirectGoogleTaskDraft(
+          input.activeUserPrompt,
+          input.requestId,
+          input.requestLogger,
+          input.orchestration,
+        )),
+      this.createDirectRoute("google_event_draft", "google-workspace", async (input) =>
+        this.tryRunDirectGoogleEventDraft(
+          input.activeUserPrompt,
+          input.requestId,
+          input.requestLogger,
+          input.orchestration,
+        )),
+      this.createDirectRoute("google_event_move", "google-workspace", async (input) =>
+        this.tryRunDirectGoogleEventMove(
+          input.activeUserPrompt,
+          input.requestId,
+          input.requestLogger,
+          input.orchestration,
+        )),
+      this.createDirectRoute("google_event_delete", "google-workspace", async (input) =>
+        this.tryRunDirectGoogleEventDelete(
+          input.activeUserPrompt,
+          input.requestId,
+          input.requestLogger,
+          input.orchestration,
+        )),
+      this.createDirectRoute("google_tasks", "google-workspace", async (input) => this.tryRunDirectGoogleTasks(
+        input.activeUserPrompt,
+        input.requestId,
+        input.requestLogger,
+        input.orchestration,
+      )),
+      this.createDirectRoute("google_contacts", "google-workspace", async (input) =>
+        this.tryRunDirectGoogleContacts(
+          input.activeUserPrompt,
+          input.requestId,
+          input.requestLogger,
+          input.orchestration,
+        )),
+      this.createDirectRoute("google_calendars_list", "google-workspace", async (input) =>
+        this.tryRunDirectGoogleCalendarsList(
+          input.activeUserPrompt,
+          input.requestId,
+          input.requestLogger,
+          input.orchestration,
+        )),
+      this.createDirectRoute("place_lookup", "google-workspace", async (input) => this.tryRunDirectPlaceLookup(
+        input.activeUserPrompt,
+        input.requestId,
+        input.requestLogger,
+        input.orchestration,
+      )),
+    ];
+  }
+
+  private buildDirectMessagingRoutes(): DirectRouteDefinition[] {
+    return [
+      this.createDirectRoute("whatsapp_send", "messaging", async (input) => this.tryRunDirectWhatsAppSend(
+        input.activeUserPrompt,
+        input.userPrompt,
+        input.requestId,
+        input.orchestration,
+      )),
+      this.createDirectRoute("whatsapp_recent_search", "messaging", async (input) =>
+        this.tryRunDirectWhatsAppRecentSearch(
+          input.activeUserPrompt,
+          input.userPrompt,
+          input.requestId,
+          input.orchestration,
+        )),
+      this.createDirectRoute("whatsapp_pending_approvals", "messaging", async (input) =>
+        this.tryRunDirectWhatsAppPendingApprovals(
+          input.activeUserPrompt,
+          input.requestId,
+          input.orchestration,
+        )),
+    ];
+  }
+
+  private buildDirectKnowledgeAndProjectRoutes(): DirectRouteDefinition[] {
+    return [
+      this.createDirectRoute("weather", "knowledge-project", async (input) => this.tryRunDirectWeather(
+        input.activeUserPrompt,
+        input.requestId,
+        input.requestLogger,
+        input.orchestration,
+      )),
+      this.createDirectRoute("internal_knowledge_lookup", "knowledge-project", async (input) =>
+        this.tryRunDirectInternalKnowledgeLookup(
+          input.activeUserPrompt,
+          input.requestId,
+          input.requestLogger,
+          input.orchestration,
+        )),
+      this.createDirectRoute("web_research", "knowledge-project", async (input) => this.tryRunDirectWebResearch(
+        input.activeUserPrompt,
+        input.requestId,
+        input.requestLogger,
+        input.orchestration,
+      )),
+      this.createDirectRoute("revenue_scoreboard", "knowledge-project", async (input) =>
+        this.tryRunDirectRevenueScoreboard(
+          input.activeUserPrompt,
+          input.requestId,
+          input.requestLogger,
+          input.orchestration,
+        )),
+      this.createDirectRoute("allowed_spaces", "knowledge-project", async (input) => this.tryRunDirectAllowedSpaces(
+        input.activeUserPrompt,
+        input.requestId,
+        input.orchestration,
+      )),
+      this.createDirectRoute("project_scan", "knowledge-project", async (input) => this.tryRunDirectProjectScan(
+        input.activeUserPrompt,
+        input.requestId,
+        input.requestLogger,
+        input.orchestration,
+      )),
+      this.createDirectRoute("project_mirror", "knowledge-project", async (input) => this.tryRunDirectProjectMirror(
+        input.activeUserPrompt,
+        input.requestId,
+        input.requestLogger,
+        input.orchestration,
+      )),
+      this.createDirectRoute("safe_exec", "knowledge-project", async (input) => this.tryRunDirectSafeExec(
+        input.activeUserPrompt,
+        input.requestId,
+        input.requestLogger,
+        input.orchestration,
+      )),
+    ];
+  }
+
+  private buildDirectContentRoutes(): DirectRouteDefinition[] {
+    return [
+      this.createDirectRoute("daily_editorial_research", "content", async (input) =>
+        this.tryRunDirectDailyEditorialResearch(
+          input.activeUserPrompt,
+          input.requestId,
+          input.requestLogger,
+          input.orchestration,
+        )),
+      this.createDirectRoute("content_idea_generation", "content", async (input) =>
+        this.tryRunDirectContentIdeaGeneration(
+          input.activeUserPrompt,
+          input.requestId,
+          input.requestLogger,
+          input.orchestration,
+        )),
+      this.createDirectRoute("content_review", "content", async (input) => this.tryRunDirectContentReview(
+        input.activeUserPrompt,
+        input.requestId,
+        input.requestLogger,
+        input.orchestration,
+      )),
+      this.createDirectRoute("content_script_generation", "content", async (input) =>
+        this.tryRunDirectContentScriptGeneration(
+          input.activeUserPrompt,
+          input.requestId,
+          input.requestLogger,
+          input.orchestration,
+        )),
+      this.createDirectRoute("content_batch_planning", "content", async (input) =>
+        this.tryRunDirectContentBatchPlanning(
+          input.activeUserPrompt,
+          input.requestId,
+          input.requestLogger,
+          input.orchestration,
+        )),
+      this.createDirectRoute("content_batch_generation", "content", async (input) =>
+        this.tryRunDirectContentBatchGeneration(
+          input.activeUserPrompt,
+          input.requestId,
+          input.requestLogger,
+          input.orchestration,
+        )),
+      this.createDirectRoute("content_distribution_strategy", "content", async (input) =>
+        this.tryRunDirectContentDistributionStrategy(
+          input.activeUserPrompt,
+          input.requestId,
+          input.requestLogger,
+          input.orchestration,
+        )),
+      this.createDirectRoute("content_channels", "content", async (input) => this.tryRunDirectContentChannels(
+        input.activeUserPrompt,
+        input.requestId,
+        input.requestLogger,
+        input.orchestration,
+      )),
+      this.createDirectRoute("content_series", "content", async (input) => this.tryRunDirectContentSeries(
+        input.activeUserPrompt,
+        input.requestId,
+        input.requestLogger,
+        input.orchestration,
+      )),
+      this.createDirectRoute("content_format_library", "content", async (input) =>
+        this.tryRunDirectContentFormatLibrary(
+          input.activeUserPrompt,
+          input.requestId,
+          input.requestLogger,
+          input.orchestration,
+        )),
+      this.createDirectRoute("content_hook_library", "content", async (input) =>
+        this.tryRunDirectContentHookLibrary(
+          input.activeUserPrompt,
+          input.requestId,
+          input.requestLogger,
+          input.orchestration,
+        )),
+      this.createDirectRoute("content_overview", "content", async (input) => this.tryRunDirectContentOverview(
+        input.activeUserPrompt,
+        input.requestId,
+        input.requestLogger,
+        input.orchestration,
+      )),
+      this.createDirectRoute("case_notes", "content", async (input) => this.tryRunDirectCaseNotes(
+        input.activeUserPrompt,
+        input.requestId,
+        input.requestLogger,
+        input.orchestration,
+      )),
+    ];
+  }
+
+  private buildDirectEmailRoutes(): DirectRouteDefinition[] {
+    return [
+      this.createDirectRoute("email_draft", "email", async (input) => this.tryRunDirectEmailDraft(
+        input.activeUserPrompt,
+        input.requestId,
+        input.requestLogger,
+        input.orchestration,
+      )),
+      this.createDirectRoute("email_summary", "email", async (input) => this.tryRunDirectEmailSummary(
+        input.activeUserPrompt,
+        input.requestId,
+        input.requestLogger,
+        input.orchestration,
+      )),
+      this.createDirectRoute("email_lookup", "email", async (input) => this.tryRunDirectEmailLookup(
+        input.activeUserPrompt,
+        input.requestId,
+        input.requestLogger,
+        input.orchestration,
+      )),
+    ];
+  }
+
+  private buildDirectRouteDefinitions(): DirectRouteDefinition[] {
+    return [
+      ...this.buildDirectConversationRoutes(),
+      ...this.buildDirectCapabilityRoutes(),
+      ...this.buildDirectMemoryAndPreferenceRoutes(),
+      ...this.buildDirectOperationalRoutes(),
+      ...this.buildDirectWorkflowRoutes(),
+      ...this.buildDirectReviewRoutes(),
+      ...this.buildDirectGoogleWorkspaceRoutes(),
+      ...this.buildDirectMessagingRoutes(),
+      ...this.buildDirectKnowledgeAndProjectRoutes(),
+      ...this.buildDirectContentRoutes(),
+      ...this.buildDirectEmailRoutes(),
+    ];
+  }
+
   private async tryRunDirectRoutes(input: {
     userPrompt: string;
     activeUserPrompt: string;
@@ -10052,715 +10649,18 @@ export class AgentCore {
     preferences: UserPreferences;
     options?: AgentRunOptions;
   }): Promise<AgentRunResult | null> {
-    const directPingResult = await this.tryRunDirectPing(
-      input.activeUserPrompt,
-      input.requestId,
-      input.requestLogger,
-      input.orchestration,
-    );
-    if (directPingResult) {
-      return directPingResult;
-    }
-    const directGreetingResult = await this.tryRunDirectGreeting(
-      input.activeUserPrompt,
-      input.requestId,
-      input.orchestration,
-    );
-    if (directGreetingResult) {
-      return directGreetingResult;
-    }
-    const directConversationStyleResult = await this.tryRunDirectConversationStyleCorrection(
-      input.activeUserPrompt,
-      input.requestId,
-      input.orchestration,
-      input.preferences,
-    );
-    if (directConversationStyleResult) {
-      return directConversationStyleResult;
-    }
-    const directIdentityResult = await this.tryRunDirectAgentIdentity(
-      input.activeUserPrompt,
-      input.requestId,
-      input.orchestration,
-    );
-    if (directIdentityResult) {
-      return directIdentityResult;
-    }
-    const directPersonalProfileShowResult = await this.tryRunDirectPersonalOperationalProfileShow(
-      input.activeUserPrompt,
-      input.requestId,
-      input.orchestration,
-      input.preferences,
-    );
-    if (directPersonalProfileShowResult) {
-      return directPersonalProfileShowResult;
-    }
-    const directOperationalStateResult = await this.tryRunDirectOperationalStateShow(
-      input.activeUserPrompt,
-      input.requestId,
-      input.orchestration,
-      input.preferences,
-    );
-    if (directOperationalStateResult) {
-      return directOperationalStateResult;
-    }
-    const directLearnedPreferencesListResult = await this.tryRunDirectLearnedPreferencesList(
-      input.activeUserPrompt,
-      input.requestId,
-      input.orchestration,
-      input.preferences,
-    );
-    if (directLearnedPreferencesListResult) {
-      return directLearnedPreferencesListResult;
-    }
-    const directLearnedPreferencesDeleteResult = await this.tryRunDirectLearnedPreferencesDelete(
-      input.activeUserPrompt,
-      input.requestId,
-      input.orchestration,
-      input.preferences,
-    );
-    if (directLearnedPreferencesDeleteResult) {
-      return directLearnedPreferencesDeleteResult;
-    }
-    const directCapabilityInspectionResult = await this.tryRunDirectCapabilityInspection(
-      input.activeUserPrompt,
-      input.requestId,
-      input.orchestration,
-      input.preferences,
-    );
-    if (directCapabilityInspectionResult) {
-      return directCapabilityInspectionResult;
-    }
-    const activeGoalResult = await this.tryRunActiveGoalTurn(
-      input.activeUserPrompt,
-      input.requestId,
-      input.requestLogger,
-      input.orchestration,
-      input.preferences,
-      input.options,
-    );
-    if (activeGoalResult) {
-      return activeGoalResult;
-    }
-    const directCapabilityPlanningResult = await this.tryRunDirectCapabilityAwarePlanning(
-      input.activeUserPrompt,
-      input.requestId,
-      input.requestLogger,
-      input.orchestration,
-      input.preferences,
-      input.options,
-    );
-    if (directCapabilityPlanningResult) {
-      return directCapabilityPlanningResult;
-    }
-    const directPersonalProfileUpdateResult = await this.tryRunDirectPersonalOperationalProfileUpdate(
-      input.activeUserPrompt,
-      input.requestId,
-      input.orchestration,
-      input.preferences,
-    );
-    if (directPersonalProfileUpdateResult) {
-      return directPersonalProfileUpdateResult;
-    }
-    const directPersonalProfileDeleteResult = await this.tryRunDirectPersonalOperationalProfileDelete(
-      input.activeUserPrompt,
-      input.requestId,
-      input.orchestration,
-      input.preferences,
-    );
-    if (directPersonalProfileDeleteResult) {
-      return directPersonalProfileDeleteResult;
-    }
-    const directPreferencesResult = await this.tryRunDirectUserPreferences(
-      input.activeUserPrompt,
-      input.requestId,
-      input.orchestration,
-    );
-    if (directPreferencesResult) {
-      return directPreferencesResult;
-    }
-    const directPersonalMemoryListResult = await this.tryRunDirectPersonalMemoryList(
-      input.activeUserPrompt,
-      input.requestId,
-      input.orchestration,
-      input.preferences,
-    );
-    if (directPersonalMemoryListResult) {
-      return directPersonalMemoryListResult;
-    }
-    const directPersonalMemorySaveResult = await this.tryRunDirectPersonalMemorySave(
-      input.activeUserPrompt,
-      input.requestId,
-      input.orchestration,
-      input.preferences,
-    );
-    if (directPersonalMemorySaveResult) {
-      return directPersonalMemorySaveResult;
-    }
-    const directPersonalMemoryUpdateResult = await this.tryRunDirectPersonalMemoryUpdate(
-      input.activeUserPrompt,
-      input.requestId,
-      input.orchestration,
-      input.preferences,
-    );
-    if (directPersonalMemoryUpdateResult) {
-      return directPersonalMemoryUpdateResult;
-    }
-    const directPersonalMemoryDeleteResult = await this.tryRunDirectPersonalMemoryDelete(
-      input.activeUserPrompt,
-      input.requestId,
-      input.orchestration,
-      input.preferences,
-    );
-    if (directPersonalMemoryDeleteResult) {
-      return directPersonalMemoryDeleteResult;
-    }
-    const directMorningBriefResult = await this.tryRunDirectMorningBrief(
-      input.activeUserPrompt,
-      input.requestId,
-      input.requestLogger,
-      input.orchestration,
-    );
-    if (directMorningBriefResult) {
-      return directMorningBriefResult;
-    }
-    const directOperationalPlanningResult = await this.tryRunDirectOperationalPlanning(
-      input.activeUserPrompt,
-      input.requestId,
-      input.requestLogger,
-      input.intent,
-      input.preferences,
-    );
-    if (directOperationalPlanningResult) {
-      return directOperationalPlanningResult;
-    }
-    const directMacQueueStatusResult = await this.tryRunDirectMacQueueStatus(
-      input.activeUserPrompt,
-      input.requestId,
-      input.orchestration,
-    );
-    if (directMacQueueStatusResult) {
-      return directMacQueueStatusResult;
-    }
-    const directMacQueueListResult = await this.tryRunDirectMacQueueList(
-      input.activeUserPrompt,
-      input.requestId,
-      input.orchestration,
-    );
-    if (directMacQueueListResult) {
-      return directMacQueueListResult;
-    }
-    const directMacQueueEnqueueResult = await this.tryRunDirectMacQueueEnqueue(
-      input.activeUserPrompt,
-      input.requestId,
-      input.orchestration,
-    );
-    if (directMacQueueEnqueueResult) {
-      return directMacQueueEnqueueResult;
-    }
-    const directContactListResult = await this.tryRunDirectContactList(
-      input.activeUserPrompt,
-      input.requestId,
-      input.orchestration,
-      input.preferences,
-    );
-    if (directContactListResult) {
-      return directContactListResult;
-    }
-    const directContactUpsertResult = await this.tryRunDirectContactUpsert(
-      input.activeUserPrompt,
-      input.requestId,
-      input.orchestration,
-      input.preferences,
-    );
-    if (directContactUpsertResult) {
-      return directContactUpsertResult;
-    }
-    const directMemoryEntityListResult = await this.tryRunDirectMemoryEntityList(
-      input.activeUserPrompt,
-      input.requestId,
-      input.orchestration,
-      input.preferences,
-    );
-    if (directMemoryEntityListResult) {
-      return directMemoryEntityListResult;
-    }
-    const directMemoryEntitySearchResult = await this.tryRunDirectMemoryEntitySearch(
-      input.activeUserPrompt,
-      input.requestId,
-      input.orchestration,
-      input.preferences,
-    );
-    if (directMemoryEntitySearchResult) {
-      return directMemoryEntitySearchResult;
-    }
-    const directIntentResolveResult = await this.tryRunDirectIntentResolve(
-      input.activeUserPrompt,
-      input.requestId,
-      input.orchestration,
-      input.preferences,
-    );
-    if (directIntentResolveResult) {
-      return directIntentResolveResult;
-    }
-    const directWorkflowListResult = await this.tryRunDirectWorkflowList(
-      input.activeUserPrompt,
-      input.requestId,
-      input.orchestration,
-      input.preferences,
-    );
-    if (directWorkflowListResult) {
-      return directWorkflowListResult;
-    }
-    const directWorkflowShowResult = await this.tryRunDirectWorkflowShow(
-      input.activeUserPrompt,
-      input.requestId,
-      input.orchestration,
-      input.preferences,
-    );
-    if (directWorkflowShowResult) {
-      return directWorkflowShowResult;
-    }
-    const directWorkflowArtifactsResult = await this.tryRunDirectWorkflowArtifacts(
-      input.activeUserPrompt,
-      input.requestId,
-      input.orchestration,
-      input.preferences,
-    );
-    if (directWorkflowArtifactsResult) {
-      return directWorkflowArtifactsResult;
-    }
-    const directWorkflowExecutionResult = await this.tryRunDirectWorkflowExecution(
-      input.activeUserPrompt,
-      input.requestId,
-      input.requestLogger,
-      input.orchestration,
-      input.preferences,
-    );
-    if (directWorkflowExecutionResult) {
-      return directWorkflowExecutionResult;
-    }
-    const directWorkflowStepUpdateResult = await this.tryRunDirectWorkflowStepUpdate(
-      input.activeUserPrompt,
-      input.requestId,
-      input.orchestration,
-      input.preferences,
-    );
-    if (directWorkflowStepUpdateResult) {
-      return directWorkflowStepUpdateResult;
-    }
-    const directWorkflowPlanningResult = await this.tryRunDirectWorkflowPlanning(
-      input.activeUserPrompt,
-      input.requestId,
-      input.requestLogger,
-      input.orchestration,
-      input.preferences,
-    );
-    if (directWorkflowPlanningResult) {
-      return directWorkflowPlanningResult;
-    }
-    const directMemoryUpdateGuardResult = await this.tryRunDirectMemoryUpdateGuard(
-      input.activeUserPrompt,
-      input.requestId,
-      input.orchestration,
-    );
-    if (directMemoryUpdateGuardResult) {
-      return directMemoryUpdateGuardResult;
-    }
-    const directSupportReviewResult = await this.tryRunDirectSupportReview(
-      input.activeUserPrompt,
-      input.requestId,
-      input.requestLogger,
-      input.orchestration,
-    );
-    if (directSupportReviewResult) {
-      return directSupportReviewResult;
-    }
-    const directFollowUpReviewResult = await this.tryRunDirectFollowUpReview(
-      input.activeUserPrompt,
-      input.requestId,
-      input.requestLogger,
-      input.orchestration,
-    );
-    if (directFollowUpReviewResult) {
-      return directFollowUpReviewResult;
-    }
-    const directInboxTriageResult = await this.tryRunDirectInboxTriage(
-      input.activeUserPrompt,
-      input.requestId,
-      input.requestLogger,
-      input.orchestration,
-    );
-    if (directInboxTriageResult) {
-      return directInboxTriageResult;
-    }
-    const directOperationalBriefResult = await this.tryRunDirectOperationalBrief(
-      input.activeUserPrompt,
-      input.requestId,
-      input.requestLogger,
-      input.orchestration,
-    );
-    if (directOperationalBriefResult) {
-      return directOperationalBriefResult;
-    }
-    const directNextCommitmentPrepResult = await this.tryRunDirectNextCommitmentPrep(
-      input.activeUserPrompt,
-      input.requestId,
-      input.requestLogger,
-      input.orchestration,
-    );
-    if (directNextCommitmentPrepResult) {
-      return directNextCommitmentPrepResult;
-    }
-    const directCalendarLookupResult = await this.tryRunDirectCalendarLookup(
-      input.activeUserPrompt,
-      input.requestId,
-      input.requestLogger,
-      input.orchestration,
-    );
-    if (directCalendarLookupResult) {
-      return directCalendarLookupResult;
-    }
-    const directCalendarConflictReviewResult = await this.tryRunDirectCalendarConflictReview(
-      input.activeUserPrompt,
-      input.requestId,
-      input.requestLogger,
-      input.orchestration,
-    );
-    if (directCalendarConflictReviewResult) {
-      return directCalendarConflictReviewResult;
-    }
-    const directCalendarPeriodListResult = await this.tryRunDirectCalendarPeriodList(
-      input.activeUserPrompt,
-      input.requestId,
-      input.requestLogger,
-      input.orchestration,
-    );
-    if (directCalendarPeriodListResult) {
-      return directCalendarPeriodListResult;
-    }
-    const directGoogleTaskDraftResult = await this.tryRunDirectGoogleTaskDraft(
-      input.activeUserPrompt,
-      input.requestId,
-      input.requestLogger,
-      input.orchestration,
-    );
-    if (directGoogleTaskDraftResult) {
-      return directGoogleTaskDraftResult;
-    }
-    const directGoogleEventDraftResult = await this.tryRunDirectGoogleEventDraft(
-      input.activeUserPrompt,
-      input.requestId,
-      input.requestLogger,
-      input.orchestration,
-    );
-    if (directGoogleEventDraftResult) {
-      return directGoogleEventDraftResult;
-    }
-    const directGoogleEventMoveResult = await this.tryRunDirectGoogleEventMove(
-      input.activeUserPrompt,
-      input.requestId,
-      input.requestLogger,
-      input.orchestration,
-    );
-    if (directGoogleEventMoveResult) {
-      return directGoogleEventMoveResult;
-    }
-    const directGoogleEventDeleteResult = await this.tryRunDirectGoogleEventDelete(
-      input.activeUserPrompt,
-      input.requestId,
-      input.requestLogger,
-      input.orchestration,
-    );
-    if (directGoogleEventDeleteResult) {
-      return directGoogleEventDeleteResult;
-    }
-    const directGoogleTasksResult = await this.tryRunDirectGoogleTasks(
-      input.activeUserPrompt,
-      input.requestId,
-      input.requestLogger,
-      input.orchestration,
-    );
-    if (directGoogleTasksResult) {
-      return directGoogleTasksResult;
-    }
-    const directGoogleContactsResult = await this.tryRunDirectGoogleContacts(
-      input.activeUserPrompt,
-      input.requestId,
-      input.requestLogger,
-      input.orchestration,
-    );
-    if (directGoogleContactsResult) {
-      return directGoogleContactsResult;
-    }
-    const directGoogleCalendarsResult = await this.tryRunDirectGoogleCalendarsList(
-      input.activeUserPrompt,
-      input.requestId,
-      input.requestLogger,
-      input.orchestration,
-    );
-    if (directGoogleCalendarsResult) {
-      return directGoogleCalendarsResult;
-    }
-    const directPlaceLookupResult = await this.tryRunDirectPlaceLookup(
-      input.activeUserPrompt,
-      input.requestId,
-      input.requestLogger,
-      input.orchestration,
-    );
-    if (directPlaceLookupResult) {
-      return directPlaceLookupResult;
-    }
-    const directWhatsAppSendResult = await this.tryRunDirectWhatsAppSend(
-      input.activeUserPrompt,
-      input.userPrompt,
-      input.requestId,
-      input.orchestration,
-    );
-    if (directWhatsAppSendResult) {
-      return directWhatsAppSendResult;
-    }
-    const directWhatsAppRecentSearchResult = await this.tryRunDirectWhatsAppRecentSearch(
-      input.activeUserPrompt,
-      input.userPrompt,
-      input.requestId,
-      input.orchestration,
-    );
-    if (directWhatsAppRecentSearchResult) {
-      return directWhatsAppRecentSearchResult;
-    }
-    const directWhatsAppPendingApprovalsResult = await this.tryRunDirectWhatsAppPendingApprovals(
-      input.activeUserPrompt,
-      input.requestId,
-      input.orchestration,
-    );
-    if (directWhatsAppPendingApprovalsResult) {
-      return directWhatsAppPendingApprovalsResult;
-    }
-    const directWeatherResult = await this.tryRunDirectWeather(
-      input.activeUserPrompt,
-      input.requestId,
-      input.requestLogger,
-      input.orchestration,
-    );
-    if (directWeatherResult) {
-      return directWeatherResult;
-    }
-    const directInternalKnowledgeResult = await this.tryRunDirectInternalKnowledgeLookup(
-      input.activeUserPrompt,
-      input.requestId,
-      input.requestLogger,
-      input.orchestration,
-    );
-    if (directInternalKnowledgeResult) {
-      return directInternalKnowledgeResult;
-    }
-    const directWebResearchResult = await this.tryRunDirectWebResearch(
-      input.activeUserPrompt,
-      input.requestId,
-      input.requestLogger,
-      input.orchestration,
-    );
-    if (directWebResearchResult) {
-      return directWebResearchResult;
-    }
-    const directRevenueScoreboardResult = await this.tryRunDirectRevenueScoreboard(
-      input.activeUserPrompt,
-      input.requestId,
-      input.requestLogger,
-      input.orchestration,
-    );
-    if (directRevenueScoreboardResult) {
-      return directRevenueScoreboardResult;
-    }
-    const directAllowedSpacesResult = await this.tryRunDirectAllowedSpaces(
-      input.activeUserPrompt,
-      input.requestId,
-      input.orchestration,
-    );
-    if (directAllowedSpacesResult) {
-      return directAllowedSpacesResult;
-    }
-    const directProjectScanResult = await this.tryRunDirectProjectScan(
-      input.activeUserPrompt,
-      input.requestId,
-      input.requestLogger,
-      input.orchestration,
-    );
-    if (directProjectScanResult) {
-      return directProjectScanResult;
-    }
-    const directProjectMirrorResult = await this.tryRunDirectProjectMirror(
-      input.activeUserPrompt,
-      input.requestId,
-      input.requestLogger,
-      input.orchestration,
-    );
-    if (directProjectMirrorResult) {
-      return directProjectMirrorResult;
-    }
-    const directSafeExecResult = await this.tryRunDirectSafeExec(
-      input.activeUserPrompt,
-      input.requestId,
-      input.requestLogger,
-      input.orchestration,
-    );
-    if (directSafeExecResult) {
-      return directSafeExecResult;
-    }
-    const directDailyEditorialResearchResult = await this.tryRunDirectDailyEditorialResearch(
-      input.activeUserPrompt,
-      input.requestId,
-      input.requestLogger,
-      input.orchestration,
-    );
-    if (directDailyEditorialResearchResult) {
-      return directDailyEditorialResearchResult;
-    }
-    const directContentIdeaGenerationResult = await this.tryRunDirectContentIdeaGeneration(
-      input.activeUserPrompt,
-      input.requestId,
-      input.requestLogger,
-      input.orchestration,
-    );
-    if (directContentIdeaGenerationResult) {
-      return directContentIdeaGenerationResult;
-    }
-    const directContentReviewResult = await this.tryRunDirectContentReview(
-      input.activeUserPrompt,
-      input.requestId,
-      input.requestLogger,
-      input.orchestration,
-    );
-    if (directContentReviewResult) {
-      return directContentReviewResult;
-    }
-    const directContentScriptResult = await this.tryRunDirectContentScriptGeneration(
-      input.activeUserPrompt,
-      input.requestId,
-      input.requestLogger,
-      input.orchestration,
-    );
-    if (directContentScriptResult) {
-      return directContentScriptResult;
-    }
-    const directContentBatchResult = await this.tryRunDirectContentBatchPlanning(
-      input.activeUserPrompt,
-      input.requestId,
-      input.requestLogger,
-      input.orchestration,
-    );
-    if (directContentBatchResult) {
-      return directContentBatchResult;
-    }
-    const directContentBatchGenerationResult = await this.tryRunDirectContentBatchGeneration(
-      input.activeUserPrompt,
-      input.requestId,
-      input.requestLogger,
-      input.orchestration,
-    );
-    if (directContentBatchGenerationResult) {
-      return directContentBatchGenerationResult;
-    }
-    const directContentDistributionStrategyResult = await this.tryRunDirectContentDistributionStrategy(
-      input.activeUserPrompt,
-      input.requestId,
-      input.requestLogger,
-      input.orchestration,
-    );
-    if (directContentDistributionStrategyResult) {
-      return directContentDistributionStrategyResult;
-    }
-    const directContentChannelsResult = await this.tryRunDirectContentChannels(
-      input.activeUserPrompt,
-      input.requestId,
-      input.requestLogger,
-      input.orchestration,
-    );
-    if (directContentChannelsResult) {
-      return directContentChannelsResult;
-    }
-    const directContentSeriesResult = await this.tryRunDirectContentSeries(
-      input.activeUserPrompt,
-      input.requestId,
-      input.requestLogger,
-      input.orchestration,
-    );
-    if (directContentSeriesResult) {
-      return directContentSeriesResult;
-    }
-    const directContentFormatLibraryResult = await this.tryRunDirectContentFormatLibrary(
-      input.activeUserPrompt,
-      input.requestId,
-      input.requestLogger,
-      input.orchestration,
-    );
-    if (directContentFormatLibraryResult) {
-      return directContentFormatLibraryResult;
-    }
-    const directContentHookLibraryResult = await this.tryRunDirectContentHookLibrary(
-      input.activeUserPrompt,
-      input.requestId,
-      input.requestLogger,
-      input.orchestration,
-    );
-    if (directContentHookLibraryResult) {
-      return directContentHookLibraryResult;
-    }
-    const directContentOverviewResult = await this.tryRunDirectContentOverview(
-      input.activeUserPrompt,
-      input.requestId,
-      input.requestLogger,
-      input.orchestration,
-    );
-    if (directContentOverviewResult) {
-      return directContentOverviewResult;
-    }
-    const directCaseNotesResult = await this.tryRunDirectCaseNotes(
-      input.activeUserPrompt,
-      input.requestId,
-      input.requestLogger,
-      input.orchestration,
-    );
-    if (directCaseNotesResult) {
-      return directCaseNotesResult;
-    }
-    const directEmailDraftResult = await this.tryRunDirectEmailDraft(
-      input.activeUserPrompt,
-      input.requestId,
-      input.requestLogger,
-      input.orchestration,
-    );
-    if (directEmailDraftResult) {
-      return directEmailDraftResult;
-    }
-    const directEmailSummaryResult = await this.tryRunDirectEmailSummary(
-      input.activeUserPrompt,
-      input.requestId,
-      input.requestLogger,
-      input.orchestration,
-    );
-    if (directEmailSummaryResult) {
-      return directEmailSummaryResult;
-    }
-    const directEmailLookupResult = await this.tryRunDirectEmailLookup(
-      input.activeUserPrompt,
-      input.requestId,
-      input.requestLogger,
-      input.orchestration,
-    );
-    if (directEmailLookupResult) {
-      return directEmailLookupResult;
-    }
-
-    return this.tryRunExternalReasoning(
-      input.activeUserPrompt,
-      input.requestId,
-      input.requestLogger,
-      input.intent,
-      input.preferences,
-      input.options,
-      "post_direct_routes",
+    return this.directRouteRunner.run(
+      input,
+      this.buildDirectRouteDefinitions(),
+      async (fallbackInput) => this.tryRunExternalReasoning(
+        fallbackInput.activeUserPrompt,
+        fallbackInput.requestId,
+        fallbackInput.requestLogger,
+        fallbackInput.intent,
+        fallbackInput.preferences,
+        fallbackInput.options,
+        "post_direct_routes",
+      ),
     );
   }
 
