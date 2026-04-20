@@ -188,6 +188,7 @@ Observacoes:
 - `TELEGRAM_ALLOWED_USER_IDS` aceita mais de um id separado por virgula
 - `TELEGRAM_TYPING_ENABLED=true` habilita `typing` no Telegram quando a resposta passa do limiar configurado
 - `PRESENCE_*` controla atraso inicial, refresh, aviso curto intermediario e timeout maximo para evitar presenca infinita
+- `GOOGLE_MAPS_API_KEY` agora cobre tanto lookup de locais quanto `Routes API`; para rota, distancia e pedagio estimado, o projeto Google precisa estar com Places/Geocoding e Routes habilitados
 - a camada de presenca foi separada do canal para permitir adapters futuros, como WhatsApp, sem reabrir o fluxo principal
 - a integracao de email nasce desativada
 - leitura usa IMAP
@@ -534,7 +535,7 @@ Estado atual:
 - o Atlas agora mantem tres camadas pessoais explicitas: `Identity Profile` (quem voce e e como prefere operar), `Operational State` (modo atual, foco, risco, pendencias e proxima acao) e `Learned Preferences` (correcoes e padroes confirmados com o tempo); isso melhora briefing, contexto e reasoning externo sem virar multi-tenant completo
 - correcoes reais e escolhas recorrentes de agenda comecam a alimentar `Learned Preferences` de forma prudente: modo de importacao preferido, interpretacao de local/titulo e padroes de acao em alertas monitorados podem ser reforcados com o uso e reaproveitados depois
 - o Atlas agora tem um `Capability Registry` com planner leve para checar o que esta disponivel, distinguir falta de capability de falta de dado do usuario e responder gaps de forma honesta; quando encontra uma lacuna legitima, pode registrar isso como melhoria real de produto a partir do uso
-- `web.search` ja existe como capability real e passa a ser usada tambem pelo planner em pedidos de informacao recente, comparacao e validacao com fontes; `maps.route`, `maps.distance` e `maps.tolls` continuam tratados como lacunas explicitas ate a integracao de rotas/pedagios entrar
+- `web.search` ja existe como capability real e passa a ser usada tambem pelo planner em pedidos de informacao recente, comparacao e validacao com fontes; `maps.route`, `maps.distance` e `maps.tolls` agora podem usar Google Routes quando `GOOGLE_MAPS_API_KEY` estiver ativo com a API de rotas habilitada, e continuam aparecendo como gap claro quando essa configuracao nao existir
 - provider externo opcional de raciocinio: suporta `EXTERNAL_REASONING_MODE=off|smart|always`; em `off` fica desligado, em `smart` segue a politica por intencao e em `always` tenta o provider em toda mensagem antes do fluxo local; ele pode devolver texto normal ou `assistant_decision`, e o Atlas continua como executor local controlado de operacoes estruturadas sob whitelist; se o provider falhar, expirar ou devolver resposta invalida, cai em fallback local automaticamente
 
 Plugins novos:

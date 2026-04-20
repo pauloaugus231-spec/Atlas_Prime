@@ -119,6 +119,30 @@ async function run(): Promise<void> {
     detail: JSON.stringify(calendarWrite, null, 2),
   });
 
+  const mapsReadyPlanner = buildPlanner({
+    mapsReady: true,
+  });
+  const routeReadyPlan = mapsReadyPlanner.plan("qual a distância de Porto Alegre até Torres?");
+  results.push({
+    name: "distance_request_uses_real_route_when_maps_is_available",
+    passed:
+      routeReadyPlan?.objective === "route_distance"
+      && routeReadyPlan.suggestedAction === "run_maps_route"
+      && routeReadyPlan.routeRequest?.origin === "Porto Alegre"
+      && routeReadyPlan.routeRequest?.destination === "Torres",
+    detail: JSON.stringify(routeReadyPlan, null, 2),
+  });
+
+  const travelCostWithMapsReady = mapsReadyPlanner.plan("quanto vou gastar de Porto Alegre até Torres com gasolina 6,19 e 11 km/l?");
+  results.push({
+    name: "travel_cost_with_maps_ready_uses_route_execution",
+    passed:
+      travelCostWithMapsReady?.objective === "travel_cost_estimate"
+      && travelCostWithMapsReady.suggestedAction === "run_maps_route"
+      && travelCostWithMapsReady.routeRequest?.includeTolls === true,
+    detail: JSON.stringify(travelCostWithMapsReady, null, 2),
+  });
+
   const travelGapPlan = planner.plan("quanto vou gastar de Porto Alegre até Torres com meu JAC T40?");
   results.push({
     name: "travel_cost_request_with_missing_maps_routes_to_gap_handler",

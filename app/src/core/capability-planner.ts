@@ -19,6 +19,7 @@ export type CapabilityPlannerAction =
   | "handle_gap"
   | "respond_direct"
   | "run_web_search"
+  | "run_maps_route"
   | "inspect_gaps"
   | "inspect_capabilities";
 
@@ -36,6 +37,15 @@ export interface CapabilityPlan {
   shouldLogGap?: boolean;
   webQuery?: string;
   researchMode?: WebResearchMode;
+  routeRequest?: {
+    origin: string;
+    destination: string;
+    includeTolls: boolean;
+    objective: TravelRequest["objective"];
+    fuelPricePerLiter?: number;
+    consumptionKmPerLiter?: number;
+    vehicle?: string;
+  };
 }
 
 interface TravelRequest {
@@ -249,8 +259,10 @@ function extractTravelRequest(prompt: string): TravelRequest | null {
     return null;
   }
 
-  const directRouteMatch = prompt.match(/\bde\s+(.+?)\s+(?:ate|até|para)\s+(.+?)(?=(?:\s+com\s+meu|\s+com\s+o\s+meu|\?|$))/i);
-  const distanceMatch = prompt.match(/\b(\d+(?:[.,]\d+)?)\s*km\b/i);
+  const directRouteMatch = prompt.match(
+    /\bde\s+(.+?)\s+(?:ate|até|para)\s+(.+?)(?=(?:\s+com\s+(?:meu|o\s+meu|minha|a\s+minha|gasolina|etanol|diesel|combust[ií]vel)\b|[,.!?]|$))/i,
+  );
+  const distanceMatch = prompt.match(/\b(\d+(?:[.,]\d+)?)\s*km\b(?!\s*\/\s*l)/i);
   const fuelPriceMatch = prompt.match(/\b(?:gasolina|etanol|diesel|combust[ií]vel)\b.*?(?:r\$?\s*)?(\d+(?:[.,]\d+)?)/i);
   const consumptionMatch = prompt.match(/\b(\d+(?:[.,]\d+)?)\s*(?:km\/l|km por litro)\b/i);
   const vehicleMatch = prompt.match(/\b(?:meu|minha)\s+([a-z0-9][^,.!?]+?)\s*(?=(?:\?|$| com |\s+de\s+.+?(?:ate|até|para)\s+))/i);
@@ -427,21 +439,6 @@ export class CapabilityPlanner {
     const missingRequirements: CapabilityGapRequirement[] = [];
     const missingUserData: string[] = [];
 
-    const directReply = buildTravelDirectReply(request);
-    if (directReply) {
-      return {
-        objective: request.objective,
-        summary: "Estimar custo de viagem com dados já fornecidos.",
-        confidence: 0.93,
-        requiredCapabilities: [],
-        availability: [],
-        missingRequirements: [],
-        missingUserData: [],
-        suggestedAction: "respond_direct",
-        directReply,
-      };
-    }
-
     const needsRouteData = !request.distanceKm;
     if (needsRouteData) {
       requiredCapabilities.push("maps.route", "maps.distance");
@@ -481,6 +478,77 @@ export class CapabilityPlanner {
     }
 
     const uniqueMissingUserData = [...new Set(missingUserData)];
+    const routeCapabilitiesReady =
+      requiredCapabilities.length > 0
+      && availability.length > 0
+      && availability.every((item) => item.availability === "available");
+
+    const directReply = buildTravelDirectReply(request);
+    const shouldPreferRouteExecution =
+      Boolean(request.origin && request.destination)
+      && (
+        routeCapabilitiesReady
+        || requiredCapabilities.length === 0
+      );
+
+    if (directReply && !shouldPreferRouteExecution) {
+      return {
+        objective: request.objective,
+        summary: "Estimar custo de viagem com dados já fornecidos.",
+        confidence: 0.93,
+        requiredCapabilities: [],
+        availability: [],
+        missingRequirements: [],
+        missingUserData: [],
+        suggestedAction: "respond_direct",
+        directReply,
+      };
+    }
+
+    if (request.origin && request.destination && routeCapabilitiesReady) {
+      if (request.objective === "travel_cost_estimate" && uniqueMissingUserData.length > 0) {
+        return {
+          objective: request.objective,
+          summary: "O Atlas consegue fechar o custo real se você informar os dados mínimos do veículo e do combustível.",
+          confidence: 0.9,
+          requiredCapabilities,
+          availability,
+          missingRequirements: [],
+          missingUserData: uniqueMissingUserData,
+          suggestedAction: "ask_user_data",
+          routeRequest: {
+            origin: request.origin,
+            destination: request.destination,
+            includeTolls: true,
+            objective: request.objective,
+            fuelPricePerLiter: request.fuelPricePerLiter,
+            consumptionKmPerLiter: request.consumptionKmPerLiter,
+            vehicle: request.vehicle,
+          },
+        };
+      }
+
+      return {
+        objective: request.objective,
+        summary: "O Atlas consegue buscar a rota real e montar a resposta.",
+        confidence: 0.91,
+        requiredCapabilities,
+        availability,
+        missingRequirements: [],
+        missingUserData: [],
+        suggestedAction: "run_maps_route",
+        routeRequest: {
+          origin: request.origin,
+          destination: request.destination,
+          includeTolls: request.wantsTolls || request.objective === "travel_cost_estimate",
+          objective: request.objective,
+          fuelPricePerLiter: request.fuelPricePerLiter,
+          consumptionKmPerLiter: request.consumptionKmPerLiter,
+          vehicle: request.vehicle,
+        },
+      };
+    }
+
     if (missingRequirements.length === 0 && uniqueMissingUserData.length > 0) {
       return {
         objective: request.objective,
@@ -574,8 +642,10 @@ export class CapabilityPlanner {
       case "maps.route":
       case "maps.distance":
       case "maps.tolls":
-        availability = "unavailable";
-        reason = "A camada de rota/distância/pedágio ainda não foi implementada no Atlas.";
+        availability = mapsStatus.ready ? "available" : "needs_configuration";
+        reason = mapsStatus.ready
+          ? "Google Routes está pronto para rota, distância e pedágio estimado."
+          : mapsStatus.message;
         break;
       case "messaging.monitor":
         availability = this.config.whatsapp.sidecarEnabled ? "available" : "needs_configuration";

@@ -23,6 +23,28 @@ export interface GooglePlaceLookupResult {
   types: string[];
 }
 
+export interface GoogleMoneyAmount {
+  currencyCode: string;
+  amount: number;
+}
+
+export interface GoogleRouteLookupResult {
+  originQuery: string;
+  destinationQuery: string;
+  origin: GooglePlaceLookupResult;
+  destination: GooglePlaceLookupResult;
+  distanceMeters: number;
+  durationSeconds: number;
+  staticDurationSeconds?: number;
+  hasTolls: boolean;
+  tolls?: GoogleMoneyAmount[];
+  tollPriceKnown: boolean;
+  localizedDistanceText?: string;
+  localizedDurationText?: string;
+  mapsUrl: string;
+  warnings: string[];
+}
+
 interface PlacesTextSearchResponse {
   places?: Array<{
     id?: string;
@@ -49,6 +71,40 @@ interface GoogleGeocodingResponse {
       };
     };
   }>;
+}
+
+interface GoogleRoutesComputeResponse {
+  routes?: Array<{
+    distanceMeters?: number;
+    duration?: string;
+    staticDuration?: string;
+    warnings?: string[];
+    localizedValues?: {
+      distance?: { text?: string };
+      duration?: { text?: string };
+    };
+    travelAdvisory?: {
+      tollInfo?: {
+        estimatedPrice?: Array<{
+          currencyCode?: string;
+          units?: string;
+          nanos?: number;
+        }>;
+      };
+    };
+    legs?: Array<{
+      travelAdvisory?: {
+        tollInfo?: {
+          estimatedPrice?: Array<{
+            currencyCode?: string;
+            units?: string;
+            nanos?: number;
+          }>;
+        };
+      };
+    }>;
+  }>;
+  error?: { message?: string };
 }
 
 function normalizeWhitespace(value: string): string {
@@ -89,6 +145,61 @@ function looksLikePostalAddress(value: string): boolean {
   }
   return /\b(?:av(?:enida)?\.?|rua|r\.|travessa|tv\.|alameda|pra[cç]a|estrada|est\.?)\b/i.test(text)
     && /\b\d+\b/.test(text);
+}
+
+function buildDirectionsMapsUrl(input: {
+  origin: string;
+  destination: string;
+}): string {
+  const url = new URL("https://www.google.com/maps/dir/");
+  url.searchParams.set("api", "1");
+  url.searchParams.set("origin", input.origin);
+  url.searchParams.set("destination", input.destination);
+  return url.toString();
+}
+
+function parseDurationSeconds(value: string | undefined): number | undefined {
+  if (!value?.trim()) {
+    return undefined;
+  }
+  const normalized = value.trim().replace(/s$/i, "");
+  const parsed = Number.parseFloat(normalized);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function parseMoneyAmount(input: {
+  currencyCode?: string;
+  units?: string;
+  nanos?: number;
+}): GoogleMoneyAmount | null {
+  const currencyCode = input.currencyCode?.trim();
+  if (!currencyCode) {
+    return null;
+  }
+  const units = input.units ? Number.parseInt(input.units, 10) : 0;
+  const nanos = typeof input.nanos === "number" ? input.nanos : 0;
+  const amount = units + nanos / 1_000_000_000;
+  if (!Number.isFinite(amount)) {
+    return null;
+  }
+  return {
+    currencyCode,
+    amount,
+  };
+}
+
+function dedupeMoneyAmounts(values: GoogleMoneyAmount[]): GoogleMoneyAmount[] {
+  const seen = new Set<string>();
+  const deduped: GoogleMoneyAmount[] = [];
+  for (const item of values) {
+    const key = `${item.currencyCode}:${item.amount.toFixed(2)}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    deduped.push(item);
+  }
+  return deduped;
 }
 
 export class GoogleMapsService {
@@ -164,6 +275,147 @@ export class GoogleMapsService {
     }
 
     return null;
+  }
+
+  async computeRoute(input: {
+    origin: string;
+    destination: string;
+    includeTolls?: boolean;
+    languageCode?: string;
+    regionCode?: string;
+    departureTime?: string;
+    avoidTolls?: boolean;
+    avoidHighways?: boolean;
+    avoidFerries?: boolean;
+  }): Promise<GoogleRouteLookupResult | null> {
+    const originQuery = normalizeWhitespace(input.origin);
+    const destinationQuery = normalizeWhitespace(input.destination);
+    if (!originQuery || !destinationQuery) {
+      return null;
+    }
+
+    this.assertReady();
+
+    const regionCode = (input.regionCode?.trim() || this.config.defaultRegionCode).toUpperCase();
+    const languageCode = input.languageCode?.trim() || this.config.defaultLanguageCode;
+
+    const [originPlace, destinationPlace] = await Promise.all([
+      this.lookupPlace(originQuery, {
+        regionCode,
+        languageCode,
+      }),
+      this.lookupPlace(destinationQuery, {
+        regionCode,
+        languageCode,
+      }),
+    ]);
+
+    if (!originPlace || !destinationPlace) {
+      return null;
+    }
+
+    if (
+      typeof originPlace.latitude !== "number"
+      || typeof originPlace.longitude !== "number"
+      || typeof destinationPlace.latitude !== "number"
+      || typeof destinationPlace.longitude !== "number"
+    ) {
+      return null;
+    }
+
+    const fieldMask = [
+      "routes.distanceMeters",
+      "routes.duration",
+      "routes.staticDuration",
+      "routes.localizedValues.distance",
+      "routes.localizedValues.duration",
+      "routes.warnings",
+    ];
+    if (input.includeTolls) {
+      fieldMask.push(
+        "routes.travelAdvisory.tollInfo",
+        "routes.legs.travelAdvisory.tollInfo",
+      );
+    }
+
+    const response = await fetch("https://routes.googleapis.com/directions/v2:computeRoutes", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Goog-Api-Key": this.config.apiKey as string,
+        "X-Goog-FieldMask": fieldMask.join(","),
+      },
+      body: JSON.stringify({
+        origin: {
+          location: {
+            latLng: {
+              latitude: originPlace.latitude,
+              longitude: originPlace.longitude,
+            },
+          },
+        },
+        destination: {
+          location: {
+            latLng: {
+              latitude: destinationPlace.latitude,
+              longitude: destinationPlace.longitude,
+            },
+          },
+        },
+        travelMode: "DRIVE",
+        routingPreference: "TRAFFIC_AWARE",
+        computeAlternativeRoutes: false,
+        routeModifiers: {
+          avoidTolls: input.avoidTolls === true,
+          avoidHighways: input.avoidHighways === true,
+          avoidFerries: input.avoidFerries === true,
+        },
+        ...(input.includeTolls ? { extraComputations: ["TOLLS"] } : {}),
+        ...(input.departureTime?.trim() ? { departureTime: input.departureTime.trim() } : {}),
+        languageCode,
+        units: "METRIC",
+      }),
+    });
+
+    const payload = await response.json() as GoogleRoutesComputeResponse;
+    if (!response.ok) {
+      throw new Error(payload.error?.message || `Routes compute failed with status ${response.status}`);
+    }
+
+    const route = payload.routes?.[0];
+    if (!route?.distanceMeters || !route.duration) {
+      return null;
+    }
+
+    const routeTolls = (route.travelAdvisory?.tollInfo?.estimatedPrice ?? [])
+      .map((item) => parseMoneyAmount(item))
+      .filter((item): item is GoogleMoneyAmount => Boolean(item));
+    const legTolls = (route.legs ?? [])
+      .flatMap((leg) => leg.travelAdvisory?.tollInfo?.estimatedPrice ?? [])
+      .map((item) => parseMoneyAmount(item))
+      .filter((item): item is GoogleMoneyAmount => Boolean(item));
+    const tolls = dedupeMoneyAmounts(routeTolls.length > 0 ? routeTolls : legTolls);
+    const hasTolls = Boolean(route.travelAdvisory?.tollInfo || (route.legs ?? []).some((leg) => Boolean(leg.travelAdvisory?.tollInfo)));
+
+    return {
+      originQuery,
+      destinationQuery,
+      origin: originPlace,
+      destination: destinationPlace,
+      distanceMeters: route.distanceMeters,
+      durationSeconds: parseDurationSeconds(route.duration) ?? Math.round(route.distanceMeters / 15),
+      ...(parseDurationSeconds(route.staticDuration) ? { staticDurationSeconds: parseDurationSeconds(route.staticDuration) } : {}),
+      hasTolls,
+      ...(tolls.length > 0 ? { tolls } : {}),
+      tollPriceKnown: tolls.length > 0,
+      ...(route.localizedValues?.distance?.text?.trim() ? { localizedDistanceText: route.localizedValues.distance.text.trim() } : {}),
+      ...(route.localizedValues?.duration?.text?.trim() ? { localizedDurationText: route.localizedValues.duration.text.trim() } : {}),
+      mapsUrl: buildDirectionsMapsUrl({
+        origin: originPlace.formattedAddress,
+        destination: destinationPlace.formattedAddress,
+      }),
+      warnings: route.warnings ?? [],
+    };
   }
 
   private async searchText(

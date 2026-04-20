@@ -74,7 +74,11 @@ import {
   type EmailOperationalGroup,
   type EmailOperationalSummary,
 } from "../integrations/email/email-analysis.js";
-import { GoogleMapsService, type GooglePlaceLookupResult } from "../integrations/google/google-maps.js";
+import {
+  GoogleMapsService,
+  type GooglePlaceLookupResult,
+  type GoogleRouteLookupResult,
+} from "../integrations/google/google-maps.js";
 import type { CalendarListSummary, DailyOperationalBrief, TaskSummary } from "../integrations/google/google-workspace.js";
 import { GoogleWorkspaceAccountsService } from "../integrations/google/google-workspace-accounts.js";
 import { GoogleWorkspaceService } from "../integrations/google/google-workspace.js";
@@ -5337,6 +5341,39 @@ function formatCapabilityObjectiveLabel(objective: CapabilityPlan["objective"]):
   }
 }
 
+function formatDurationMinutes(seconds: number): string {
+  const totalMinutes = Math.max(1, Math.round(seconds / 60));
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  if (hours > 0 && minutes > 0) {
+    return `${hours}h${String(minutes).padStart(2, "0")}`;
+  }
+  if (hours > 0) {
+    return `${hours}h`;
+  }
+  return `${minutes} min`;
+}
+
+function formatKilometers(distanceMeters: number): string {
+  const km = distanceMeters / 1000;
+  return new Intl.NumberFormat("pt-BR", {
+    minimumFractionDigits: km >= 100 ? 0 : 1,
+    maximumFractionDigits: km >= 100 ? 0 : 1,
+  }).format(km);
+}
+
+function formatMoneyAmount(currencyCode: string, amount: number): string {
+  try {
+    return new Intl.NumberFormat("pt-BR", {
+      style: "currency",
+      currency: currencyCode,
+      maximumFractionDigits: 2,
+    }).format(amount);
+  } catch {
+    return `${amount.toFixed(2)} ${currencyCode}`;
+  }
+}
+
 function buildCapabilityAvailabilityReply(items: CapabilityAvailabilityRecord[]): string {
   const relevant = items
     .filter((item) => item.availability !== "available")
@@ -5424,6 +5461,82 @@ function buildProductGapDetailReply(item: ProductGapRecord): string {
     lines.push(`Isso já apareceu ${item.recurrence} vezes no uso real.`);
   }
 
+  return lines.join(" ");
+}
+
+function buildMapsRouteReply(input: {
+  objective: CapabilityPlan["objective"];
+  route: GoogleRouteLookupResult;
+  fuelPricePerLiter?: number;
+  consumptionKmPerLiter?: number;
+}): string {
+  const lines: string[] = [];
+  const distanceLabel = input.route.localizedDistanceText?.trim() || `${formatKilometers(input.route.distanceMeters)} km`;
+  const durationLabel = input.route.localizedDurationText?.trim() || formatDurationMinutes(input.route.durationSeconds);
+
+  if (input.objective === "route_distance") {
+    lines.push(
+      `A rota entre ${input.route.origin.formattedAddress} e ${input.route.destination.formattedAddress} fica em ${distanceLabel} e leva perto de ${durationLabel}.`,
+    );
+  } else if (input.objective === "route_tolls") {
+    if (!input.route.hasTolls) {
+      lines.push(
+        `Na rota entre ${input.route.origin.formattedAddress} e ${input.route.destination.formattedAddress}, não encontrei pedágios esperados.`,
+      );
+    } else if (input.route.tollPriceKnown && input.route.tolls && input.route.tolls.length > 0) {
+      const tollSummary = input.route.tolls
+        .map((item) => formatMoneyAmount(item.currencyCode, item.amount))
+        .join(" | ");
+      lines.push(
+        `Na rota entre ${input.route.origin.formattedAddress} e ${input.route.destination.formattedAddress}, o pedágio estimado fica em ${tollSummary}.`,
+      );
+    } else {
+      lines.push(
+        `A rota entre ${input.route.origin.formattedAddress} e ${input.route.destination.formattedAddress} parece ter pedágio, mas o valor estimado não veio dessa consulta.`,
+      );
+    }
+    lines.push(`Distância: ${distanceLabel}. Tempo estimado: ${durationLabel}.`);
+  } else {
+    lines.push(
+      `A rota entre ${input.route.origin.formattedAddress} e ${input.route.destination.formattedAddress} fica em ${distanceLabel} e leva perto de ${durationLabel}.`,
+    );
+
+    if (
+      typeof input.fuelPricePerLiter === "number"
+      && typeof input.consumptionKmPerLiter === "number"
+      && input.consumptionKmPerLiter > 0
+    ) {
+      const distanceKm = input.route.distanceMeters / 1000;
+      const litersNeeded = distanceKm / input.consumptionKmPerLiter;
+      const fuelCost = litersNeeded * input.fuelPricePerLiter;
+      lines.push(
+        `Com consumo médio de ${input.consumptionKmPerLiter.toFixed(1).replace(".", ",")} km/l e combustível a ${formatMoneyAmount("BRL", input.fuelPricePerLiter)}, o gasto estimado com combustível fica em ${formatMoneyAmount("BRL", fuelCost)}.`,
+      );
+
+      if (input.route.hasTolls) {
+        if (input.route.tollPriceKnown && input.route.tolls && input.route.tolls.length > 0) {
+          const brlToll = input.route.tolls.find((item) => item.currencyCode === "BRL") ?? input.route.tolls[0];
+          if (brlToll.currencyCode === "BRL") {
+            const totalCost = fuelCost + brlToll.amount;
+            lines.push(
+              `Com pedágio, o total estimado fica em ${formatMoneyAmount(brlToll.currencyCode, totalCost)}.`,
+            );
+          } else {
+            lines.push(
+              `Pedágio estimado: ${formatMoneyAmount(brlToll.currencyCode, brlToll.amount)}.`,
+            );
+          }
+        } else {
+          lines.push("A rota parece ter pedágio, mas o valor não veio estimado nesta resposta.");
+        }
+      }
+    }
+  }
+
+  if (input.route.warnings.length > 0) {
+    lines.push(`Atenção: ${input.route.warnings[0]}.`);
+  }
+  lines.push(`Maps: ${input.route.mapsUrl}`);
   return lines.join(" ");
 }
 
@@ -15875,6 +15988,60 @@ export class AgentCore {
         orchestration,
         researchMode: plan.researchMode ?? "executive",
       });
+    }
+
+    if (plan.suggestedAction === "run_maps_route") {
+      if (!plan.routeRequest) {
+        return null;
+      }
+
+      const route = await this.googleMaps.computeRoute({
+        origin: plan.routeRequest.origin,
+        destination: plan.routeRequest.destination,
+        includeTolls: plan.routeRequest.includeTolls,
+      });
+
+      if (!route) {
+        return {
+          requestId,
+          reply: "Não consegui fechar essa rota com segurança. Me confirma origem e destino do jeito mais direto possível.",
+          messages: buildBaseMessages(userPrompt, orchestration, preferences),
+          toolExecutions: [
+            {
+              toolName: "maps.route",
+              resultPreview: JSON.stringify({
+                origin: plan.routeRequest.origin,
+                destination: plan.routeRequest.destination,
+                found: false,
+              }),
+            },
+          ],
+        };
+      }
+
+      return {
+        requestId,
+        reply: buildMapsRouteReply({
+          objective: plan.objective,
+          route,
+          fuelPricePerLiter: plan.routeRequest.fuelPricePerLiter,
+          consumptionKmPerLiter: plan.routeRequest.consumptionKmPerLiter,
+        }),
+        messages: buildBaseMessages(userPrompt, orchestration, preferences),
+        toolExecutions: [
+          {
+            toolName: "maps.route",
+            resultPreview: JSON.stringify({
+              origin: route.origin.formattedAddress,
+              destination: route.destination.formattedAddress,
+              distanceMeters: route.distanceMeters,
+              durationSeconds: route.durationSeconds,
+              hasTolls: route.hasTolls,
+              tolls: route.tolls,
+            }).slice(0, 240),
+          },
+        ],
+      };
     }
 
     if (plan.suggestedAction === "ask_user_data") {
