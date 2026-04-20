@@ -1,4 +1,5 @@
 import { DirectRouteRunner, type DirectRouteExecutionInput } from "../src/core/direct-route-runner.js";
+import { buildConversationDirectRoutes } from "../src/core/direct-routes/index.js";
 import type { Logger } from "../src/types/logger.js";
 
 type EvalResult = {
@@ -171,6 +172,27 @@ async function run(): Promise<void> {
       "direct_route_runner_returns_null_without_routes_or_fallback",
       output === null,
       JSON.stringify({ output }),
+    ));
+  }
+
+  {
+    const routes = buildConversationDirectRoutes({
+      ping: async () => null,
+      greeting: async () => null,
+      conversationStyleCorrection: async () => null,
+      agentIdentity: async () => null,
+    });
+
+    results.push(assert(
+      "conversation_direct_route_builder_preserves_declared_order",
+      routes.map((route) => `${route.group}:${route.key}`).join(",")
+        === [
+          "conversation:ping",
+          "conversation:greeting",
+          "conversation:conversation_style_correction",
+          "conversation:agent_identity",
+        ].join(","),
+      JSON.stringify(routes.map((route) => ({ key: route.key, group: route.group }))),
     ));
   }
 

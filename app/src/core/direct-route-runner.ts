@@ -21,6 +21,16 @@ export interface DirectRouteDefinition {
   run(input: DirectRouteExecutionInput): Promise<AgentRunResult | null>;
 }
 
+export type DirectRouteHandler = DirectRouteDefinition["run"];
+
+export function defineDirectRoute(
+  key: string,
+  group: string,
+  run: DirectRouteHandler,
+): DirectRouteDefinition {
+  return { key, group, run };
+}
+
 export class DirectRouteRunner {
   constructor(private readonly logger: Logger) {}
 

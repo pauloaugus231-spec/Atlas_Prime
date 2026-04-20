@@ -127,8 +127,20 @@ import {
 import {
   DirectRouteRunner,
   type DirectRouteDefinition,
-  type DirectRouteExecutionInput,
 } from "./direct-route-runner.js";
+import {
+  buildCapabilityDirectRoutes,
+  buildContentDirectRoutes,
+  buildConversationDirectRoutes,
+  buildEmailDirectRoutes,
+  buildGoogleWorkspaceDirectRoutes,
+  buildKnowledgeAndProjectDirectRoutes,
+  buildMemoryAndPreferenceDirectRoutes,
+  buildMessagingDirectRoutes,
+  buildOperationalDirectRoutes,
+  buildReviewDirectRoutes,
+  buildWorkflowDirectRoutes,
+} from "./direct-routes/index.js";
 import type {
   PersonalOperationalMemoryItem,
   PersonalOperationalMemoryItemKind,
@@ -10051,591 +10063,497 @@ export class AgentCore {
     );
   }
 
-  private createDirectRoute(
-    key: string,
-    group: string,
-    run: (input: DirectRouteExecutionInput) => Promise<AgentRunResult | null>,
-  ): DirectRouteDefinition {
-    return { key, group, run };
-  }
-
-  private buildDirectConversationRoutes(): DirectRouteDefinition[] {
+  private buildDirectRouteDefinitions(): DirectRouteDefinition[] {
     return [
-      this.createDirectRoute("ping", "conversation", async (input) => this.tryRunDirectPing(
-        input.activeUserPrompt,
-        input.requestId,
-        input.requestLogger,
-        input.orchestration,
-      )),
-      this.createDirectRoute("greeting", "conversation", async (input) => this.tryRunDirectGreeting(
-        input.activeUserPrompt,
-        input.requestId,
-        input.orchestration,
-      )),
-      this.createDirectRoute("conversation_style_correction", "conversation", async (input) =>
-        this.tryRunDirectConversationStyleCorrection(
+      ...buildConversationDirectRoutes({
+        ping: async (input) => this.tryRunDirectPing(
+          input.activeUserPrompt,
+          input.requestId,
+          input.requestLogger,
+          input.orchestration,
+        ),
+        greeting: async (input) => this.tryRunDirectGreeting(
+          input.activeUserPrompt,
+          input.requestId,
+          input.orchestration,
+        ),
+        conversationStyleCorrection: async (input) => this.tryRunDirectConversationStyleCorrection(
           input.activeUserPrompt,
           input.requestId,
           input.orchestration,
           input.preferences,
-        )),
-      this.createDirectRoute("agent_identity", "conversation", async (input) => this.tryRunDirectAgentIdentity(
-        input.activeUserPrompt,
-        input.requestId,
-        input.orchestration,
-      )),
-    ];
-  }
-
-  private buildDirectCapabilityRoutes(): DirectRouteDefinition[] {
-    return [
-      this.createDirectRoute("personal_profile_show", "capability", async (input) =>
-        this.tryRunDirectPersonalOperationalProfileShow(
+        ),
+        agentIdentity: async (input) => this.tryRunDirectAgentIdentity(
+          input.activeUserPrompt,
+          input.requestId,
+          input.orchestration,
+        ),
+      }),
+      ...buildCapabilityDirectRoutes({
+        personalProfileShow: async (input) => this.tryRunDirectPersonalOperationalProfileShow(
           input.activeUserPrompt,
           input.requestId,
           input.orchestration,
           input.preferences,
-        )),
-      this.createDirectRoute("operational_state_show", "capability", async (input) =>
-        this.tryRunDirectOperationalStateShow(
+        ),
+        operationalStateShow: async (input) => this.tryRunDirectOperationalStateShow(
           input.activeUserPrompt,
           input.requestId,
           input.orchestration,
           input.preferences,
-        )),
-      this.createDirectRoute("learned_preferences_list", "capability", async (input) =>
-        this.tryRunDirectLearnedPreferencesList(
+        ),
+        learnedPreferencesList: async (input) => this.tryRunDirectLearnedPreferencesList(
           input.activeUserPrompt,
           input.requestId,
           input.orchestration,
           input.preferences,
-        )),
-      this.createDirectRoute("learned_preferences_delete", "capability", async (input) =>
-        this.tryRunDirectLearnedPreferencesDelete(
+        ),
+        learnedPreferencesDelete: async (input) => this.tryRunDirectLearnedPreferencesDelete(
           input.activeUserPrompt,
           input.requestId,
           input.orchestration,
           input.preferences,
-        )),
-      this.createDirectRoute("capability_inspection", "capability", async (input) =>
-        this.tryRunDirectCapabilityInspection(
+        ),
+        capabilityInspection: async (input) => this.tryRunDirectCapabilityInspection(
           input.activeUserPrompt,
           input.requestId,
           input.orchestration,
           input.preferences,
-        )),
-      this.createDirectRoute("active_goal", "capability", async (input) => this.tryRunActiveGoalTurn(
-        input.activeUserPrompt,
-        input.requestId,
-        input.requestLogger,
-        input.orchestration,
-        input.preferences,
-        input.options,
-      )),
-      this.createDirectRoute("capability_planning", "capability", async (input) =>
-        this.tryRunDirectCapabilityAwarePlanning(
+        ),
+        activeGoal: async (input) => this.tryRunActiveGoalTurn(
           input.activeUserPrompt,
           input.requestId,
           input.requestLogger,
           input.orchestration,
           input.preferences,
           input.options,
-        )),
-    ];
-  }
-
-  private buildDirectMemoryAndPreferenceRoutes(): DirectRouteDefinition[] {
-    return [
-      this.createDirectRoute("personal_profile_update", "memory-preferences", async (input) =>
-        this.tryRunDirectPersonalOperationalProfileUpdate(
+        ),
+        capabilityPlanning: async (input) => this.tryRunDirectCapabilityAwarePlanning(
+          input.activeUserPrompt,
+          input.requestId,
+          input.requestLogger,
+          input.orchestration,
+          input.preferences,
+          input.options,
+        ),
+      }),
+      ...buildMemoryAndPreferenceDirectRoutes({
+        personalProfileUpdate: async (input) => this.tryRunDirectPersonalOperationalProfileUpdate(
           input.activeUserPrompt,
           input.requestId,
           input.orchestration,
           input.preferences,
-        )),
-      this.createDirectRoute("personal_profile_delete", "memory-preferences", async (input) =>
-        this.tryRunDirectPersonalOperationalProfileDelete(
+        ),
+        personalProfileDelete: async (input) => this.tryRunDirectPersonalOperationalProfileDelete(
           input.activeUserPrompt,
           input.requestId,
           input.orchestration,
           input.preferences,
-        )),
-      this.createDirectRoute("user_preferences", "memory-preferences", async (input) =>
-        this.tryRunDirectUserPreferences(
+        ),
+        userPreferences: async (input) => this.tryRunDirectUserPreferences(
           input.activeUserPrompt,
           input.requestId,
           input.orchestration,
-        )),
-      this.createDirectRoute("personal_memory_list", "memory-preferences", async (input) =>
-        this.tryRunDirectPersonalMemoryList(
-          input.activeUserPrompt,
-          input.requestId,
-          input.orchestration,
-          input.preferences,
-        )),
-      this.createDirectRoute("personal_memory_save", "memory-preferences", async (input) =>
-        this.tryRunDirectPersonalMemorySave(
+        ),
+        personalMemoryList: async (input) => this.tryRunDirectPersonalMemoryList(
           input.activeUserPrompt,
           input.requestId,
           input.orchestration,
           input.preferences,
-        )),
-      this.createDirectRoute("personal_memory_update", "memory-preferences", async (input) =>
-        this.tryRunDirectPersonalMemoryUpdate(
+        ),
+        personalMemorySave: async (input) => this.tryRunDirectPersonalMemorySave(
           input.activeUserPrompt,
           input.requestId,
           input.orchestration,
           input.preferences,
-        )),
-      this.createDirectRoute("personal_memory_delete", "memory-preferences", async (input) =>
-        this.tryRunDirectPersonalMemoryDelete(
+        ),
+        personalMemoryUpdate: async (input) => this.tryRunDirectPersonalMemoryUpdate(
           input.activeUserPrompt,
           input.requestId,
           input.orchestration,
           input.preferences,
-        )),
-    ];
-  }
-
-  private buildDirectOperationalRoutes(): DirectRouteDefinition[] {
-    return [
-      this.createDirectRoute("morning_brief", "operational", async (input) => this.tryRunDirectMorningBrief(
-        input.activeUserPrompt,
-        input.requestId,
-        input.requestLogger,
-        input.orchestration,
-      )),
-      this.createDirectRoute("operational_planning", "operational", async (input) =>
-        this.tryRunDirectOperationalPlanning(
+        ),
+        personalMemoryDelete: async (input) => this.tryRunDirectPersonalMemoryDelete(
+          input.activeUserPrompt,
+          input.requestId,
+          input.orchestration,
+          input.preferences,
+        ),
+      }),
+      ...buildOperationalDirectRoutes({
+        morningBrief: async (input) => this.tryRunDirectMorningBrief(
+          input.activeUserPrompt,
+          input.requestId,
+          input.requestLogger,
+          input.orchestration,
+        ),
+        operationalPlanning: async (input) => this.tryRunDirectOperationalPlanning(
           input.activeUserPrompt,
           input.requestId,
           input.requestLogger,
           input.intent,
           input.preferences,
-        )),
-      this.createDirectRoute("mac_queue_status", "operational", async (input) => this.tryRunDirectMacQueueStatus(
-        input.activeUserPrompt,
-        input.requestId,
-        input.orchestration,
-      )),
-      this.createDirectRoute("mac_queue_list", "operational", async (input) => this.tryRunDirectMacQueueList(
-        input.activeUserPrompt,
-        input.requestId,
-        input.orchestration,
-      )),
-      this.createDirectRoute("mac_queue_enqueue", "operational", async (input) =>
-        this.tryRunDirectMacQueueEnqueue(
+        ),
+        macQueueStatus: async (input) => this.tryRunDirectMacQueueStatus(
           input.activeUserPrompt,
           input.requestId,
           input.orchestration,
-        )),
-      this.createDirectRoute("contact_list", "operational", async (input) => this.tryRunDirectContactList(
-        input.activeUserPrompt,
-        input.requestId,
-        input.orchestration,
-        input.preferences,
-      )),
-      this.createDirectRoute("contact_upsert", "operational", async (input) => this.tryRunDirectContactUpsert(
-        input.activeUserPrompt,
-        input.requestId,
-        input.orchestration,
-        input.preferences,
-      )),
-      this.createDirectRoute("memory_entity_list", "operational", async (input) =>
-        this.tryRunDirectMemoryEntityList(
+        ),
+        macQueueList: async (input) => this.tryRunDirectMacQueueList(
+          input.activeUserPrompt,
+          input.requestId,
+          input.orchestration,
+        ),
+        macQueueEnqueue: async (input) => this.tryRunDirectMacQueueEnqueue(
+          input.activeUserPrompt,
+          input.requestId,
+          input.orchestration,
+        ),
+        contactList: async (input) => this.tryRunDirectContactList(
           input.activeUserPrompt,
           input.requestId,
           input.orchestration,
           input.preferences,
-        )),
-      this.createDirectRoute("memory_entity_search", "operational", async (input) =>
-        this.tryRunDirectMemoryEntitySearch(
+        ),
+        contactUpsert: async (input) => this.tryRunDirectContactUpsert(
           input.activeUserPrompt,
           input.requestId,
           input.orchestration,
           input.preferences,
-        )),
-      this.createDirectRoute("intent_resolve", "operational", async (input) => this.tryRunDirectIntentResolve(
-        input.activeUserPrompt,
-        input.requestId,
-        input.orchestration,
-        input.preferences,
-      )),
-    ];
-  }
-
-  private buildDirectWorkflowRoutes(): DirectRouteDefinition[] {
-    return [
-      this.createDirectRoute("workflow_list", "workflow", async (input) => this.tryRunDirectWorkflowList(
-        input.activeUserPrompt,
-        input.requestId,
-        input.orchestration,
-        input.preferences,
-      )),
-      this.createDirectRoute("workflow_show", "workflow", async (input) => this.tryRunDirectWorkflowShow(
-        input.activeUserPrompt,
-        input.requestId,
-        input.orchestration,
-        input.preferences,
-      )),
-      this.createDirectRoute("workflow_artifacts", "workflow", async (input) =>
-        this.tryRunDirectWorkflowArtifacts(
+        ),
+        memoryEntityList: async (input) => this.tryRunDirectMemoryEntityList(
           input.activeUserPrompt,
           input.requestId,
           input.orchestration,
           input.preferences,
-        )),
-      this.createDirectRoute("workflow_execution", "workflow", async (input) =>
-        this.tryRunDirectWorkflowExecution(
+        ),
+        memoryEntitySearch: async (input) => this.tryRunDirectMemoryEntitySearch(
+          input.activeUserPrompt,
+          input.requestId,
+          input.orchestration,
+          input.preferences,
+        ),
+        intentResolve: async (input) => this.tryRunDirectIntentResolve(
+          input.activeUserPrompt,
+          input.requestId,
+          input.orchestration,
+          input.preferences,
+        ),
+      }),
+      ...buildWorkflowDirectRoutes({
+        workflowList: async (input) => this.tryRunDirectWorkflowList(
+          input.activeUserPrompt,
+          input.requestId,
+          input.orchestration,
+          input.preferences,
+        ),
+        workflowShow: async (input) => this.tryRunDirectWorkflowShow(
+          input.activeUserPrompt,
+          input.requestId,
+          input.orchestration,
+          input.preferences,
+        ),
+        workflowArtifacts: async (input) => this.tryRunDirectWorkflowArtifacts(
+          input.activeUserPrompt,
+          input.requestId,
+          input.orchestration,
+          input.preferences,
+        ),
+        workflowExecution: async (input) => this.tryRunDirectWorkflowExecution(
           input.activeUserPrompt,
           input.requestId,
           input.requestLogger,
           input.orchestration,
           input.preferences,
-        )),
-      this.createDirectRoute("workflow_step_update", "workflow", async (input) =>
-        this.tryRunDirectWorkflowStepUpdate(
+        ),
+        workflowStepUpdate: async (input) => this.tryRunDirectWorkflowStepUpdate(
           input.activeUserPrompt,
           input.requestId,
           input.orchestration,
           input.preferences,
-        )),
-      this.createDirectRoute("workflow_planning", "workflow", async (input) =>
-        this.tryRunDirectWorkflowPlanning(
+        ),
+        workflowPlanning: async (input) => this.tryRunDirectWorkflowPlanning(
           input.activeUserPrompt,
           input.requestId,
           input.requestLogger,
           input.orchestration,
           input.preferences,
-        )),
-    ];
-  }
-
-  private buildDirectReviewRoutes(): DirectRouteDefinition[] {
-    return [
-      this.createDirectRoute("memory_update_guard", "review", async (input) => this.tryRunDirectMemoryUpdateGuard(
-        input.activeUserPrompt,
-        input.requestId,
-        input.orchestration,
-      )),
-      this.createDirectRoute("support_review", "review", async (input) => this.tryRunDirectSupportReview(
-        input.activeUserPrompt,
-        input.requestId,
-        input.requestLogger,
-        input.orchestration,
-      )),
-      this.createDirectRoute("follow_up_review", "review", async (input) => this.tryRunDirectFollowUpReview(
-        input.activeUserPrompt,
-        input.requestId,
-        input.requestLogger,
-        input.orchestration,
-      )),
-      this.createDirectRoute("inbox_triage", "review", async (input) => this.tryRunDirectInboxTriage(
-        input.activeUserPrompt,
-        input.requestId,
-        input.requestLogger,
-        input.orchestration,
-      )),
-      this.createDirectRoute("operational_brief", "review", async (input) => this.tryRunDirectOperationalBrief(
-        input.activeUserPrompt,
-        input.requestId,
-        input.requestLogger,
-        input.orchestration,
-      )),
-      this.createDirectRoute("next_commitment_prep", "review", async (input) =>
-        this.tryRunDirectNextCommitmentPrep(
+        ),
+      }),
+      ...buildReviewDirectRoutes({
+        memoryUpdateGuard: async (input) => this.tryRunDirectMemoryUpdateGuard(
+          input.activeUserPrompt,
+          input.requestId,
+          input.orchestration,
+        ),
+        supportReview: async (input) => this.tryRunDirectSupportReview(
           input.activeUserPrompt,
           input.requestId,
           input.requestLogger,
           input.orchestration,
-        )),
-    ];
-  }
-
-  private buildDirectGoogleWorkspaceRoutes(): DirectRouteDefinition[] {
-    return [
-      this.createDirectRoute("calendar_lookup", "google-workspace", async (input) => this.tryRunDirectCalendarLookup(
-        input.activeUserPrompt,
-        input.requestId,
-        input.requestLogger,
-        input.orchestration,
-      )),
-      this.createDirectRoute("calendar_conflict_review", "google-workspace", async (input) =>
-        this.tryRunDirectCalendarConflictReview(
+        ),
+        followUpReview: async (input) => this.tryRunDirectFollowUpReview(
           input.activeUserPrompt,
           input.requestId,
           input.requestLogger,
           input.orchestration,
-        )),
-      this.createDirectRoute("calendar_period_list", "google-workspace", async (input) =>
-        this.tryRunDirectCalendarPeriodList(
+        ),
+        inboxTriage: async (input) => this.tryRunDirectInboxTriage(
           input.activeUserPrompt,
           input.requestId,
           input.requestLogger,
           input.orchestration,
-        )),
-      this.createDirectRoute("google_task_draft", "google-workspace", async (input) =>
-        this.tryRunDirectGoogleTaskDraft(
+        ),
+        operationalBrief: async (input) => this.tryRunDirectOperationalBrief(
           input.activeUserPrompt,
           input.requestId,
           input.requestLogger,
           input.orchestration,
-        )),
-      this.createDirectRoute("google_event_draft", "google-workspace", async (input) =>
-        this.tryRunDirectGoogleEventDraft(
+        ),
+        nextCommitmentPrep: async (input) => this.tryRunDirectNextCommitmentPrep(
           input.activeUserPrompt,
           input.requestId,
           input.requestLogger,
           input.orchestration,
-        )),
-      this.createDirectRoute("google_event_move", "google-workspace", async (input) =>
-        this.tryRunDirectGoogleEventMove(
+        ),
+      }),
+      ...buildGoogleWorkspaceDirectRoutes({
+        calendarLookup: async (input) => this.tryRunDirectCalendarLookup(
           input.activeUserPrompt,
           input.requestId,
           input.requestLogger,
           input.orchestration,
-        )),
-      this.createDirectRoute("google_event_delete", "google-workspace", async (input) =>
-        this.tryRunDirectGoogleEventDelete(
+        ),
+        calendarConflictReview: async (input) => this.tryRunDirectCalendarConflictReview(
           input.activeUserPrompt,
           input.requestId,
           input.requestLogger,
           input.orchestration,
-        )),
-      this.createDirectRoute("google_tasks", "google-workspace", async (input) => this.tryRunDirectGoogleTasks(
-        input.activeUserPrompt,
-        input.requestId,
-        input.requestLogger,
-        input.orchestration,
-      )),
-      this.createDirectRoute("google_contacts", "google-workspace", async (input) =>
-        this.tryRunDirectGoogleContacts(
+        ),
+        calendarPeriodList: async (input) => this.tryRunDirectCalendarPeriodList(
           input.activeUserPrompt,
           input.requestId,
           input.requestLogger,
           input.orchestration,
-        )),
-      this.createDirectRoute("google_calendars_list", "google-workspace", async (input) =>
-        this.tryRunDirectGoogleCalendarsList(
+        ),
+        googleTaskDraft: async (input) => this.tryRunDirectGoogleTaskDraft(
           input.activeUserPrompt,
           input.requestId,
           input.requestLogger,
           input.orchestration,
-        )),
-      this.createDirectRoute("place_lookup", "google-workspace", async (input) => this.tryRunDirectPlaceLookup(
-        input.activeUserPrompt,
-        input.requestId,
-        input.requestLogger,
-        input.orchestration,
-      )),
-    ];
-  }
-
-  private buildDirectMessagingRoutes(): DirectRouteDefinition[] {
-    return [
-      this.createDirectRoute("whatsapp_send", "messaging", async (input) => this.tryRunDirectWhatsAppSend(
-        input.activeUserPrompt,
-        input.userPrompt,
-        input.requestId,
-        input.orchestration,
-      )),
-      this.createDirectRoute("whatsapp_recent_search", "messaging", async (input) =>
-        this.tryRunDirectWhatsAppRecentSearch(
+        ),
+        googleEventDraft: async (input) => this.tryRunDirectGoogleEventDraft(
+          input.activeUserPrompt,
+          input.requestId,
+          input.requestLogger,
+          input.orchestration,
+        ),
+        googleEventMove: async (input) => this.tryRunDirectGoogleEventMove(
+          input.activeUserPrompt,
+          input.requestId,
+          input.requestLogger,
+          input.orchestration,
+        ),
+        googleEventDelete: async (input) => this.tryRunDirectGoogleEventDelete(
+          input.activeUserPrompt,
+          input.requestId,
+          input.requestLogger,
+          input.orchestration,
+        ),
+        googleTasks: async (input) => this.tryRunDirectGoogleTasks(
+          input.activeUserPrompt,
+          input.requestId,
+          input.requestLogger,
+          input.orchestration,
+        ),
+        googleContacts: async (input) => this.tryRunDirectGoogleContacts(
+          input.activeUserPrompt,
+          input.requestId,
+          input.requestLogger,
+          input.orchestration,
+        ),
+        googleCalendarsList: async (input) => this.tryRunDirectGoogleCalendarsList(
+          input.activeUserPrompt,
+          input.requestId,
+          input.requestLogger,
+          input.orchestration,
+        ),
+        placeLookup: async (input) => this.tryRunDirectPlaceLookup(
+          input.activeUserPrompt,
+          input.requestId,
+          input.requestLogger,
+          input.orchestration,
+        ),
+      }),
+      ...buildMessagingDirectRoutes({
+        whatsappSend: async (input) => this.tryRunDirectWhatsAppSend(
           input.activeUserPrompt,
           input.userPrompt,
           input.requestId,
           input.orchestration,
-        )),
-      this.createDirectRoute("whatsapp_pending_approvals", "messaging", async (input) =>
-        this.tryRunDirectWhatsAppPendingApprovals(
+        ),
+        whatsappRecentSearch: async (input) => this.tryRunDirectWhatsAppRecentSearch(
+          input.activeUserPrompt,
+          input.userPrompt,
+          input.requestId,
+          input.orchestration,
+        ),
+        whatsappPendingApprovals: async (input) => this.tryRunDirectWhatsAppPendingApprovals(
           input.activeUserPrompt,
           input.requestId,
           input.orchestration,
-        )),
-    ];
-  }
-
-  private buildDirectKnowledgeAndProjectRoutes(): DirectRouteDefinition[] {
-    return [
-      this.createDirectRoute("weather", "knowledge-project", async (input) => this.tryRunDirectWeather(
-        input.activeUserPrompt,
-        input.requestId,
-        input.requestLogger,
-        input.orchestration,
-      )),
-      this.createDirectRoute("internal_knowledge_lookup", "knowledge-project", async (input) =>
-        this.tryRunDirectInternalKnowledgeLookup(
+        ),
+      }),
+      ...buildKnowledgeAndProjectDirectRoutes({
+        weather: async (input) => this.tryRunDirectWeather(
           input.activeUserPrompt,
           input.requestId,
           input.requestLogger,
           input.orchestration,
-        )),
-      this.createDirectRoute("web_research", "knowledge-project", async (input) => this.tryRunDirectWebResearch(
-        input.activeUserPrompt,
-        input.requestId,
-        input.requestLogger,
-        input.orchestration,
-      )),
-      this.createDirectRoute("revenue_scoreboard", "knowledge-project", async (input) =>
-        this.tryRunDirectRevenueScoreboard(
+        ),
+        internalKnowledgeLookup: async (input) => this.tryRunDirectInternalKnowledgeLookup(
           input.activeUserPrompt,
           input.requestId,
           input.requestLogger,
           input.orchestration,
-        )),
-      this.createDirectRoute("allowed_spaces", "knowledge-project", async (input) => this.tryRunDirectAllowedSpaces(
-        input.activeUserPrompt,
-        input.requestId,
-        input.orchestration,
-      )),
-      this.createDirectRoute("project_scan", "knowledge-project", async (input) => this.tryRunDirectProjectScan(
-        input.activeUserPrompt,
-        input.requestId,
-        input.requestLogger,
-        input.orchestration,
-      )),
-      this.createDirectRoute("project_mirror", "knowledge-project", async (input) => this.tryRunDirectProjectMirror(
-        input.activeUserPrompt,
-        input.requestId,
-        input.requestLogger,
-        input.orchestration,
-      )),
-      this.createDirectRoute("safe_exec", "knowledge-project", async (input) => this.tryRunDirectSafeExec(
-        input.activeUserPrompt,
-        input.requestId,
-        input.requestLogger,
-        input.orchestration,
-      )),
-    ];
-  }
-
-  private buildDirectContentRoutes(): DirectRouteDefinition[] {
-    return [
-      this.createDirectRoute("daily_editorial_research", "content", async (input) =>
-        this.tryRunDirectDailyEditorialResearch(
+        ),
+        webResearch: async (input) => this.tryRunDirectWebResearch(
           input.activeUserPrompt,
           input.requestId,
           input.requestLogger,
           input.orchestration,
-        )),
-      this.createDirectRoute("content_idea_generation", "content", async (input) =>
-        this.tryRunDirectContentIdeaGeneration(
+        ),
+        revenueScoreboard: async (input) => this.tryRunDirectRevenueScoreboard(
           input.activeUserPrompt,
           input.requestId,
           input.requestLogger,
           input.orchestration,
-        )),
-      this.createDirectRoute("content_review", "content", async (input) => this.tryRunDirectContentReview(
-        input.activeUserPrompt,
-        input.requestId,
-        input.requestLogger,
-        input.orchestration,
-      )),
-      this.createDirectRoute("content_script_generation", "content", async (input) =>
-        this.tryRunDirectContentScriptGeneration(
+        ),
+        allowedSpaces: async (input) => this.tryRunDirectAllowedSpaces(
+          input.activeUserPrompt,
+          input.requestId,
+          input.orchestration,
+        ),
+        projectScan: async (input) => this.tryRunDirectProjectScan(
           input.activeUserPrompt,
           input.requestId,
           input.requestLogger,
           input.orchestration,
-        )),
-      this.createDirectRoute("content_batch_planning", "content", async (input) =>
-        this.tryRunDirectContentBatchPlanning(
+        ),
+        projectMirror: async (input) => this.tryRunDirectProjectMirror(
           input.activeUserPrompt,
           input.requestId,
           input.requestLogger,
           input.orchestration,
-        )),
-      this.createDirectRoute("content_batch_generation", "content", async (input) =>
-        this.tryRunDirectContentBatchGeneration(
+        ),
+        safeExec: async (input) => this.tryRunDirectSafeExec(
           input.activeUserPrompt,
           input.requestId,
           input.requestLogger,
           input.orchestration,
-        )),
-      this.createDirectRoute("content_distribution_strategy", "content", async (input) =>
-        this.tryRunDirectContentDistributionStrategy(
+        ),
+      }),
+      ...buildContentDirectRoutes({
+        dailyEditorialResearch: async (input) => this.tryRunDirectDailyEditorialResearch(
           input.activeUserPrompt,
           input.requestId,
           input.requestLogger,
           input.orchestration,
-        )),
-      this.createDirectRoute("content_channels", "content", async (input) => this.tryRunDirectContentChannels(
-        input.activeUserPrompt,
-        input.requestId,
-        input.requestLogger,
-        input.orchestration,
-      )),
-      this.createDirectRoute("content_series", "content", async (input) => this.tryRunDirectContentSeries(
-        input.activeUserPrompt,
-        input.requestId,
-        input.requestLogger,
-        input.orchestration,
-      )),
-      this.createDirectRoute("content_format_library", "content", async (input) =>
-        this.tryRunDirectContentFormatLibrary(
+        ),
+        contentIdeaGeneration: async (input) => this.tryRunDirectContentIdeaGeneration(
           input.activeUserPrompt,
           input.requestId,
           input.requestLogger,
           input.orchestration,
-        )),
-      this.createDirectRoute("content_hook_library", "content", async (input) =>
-        this.tryRunDirectContentHookLibrary(
+        ),
+        contentReview: async (input) => this.tryRunDirectContentReview(
           input.activeUserPrompt,
           input.requestId,
           input.requestLogger,
           input.orchestration,
-        )),
-      this.createDirectRoute("content_overview", "content", async (input) => this.tryRunDirectContentOverview(
-        input.activeUserPrompt,
-        input.requestId,
-        input.requestLogger,
-        input.orchestration,
-      )),
-      this.createDirectRoute("case_notes", "content", async (input) => this.tryRunDirectCaseNotes(
-        input.activeUserPrompt,
-        input.requestId,
-        input.requestLogger,
-        input.orchestration,
-      )),
-    ];
-  }
-
-  private buildDirectEmailRoutes(): DirectRouteDefinition[] {
-    return [
-      this.createDirectRoute("email_draft", "email", async (input) => this.tryRunDirectEmailDraft(
-        input.activeUserPrompt,
-        input.requestId,
-        input.requestLogger,
-        input.orchestration,
-      )),
-      this.createDirectRoute("email_summary", "email", async (input) => this.tryRunDirectEmailSummary(
-        input.activeUserPrompt,
-        input.requestId,
-        input.requestLogger,
-        input.orchestration,
-      )),
-      this.createDirectRoute("email_lookup", "email", async (input) => this.tryRunDirectEmailLookup(
-        input.activeUserPrompt,
-        input.requestId,
-        input.requestLogger,
-        input.orchestration,
-      )),
-    ];
-  }
-
-  private buildDirectRouteDefinitions(): DirectRouteDefinition[] {
-    return [
-      ...this.buildDirectConversationRoutes(),
-      ...this.buildDirectCapabilityRoutes(),
-      ...this.buildDirectMemoryAndPreferenceRoutes(),
-      ...this.buildDirectOperationalRoutes(),
-      ...this.buildDirectWorkflowRoutes(),
-      ...this.buildDirectReviewRoutes(),
-      ...this.buildDirectGoogleWorkspaceRoutes(),
-      ...this.buildDirectMessagingRoutes(),
-      ...this.buildDirectKnowledgeAndProjectRoutes(),
-      ...this.buildDirectContentRoutes(),
-      ...this.buildDirectEmailRoutes(),
+        ),
+        contentScriptGeneration: async (input) => this.tryRunDirectContentScriptGeneration(
+          input.activeUserPrompt,
+          input.requestId,
+          input.requestLogger,
+          input.orchestration,
+        ),
+        contentBatchPlanning: async (input) => this.tryRunDirectContentBatchPlanning(
+          input.activeUserPrompt,
+          input.requestId,
+          input.requestLogger,
+          input.orchestration,
+        ),
+        contentBatchGeneration: async (input) => this.tryRunDirectContentBatchGeneration(
+          input.activeUserPrompt,
+          input.requestId,
+          input.requestLogger,
+          input.orchestration,
+        ),
+        contentDistributionStrategy: async (input) =>
+          this.tryRunDirectContentDistributionStrategy(
+            input.activeUserPrompt,
+            input.requestId,
+            input.requestLogger,
+            input.orchestration,
+          ),
+        contentChannels: async (input) => this.tryRunDirectContentChannels(
+          input.activeUserPrompt,
+          input.requestId,
+          input.requestLogger,
+          input.orchestration,
+        ),
+        contentSeries: async (input) => this.tryRunDirectContentSeries(
+          input.activeUserPrompt,
+          input.requestId,
+          input.requestLogger,
+          input.orchestration,
+        ),
+        contentFormatLibrary: async (input) => this.tryRunDirectContentFormatLibrary(
+          input.activeUserPrompt,
+          input.requestId,
+          input.requestLogger,
+          input.orchestration,
+        ),
+        contentHookLibrary: async (input) => this.tryRunDirectContentHookLibrary(
+          input.activeUserPrompt,
+          input.requestId,
+          input.requestLogger,
+          input.orchestration,
+        ),
+        contentOverview: async (input) => this.tryRunDirectContentOverview(
+          input.activeUserPrompt,
+          input.requestId,
+          input.requestLogger,
+          input.orchestration,
+        ),
+        caseNotes: async (input) => this.tryRunDirectCaseNotes(
+          input.activeUserPrompt,
+          input.requestId,
+          input.requestLogger,
+          input.orchestration,
+        ),
+      }),
+      ...buildEmailDirectRoutes({
+        emailDraft: async (input) => this.tryRunDirectEmailDraft(
+          input.activeUserPrompt,
+          input.requestId,
+          input.requestLogger,
+          input.orchestration,
+        ),
+        emailSummary: async (input) => this.tryRunDirectEmailSummary(
+          input.activeUserPrompt,
+          input.requestId,
+          input.requestLogger,
+          input.orchestration,
+        ),
+        emailLookup: async (input) => this.tryRunDirectEmailLookup(
+          input.activeUserPrompt,
+          input.requestId,
+          input.requestLogger,
+          input.orchestration,
+        ),
+      }),
     ];
   }
 
