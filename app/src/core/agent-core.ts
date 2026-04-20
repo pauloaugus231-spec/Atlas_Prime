@@ -1646,7 +1646,9 @@ export function shouldBypassPreLocalExternalReasoningForPrompt(
   intent?: IntentResolution,
 ): boolean {
   if (
-    isDirectLocalContextCommandPrompt(prompt)
+    isGoogleEventCreatePrompt(prompt)
+    || isGoogleTaskCreatePrompt(prompt)
+    || isDirectLocalContextCommandPrompt(prompt)
     || looksLikeLowFrictionReadPrompt(prompt, intent)
     || looksLikeCapabilityAwareTravelPrompt(prompt)
     || looksLikeCapabilityAwareWebPrompt(prompt)
@@ -6973,6 +6975,26 @@ function buildLocationTermHints(location: string): string[] {
     .filter((item) => item.length >= 4 && !["quadra", "arena", "campo", "sports", "sport", "clube"].includes(item));
 }
 
+function isAmbiguousPublicServiceLocation(location: string): boolean {
+  const normalized = normalizeEmailAnalysisText(location).replace(/\s+/g, " ").trim();
+  const match = normalized.match(/^(caps|creas|cras|ubs|upa)\b(?:\s+(.+))?$/i);
+  if (!match) {
+    return false;
+  }
+
+  const qualifier = (match[2] ?? "")
+    .split(" ")
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .filter((item) => !["de", "da", "do", "dos", "das"].includes(item));
+
+  if (qualifier.length === 0) {
+    return true;
+  }
+
+  return qualifier.every((item) => /^(adulto|infantil|ad|ii|iii|iv|v|vi)$/i.test(item) || item.length <= 2);
+}
+
 function decodeHtmlEntities(value: string): string {
   return value
     .replace(/&amp;/g, "&")
@@ -7019,9 +7041,7 @@ async function lookupVenueAddress(
     cityHints.add("porto alegre");
   }
 
-  const looksLikeGenericPublicService =
-    /\b(?:caps|creas|cras|ubs|upa)\b/i.test(location)
-    && cityHints.size === 0;
+  const looksLikeGenericPublicService = isAmbiguousPublicServiceLocation(location) && cityHints.size === 0;
   if (looksLikeGenericPublicService) {
     logger.info("Skipping venue address enrichment due to ambiguous public-service location", {
       location,

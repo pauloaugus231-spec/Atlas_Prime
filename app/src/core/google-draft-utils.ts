@@ -420,11 +420,41 @@ function extractLocation(value: string): string | undefined {
     .replace(/\s+/g, " ")
     .trim();
 
+  const cleanupLocationCandidate = (candidate: string): string => candidate
+    .replace(
+      /\s+(?:as|às|a)\s+(?:\d{1,2}(?::\d{2})?\s*(?:h|horas?)?|uma|um|duas|dois|tres|três|quatro|cinco|seis|sete|oito|nove|dez|onze|doze)(?:\s+horas?)?(?:\s+(?:da|de|pela)\s+(?:manh[aã]|tarde|noite))?.*$/iu,
+      " ",
+    )
+    .replace(/\s+(?:as|às|a)\s+(?:da|de|pela)\s+(?:manh[aã]|tarde|noite).*$/iu, " ")
+    .replace(/\b\d{1,2}h(?:\d{2})?\b/gi, " ")
+    .replace(/\b(?:da|de|pela)\s+(?:manh[aã]|tarde|noite)\b/gi, " ")
+    .replace(/[.,;:\s-]+$/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  const publicServiceVenueMatch = sanitized.match(
+    /(?:^|[\s,])(?:na|no|em)\s+((?:caps|creas|cras|ubs|upa)\b[^,.;\n]*)/i,
+  );
+  if (publicServiceVenueMatch?.[1]?.trim()) {
+    const candidate = cleanupLocationCandidate(publicServiceVenueMatch[1].trim());
+    const candidateNormalized = normalize(candidate).replace(/\s+/g, " ").trim();
+    const qualifier = candidateNormalized
+      .replace(/^(?:caps|creas|cras|ubs|upa)\b/, "")
+      .trim()
+      .split(" ")
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .filter((item) => !["de", "da", "do", "dos", "das"].includes(item));
+    if (qualifier.length > 0) {
+      return prettifyLocationLabel(candidate);
+    }
+  }
+
   const venueMatch = sanitized.match(
     /(?:,\s*|\s+)(?:na|no|em)\s+((?:quadra|arena|campo|ginasio|ginásio|clube|audit[oó]rio|sala)\b[^,.;\n]*)$/i,
   );
   if (venueMatch?.[1]?.trim()) {
-    return venueMatch[1].trim();
+    return cleanupLocationCandidate(venueMatch[1].trim());
   }
 
   return undefined;
@@ -489,18 +519,26 @@ function restoreCommonTitleWord(value: string): string {
 }
 
 function formatEventTitle(value: string): string {
+  let previousLower = "";
   return value
     .trim()
     .split(/\s+/)
     .map((token, index) => {
       const lower = token.toLowerCase();
       if (EVENT_TITLE_ACRONYMS.has(lower)) {
+        previousLower = lower;
         return EVENT_TITLE_ACRONYMS.get(lower)!;
       }
       const restored = restoreCommonTitleWord(lower);
       if (index === 0) {
+        previousLower = lower;
         return restored.charAt(0).toUpperCase() + restored.slice(1);
       }
+      if (EVENT_TITLE_ACRONYMS.has(previousLower)) {
+        previousLower = lower;
+        return restored.charAt(0).toUpperCase() + restored.slice(1);
+      }
+      previousLower = lower;
       return restored;
     })
     .join(" ");
@@ -512,6 +550,8 @@ function cleanupEventTitle(value: string): string {
     .replace(/\bcom(?:\s+google)?\s+meet\b/g, " ")
     .replace(/\bsem(?:\s+google)?\s+meet\b/g, " ")
     .replace(/\b(?:chamado|chamada|com\s+o\s+titulo|com\s+título|com\s+titulo|titulo|título|nomeado|nomeada)\b/g, " ")
+    .replace(/\b(?:tenho|terei|teremos)\s+(?:uma|um)\b/g, " ")
+    .replace(/\b(?:vou|vamos|irei)\s+ter\s+(?:uma|um)\b/g, " ")
     .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, " ")
     .replace(/\blocal\s*[:=]\s*[^,.;\n]+/gi, " ")
     .replace(
@@ -553,6 +593,7 @@ function cleanupEventTitle(value: string): string {
     .replace(/\bprincipal\b/g, " ")
     .replace(/\babordagem\b/g, " ")
     .replace(/\bas\b/g, " ")
+    .replace(/[,;]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 
@@ -657,6 +698,13 @@ export function isGoogleEventCreatePrompt(prompt: string): boolean {
   const hasEventNoun = /\b(?:evento|compromisso|reuniao)\b/.test(normalized);
   const startsWithSchedulingVerb = /^(?:por favor\s+)?(?:coloque|coloca|adicione|adiciona|agende|agenda|agendar|marque|marca|marcar|crie|cria|criar)\b/.test(normalized);
   const hasTime = Boolean(parseTimeRange(normalized) || parseSingleTime(normalized));
+  const looksLikeDeclarativeCommitment =
+    hasTime
+    && /\b(?:evento|compromisso|reuniao|consulta|visita|encontro)\b/.test(normalized)
+    && (
+      /\b(?:tenho|terei|teremos)\s+(?:uma|um)\b/.test(normalized)
+      || /\b(?:vou|vamos|irei)\s+ter\s+(?:uma|um)\b/.test(normalized)
+    );
   return includesAny(normalized, [
     "crie um evento",
     "cria um evento",
@@ -693,7 +741,7 @@ export function isGoogleEventCreatePrompt(prompt: string): boolean {
   ) || (
     /tenho\s+(?:uma|um)\s+(?:reuniao|evento|compromisso)\b/.test(normalized) &&
     /\b(?:agenda|calendario)\b/.test(normalized)
-  );
+  ) || looksLikeDeclarativeCommitment;
 }
 
 export function buildTaskDraftFromPrompt(prompt: string, timeZone: string): { draft?: PendingGoogleTaskDraft; reason?: string } {

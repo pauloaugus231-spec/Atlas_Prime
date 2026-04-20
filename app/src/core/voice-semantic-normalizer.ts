@@ -79,6 +79,28 @@ function canonicalizeTaskPrompt(original: string): string | undefined {
 function canonicalizeEventPrompt(original: string, normalized: string): string | undefined {
   const match = original.match(/^(?:(?:coloca|coloque|marca|marque|agenda|agende|cria|crie)\s+(?:na\s+minha\s+agenda|na\s+agenda|no\s+meu\s+calendario|no\s+calendario)?\s*)([\s\S]+)$/i);
   if (!match?.[1]?.trim()) {
+    const declarativeMatch = original.match(
+      /^(.*?)(?:\b(?:eu\s+)?(?:tenho|terei|teremos|vou\s+ter|vamos\s+ter|irei\s+ter)\s+(?:uma|um)\s+)([\s\S]+)$/i,
+    );
+    if (declarativeMatch?.[2]?.trim()) {
+      const contextPrefix = declarativeMatch[1]?.trim();
+      const body = declarativeMatch[2].trim();
+      const bodyNormalized = normalizeComparable(body);
+      if (
+        looksLikeEventTiming(normalized)
+        && hasAny(bodyNormalized, ["reuniao", "compromisso", "evento", "consulta", "visita", "encontro"])
+      ) {
+        return `crie um evento ${body}${contextPrefix ? ` ${contextPrefix}` : ""}`.replace(/\s+/g, " ").trim();
+      }
+    }
+
+    const looksLikeDeclarativeEvent =
+      looksLikeEventTiming(normalized)
+      && hasAny(normalized, ["reuniao", "compromisso", "evento", "consulta", "visita", "encontro"])
+      && !hasAny(normalized, ["qual ", "que horas", "quando ", "onde ", "por que", "porque", "como "]);
+    if (looksLikeDeclarativeEvent) {
+      return `crie um evento ${original.trim()}`.replace(/\s+/g, " ").trim();
+    }
     return undefined;
   }
 

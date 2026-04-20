@@ -213,6 +213,22 @@ function run() {
     detail: JSON.stringify(spokenTomorrowDraft, null, 2),
   });
 
+  const specificVenueDraft = buildEventDraftFromPrompt(
+    "coloque na minha agenda amanhã reunião no CAPS Girassol às 9h da manhã",
+    timezone,
+  );
+  results.push({
+    name: "specific_public_service_location_is_captured_and_defaults_to_one_hour",
+    passed: Boolean(
+      specificVenueDraft.draft &&
+      specificVenueDraft.draft.summary === "Reunião no CAPS Girassol" &&
+      specificVenueDraft.draft.location === "CAPS Girassol" &&
+      specificVenueDraft.draft.start.includes("T09:00") &&
+      specificVenueDraft.draft.end.includes("T10:00"),
+    ),
+    detail: JSON.stringify(specificVenueDraft, null, 2),
+  });
+
   const failures = results.filter((item) => !item.passed);
   for (const item of results.filter((entry) => entry.passed)) {
     console.log(`PASS ${item.name}`);

@@ -155,6 +155,16 @@ function run(): void {
     detail: JSON.stringify(naturalCalendarWrite, null, 2),
   });
 
+  const declarativeCalendarWrite = interpretConversationTurn({
+    text: "amanhã terei uma reunião no Caps Girassol, às 9h da manhã.",
+  });
+  results.push({
+    name: "declarative_commitment_routes_to_calendar_write",
+    passed: declarativeCalendarWrite.intent === "calendar_write"
+      && declarativeCalendarWrite.suggestedAction === "draft_then_confirm",
+    detail: JSON.stringify(declarativeCalendarWrite, null, 2),
+  });
+
   const socialVisual = interpretConversationTurn({
     text: "analisa esse perfil",
     attachments: [{ kind: "image" }],

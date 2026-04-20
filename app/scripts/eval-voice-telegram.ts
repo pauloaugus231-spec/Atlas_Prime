@@ -158,6 +158,21 @@ async function run() {
     detail: JSON.stringify(normalizedMemory, null, 2),
   });
 
+  const declarativeEventAudio = normalizeVoiceTranscriptForTelegram(
+    "Amanhã terei uma reunião no Caps Girassol, às 9h da manhã.",
+    "America/Sao_Paulo",
+  );
+  results.push({
+    name: "voice_semantics_turns_declarative_meeting_into_event_draft",
+    passed: declarativeEventAudio.intentHint === "calendar_create"
+      && declarativeEventAudio.text.toLowerCase().startsWith("crie um evento")
+      && declarativeEventAudio.eventDraftPreview?.summary === "Reunião no CAPS Girassol"
+      && declarativeEventAudio.eventDraftPreview?.location === "CAPS Girassol"
+      && declarativeEventAudio.eventDraftPreview?.start.includes("T09:00:00")
+      && declarativeEventAudio.eventDraftPreview?.end.includes("T10:00:00"),
+    detail: JSON.stringify(declarativeEventAudio, null, 2),
+  });
+
   const contextualReply = normalizeVoiceTranscriptForTelegram(
     "às 8 da manhã",
     "America/Sao_Paulo",

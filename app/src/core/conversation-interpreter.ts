@@ -262,6 +262,30 @@ const CALENDAR_WRITE_HINTS = [
   "vira evento",
 ];
 
+function looksLikeDeclarativeCalendarWrite(normalized: string): boolean {
+  const hasCommitmentNoun = hasAny(normalized, [
+    "reuniao",
+    "reunião",
+    "compromisso",
+    "evento",
+    "consulta",
+    "visita",
+    "encontro",
+  ]);
+  const hasDeclarativeVerb =
+    /\b(?:tenho|terei|teremos)\s+(?:uma|um)\b/.test(normalized)
+    || /\b(?:vou|vamos|irei)\s+ter\s+(?:uma|um)\b/.test(normalized);
+  const hasSchedulingSignal =
+    /\bamanha\b/.test(normalized)
+    || /\bhoje\b/.test(normalized)
+    || /\bdia\s+\d{1,2}\b/.test(normalized)
+    || /\b\d{1,2}\/\d{1,2}\b/.test(normalized)
+    || /\b(?:as|às)\s+\d{1,2}(?::\d{2})?\b/.test(normalized)
+    || /\b\d{1,2}h(?:\d{2})?\b/.test(normalized)
+    || /\b(?:da|de|pela)\s+(?:manha|manhã|tarde|noite)\b/.test(normalized);
+  return hasCommitmentNoun && hasDeclarativeVerb && hasSchedulingSignal;
+}
+
 const WEB_RESEARCH_HINTS = [
   "na internet",
   "com fontes",
@@ -567,6 +591,22 @@ function detectTopLevelSkill(normalized: string, attachments: ConversationAttach
       needsConfirmation: true,
       needsClarification: false,
       summaryOfUnderstanding: "Pedido natural que parece criar ou ajustar uma tarefa.",
+    };
+  }
+
+  if (looksLikeDeclarativeCalendarWrite(normalized)) {
+    return {
+      intent: "calendar_write",
+      skill: "agenda",
+      confidence: 0.86,
+      entities: {
+        ...entities,
+        target_type: "event",
+      },
+      suggestedAction: "draft_then_confirm",
+      needsConfirmation: true,
+      needsClarification: false,
+      summaryOfUnderstanding: "Frase declarativa indicando um compromisso que deve virar evento.",
     };
   }
 
