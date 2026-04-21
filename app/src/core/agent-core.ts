@@ -5288,20 +5288,23 @@ function buildProductGapsReply(items: ProductGapRecord[]): string {
 
 function buildCapabilityPlanUserDataReply(plan: CapabilityPlan): string {
   const fields = plan.missingUserData.join(" e ");
+  const goalLine = plan.alignedGoals?.[0]
+    ? ` Isso conversa com teu objetivo ativo: ${plan.alignedGoals[0]}.`
+    : "";
   switch (plan.objective) {
     case "travel_cost_estimate":
-      return `Consigo seguir com essa estimativa. Me passe só ${fields}.`;
+      return `Consigo seguir com essa estimativa. Me passe só ${fields}.${goalLine}`;
     case "route_distance":
     case "route_tolls":
-      return `Consigo calcular isso. Só preciso de ${fields}.`;
+      return `Consigo calcular isso. Só preciso de ${fields}.${goalLine}`;
     case "place_discovery":
-      return `Consigo buscar isso no mapa. Me passe só ${fields}.`;
+      return `Consigo buscar isso no mapa. Me passe só ${fields}.${goalLine}`;
     case "flight_search":
     case "bus_search":
     case "hotel_search":
-      return `Consigo pesquisar isso. Me passe só ${fields}.`;
+      return `Consigo pesquisar isso. Me passe só ${fields}.${goalLine}`;
     default:
-      return `Consigo seguir com isso. Me passe só ${fields}.`;
+      return `Consigo seguir com isso. Me passe só ${fields}.${goalLine}`;
   }
 }
 
@@ -5313,6 +5316,10 @@ function buildCapabilityGapReply(plan: CapabilityPlan, gap?: ProductGapRecord): 
   const lines = [
     `Entendi que você quer ${formatCapabilityObjectiveLabel(plan.objective)}.`,
   ];
+
+  if (plan.alignedGoals?.[0]) {
+    lines.push(`Isso impacta diretamente o objetivo ativo: ${plan.alignedGoals[0]}.`);
+  }
 
   if (missingCapabilities.length > 0) {
     lines.push(
@@ -9604,6 +9611,19 @@ export class AgentCore {
       this.googleMaps,
       this.externalReasoning,
       this.logger.child({ scope: "capability-planner" }),
+      () => {
+        const activeGoals = this.goalStore.list();
+        return {
+          goalSummary: activeGoals.length > 0 ? this.goalStore.summarize() : undefined,
+          activeGoals: activeGoals.slice(0, 4).map((goal) => ({
+            title: goal.title,
+            description: goal.description,
+            domain: goal.domain,
+            deadline: goal.deadline,
+            progress: goal.progress,
+          })),
+        };
+      },
     );
     this.contextAssembler = new ContextAssembler(
       this.logger.child({ scope: "context-assembler" }),

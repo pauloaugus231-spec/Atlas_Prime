@@ -12,6 +12,7 @@ import type { GoogleWorkspaceAccountsService } from "../integrations/google/goog
 import type { GoogleMapsService } from "../integrations/google/google-maps.js";
 import type { ExternalReasoningClient } from "../integrations/external-reasoning/external-reasoning-client.js";
 import type { WebResearchMode } from "./web-research.js";
+import type { ActiveGoal } from "./goal-store.js";
 
 export type CapabilityPlannerAction =
   | "continue_normal_flow"
@@ -55,6 +56,13 @@ export interface CapabilityPlan {
     locationQuery: string;
     maxResults: number;
   };
+  alignedGoals?: string[];
+  activeGoalSummary?: string;
+}
+
+export interface CapabilityPlanningContext {
+  activeGoals?: Array<Pick<ActiveGoal, "title" | "description" | "domain" | "deadline" | "progress">>;
+  goalSummary?: string;
 }
 
 export interface TravelRequest {
@@ -105,6 +113,13 @@ function includesAny(source: string, tokens: string[]): boolean {
   return tokens.some((token) => source.includes(token));
 }
 
+const GOAL_CONTEXT_STOPWORDS = new Set([
+  "para", "com", "sem", "sobre", "entre", "depois", "antes", "agora", "hoje", "amanha", "amanhã",
+  "meu", "minha", "meus", "minhas", "isso", "essa", "esse", "quero", "preciso", "ajuda", "ajudar",
+  "objetivo", "objetivos", "meta", "metas", "ativo", "ativos", "uma", "umas", "uns", "esse", "essa",
+  "cliente", "clientes", "fechar", "seguir", "fazer", "como", "qual", "quais", "para", "pela", "pelo",
+]);
+
 function formatMoney(value: number): string {
   return new Intl.NumberFormat("pt-BR", {
     style: "currency",
@@ -118,6 +133,56 @@ function formatNumber(value: number, digits = 1): string {
     minimumFractionDigits: digits,
     maximumFractionDigits: digits,
   }).format(value);
+}
+
+function extractGoalContextTokens(value: string | undefined): string[] {
+  return (value ?? "")
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .toLowerCase()
+    .split(/[^a-z0-9]+/g)
+    .map((item) => item.trim())
+    .filter((item) => item.length >= 4 && !GOAL_CONTEXT_STOPWORDS.has(item));
+}
+
+function appendGoalContextSummary(summary: string, alignedGoals: string[]): string {
+  if (alignedGoals.length === 0) {
+    return summary;
+  }
+  return `${summary} Isso conversa com o objetivo ativo: ${alignedGoals.slice(0, 2).join(" | ")}.`;
+}
+
+function computeGoalContext(
+  prompt: string,
+  context?: CapabilityPlanningContext,
+): Pick<CapabilityPlan, "alignedGoals" | "activeGoalSummary"> {
+  const activeGoals = context?.activeGoals ?? [];
+  if (activeGoals.length === 0) {
+    return {};
+  }
+
+  const promptTokens = new Set(extractGoalContextTokens(prompt));
+  const alignedGoals = activeGoals
+    .map((goal) => {
+      const tokens = new Set([
+        ...extractGoalContextTokens(goal.title),
+        ...extractGoalContextTokens(goal.description),
+      ]);
+      const overlap = [...tokens].filter((token) => promptTokens.has(token)).length;
+      return {
+        goal,
+        overlap,
+      };
+    })
+    .filter((item) => item.overlap > 0)
+    .sort((left, right) => right.overlap - left.overlap)
+    .slice(0, 2)
+    .map((item) => item.goal.title);
+
+  return {
+    alignedGoals,
+    activeGoalSummary: context?.goalSummary,
+  };
 }
 
 export function looksLikeCapabilityInspectionPrompt(prompt: string): boolean {
@@ -497,6 +562,7 @@ export class CapabilityPlanner {
     private readonly googleMaps: GoogleMapsService,
     private readonly externalReasoning: ExternalReasoningClient,
     private readonly logger: Logger,
+    private readonly getPlanningContext?: () => CapabilityPlanningContext | undefined,
   ) {}
 
   isCapabilityInspectionPrompt(prompt: string): boolean {
@@ -519,34 +585,43 @@ export class CapabilityPlanner {
   plan(
     prompt: string,
     interpreted?: ConversationInterpreterResult,
+    context?: CapabilityPlanningContext,
   ): CapabilityPlan | null {
+    const planningContext = {
+      ...(this.getPlanningContext?.() ?? {}),
+      ...(context ?? {}),
+    };
+    const goalContext = computeGoalContext(prompt, planningContext);
+
     const travelRequest = extractTravelRequest(prompt);
     if (travelRequest) {
-      const plan = this.planTravelRequest(travelRequest);
+      const plan = this.planTravelRequest(travelRequest, goalContext);
       this.logger.info("Capability planner produced travel plan", {
         objective: plan.objective,
         suggestedAction: plan.suggestedAction,
         missingRequirements: plan.missingRequirements.map((item) => item.name),
         missingUserData: plan.missingUserData,
+        alignedGoals: plan.alignedGoals,
       });
       return plan;
     }
 
     const nearbyPlaceRequest = extractNearbyPlaceRequest(prompt);
     if (nearbyPlaceRequest) {
-      const plan = this.planNearbyPlaceRequest(nearbyPlaceRequest);
+      const plan = this.planNearbyPlaceRequest(nearbyPlaceRequest, goalContext);
       this.logger.info("Capability planner produced nearby place plan", {
         objective: plan.objective,
         suggestedAction: plan.suggestedAction,
         missingRequirements: plan.missingRequirements.map((item) => item.name),
         missingUserData: plan.missingUserData,
+        alignedGoals: plan.alignedGoals,
       });
       return plan;
     }
 
     const travelResearchRequest = extractTravelResearchRequest(prompt);
     if (travelResearchRequest) {
-      const plan = this.planTravelResearchRequest(travelResearchRequest);
+      const plan = this.planTravelResearchRequest(travelResearchRequest, goalContext);
       this.logger.info("Capability planner produced travel research plan", {
         objective: plan.objective,
         suggestedAction: plan.suggestedAction,
@@ -554,13 +629,14 @@ export class CapabilityPlanner {
         missingUserData: plan.missingUserData,
         webQuery: plan.webQuery,
         researchMode: plan.researchMode,
+        alignedGoals: plan.alignedGoals,
       });
       return plan;
     }
 
     const webResearchRequest = extractWebResearchRequest(prompt);
     if (webResearchRequest) {
-      const plan = this.planWebResearchRequest(webResearchRequest);
+      const plan = this.planWebResearchRequest(webResearchRequest, goalContext);
       this.logger.info("Capability planner produced web research plan", {
         objective: plan.objective,
         suggestedAction: plan.suggestedAction,
@@ -568,6 +644,7 @@ export class CapabilityPlanner {
         missingUserData: plan.missingUserData,
         webQuery: plan.webQuery,
         researchMode: plan.researchMode,
+        alignedGoals: plan.alignedGoals,
       });
       return plan;
     }
@@ -579,7 +656,26 @@ export class CapabilityPlanner {
     return null;
   }
 
-  private planNearbyPlaceRequest(request: NearbyPlaceRequest): CapabilityPlan {
+  private applyGoalContext(
+    plan: CapabilityPlan,
+    goalContext: Pick<CapabilityPlan, "alignedGoals" | "activeGoalSummary">,
+  ): CapabilityPlan {
+    const alignedGoals = goalContext.alignedGoals?.filter((item) => item.trim().length > 0) ?? [];
+    return {
+      ...plan,
+      summary: appendGoalContextSummary(plan.summary, alignedGoals),
+      confidence: alignedGoals.length > 0
+        ? Math.min(0.97, Number((plan.confidence + 0.02).toFixed(2)))
+        : plan.confidence,
+      ...(alignedGoals.length > 0 ? { alignedGoals } : {}),
+      ...(goalContext.activeGoalSummary ? { activeGoalSummary: goalContext.activeGoalSummary } : {}),
+    };
+  }
+
+  private planNearbyPlaceRequest(
+    request: NearbyPlaceRequest,
+    goalContext: Pick<CapabilityPlan, "alignedGoals" | "activeGoalSummary">,
+  ): CapabilityPlan {
     const availability = [this.resolveAvailabilityByName("maps.places_search")];
     const placesCapability = availability[0];
     const missingRequirements: CapabilityGapRequirement[] = [];
@@ -594,7 +690,7 @@ export class CapabilityPlanner {
 
     const missingUserData = request.locationQuery ? [] : ["local de referência"];
     if (missingRequirements.length === 0 && missingUserData.length > 0) {
-      return {
+      return this.applyGoalContext({
         objective: request.objective,
         summary: "O Atlas consegue buscar lugares próximos se você disser só o ponto de referência.",
         confidence: 0.83,
@@ -603,11 +699,11 @@ export class CapabilityPlanner {
         missingRequirements: [],
         missingUserData,
         suggestedAction: "ask_user_data",
-      };
+      }, goalContext);
     }
 
     if (missingRequirements.length > 0) {
-      return {
+      return this.applyGoalContext({
         objective: request.objective,
         summary: "O pedido depende de busca de lugares no mapa, que ainda não está pronta neste ambiente.",
         confidence: 0.83,
@@ -618,10 +714,10 @@ export class CapabilityPlanner {
         suggestedAction: "handle_gap",
         gapType: "places_search_missing",
         shouldLogGap: true,
-      };
+      }, goalContext);
     }
 
-    return {
+    return this.applyGoalContext({
       objective: request.objective,
       summary: "O Atlas consegue buscar lugares próximos com Google Maps.",
       confidence: 0.89,
@@ -637,10 +733,13 @@ export class CapabilityPlanner {
         locationQuery: request.locationQuery as string,
         maxResults: 5,
       },
-    };
+    }, goalContext);
   }
 
-  private planTravelResearchRequest(request: TravelResearchRequest): CapabilityPlan {
+  private planTravelResearchRequest(
+    request: TravelResearchRequest,
+    goalContext: Pick<CapabilityPlan, "alignedGoals" | "activeGoalSummary">,
+  ): CapabilityPlan {
     const availability = [this.resolveAvailabilityByName("web.search")];
     const missingRequirements: CapabilityGapRequirement[] = [];
     const missingUserData: string[] = [];
@@ -675,7 +774,7 @@ export class CapabilityPlanner {
     }
 
     if (missingRequirements.length === 0 && missingUserData.length > 0) {
-      return {
+      return this.applyGoalContext({
         objective: request.objective,
         summary: "O Atlas consegue pesquisar isso se você fechar só os dados mínimos da viagem.",
         confidence: 0.8,
@@ -686,11 +785,11 @@ export class CapabilityPlanner {
         suggestedAction: "ask_user_data",
         webQuery: request.query,
         researchMode: request.mode,
-      };
+      }, goalContext);
     }
 
     if (missingRequirements.length > 0) {
-      return {
+      return this.applyGoalContext({
         objective: request.objective,
         summary: "O pedido depende de pesquisa externa que ainda não está disponível neste ambiente.",
         confidence: 0.82,
@@ -703,10 +802,10 @@ export class CapabilityPlanner {
         shouldLogGap: true,
         webQuery: request.query,
         researchMode: request.mode,
-      };
+      }, goalContext);
     }
 
-    return {
+    return this.applyGoalContext({
       objective: request.objective,
       summary: "O Atlas consegue pesquisar essa opção de viagem na web e sintetizar fontes.",
       confidence: 0.87,
@@ -717,10 +816,13 @@ export class CapabilityPlanner {
       suggestedAction: "run_web_search",
       webQuery: request.query,
       researchMode: request.mode,
-    };
+    }, goalContext);
   }
 
-  private planWebResearchRequest(request: WebResearchRequest): CapabilityPlan {
+  private planWebResearchRequest(
+    request: WebResearchRequest,
+    goalContext: Pick<CapabilityPlan, "alignedGoals" | "activeGoalSummary">,
+  ): CapabilityPlan {
     const availability = [this.resolveAvailabilityByName("web.search")];
     const webSearchCapability = availability[0];
     const missingRequirements: CapabilityGapRequirement[] = [];
@@ -740,7 +842,7 @@ export class CapabilityPlanner {
     }
 
     if (missingRequirements.length === 0 && missingUserData.length > 0) {
-      return {
+      return this.applyGoalContext({
         objective: request.objective,
         summary: "O Atlas consegue pesquisar isso se você disser só o tema exato.",
         confidence: 0.74,
@@ -751,11 +853,11 @@ export class CapabilityPlanner {
         suggestedAction: "ask_user_data",
         webQuery: request.query,
         researchMode: request.mode,
-      };
+      }, goalContext);
     }
 
     if (missingRequirements.length > 0) {
-      return {
+      return this.applyGoalContext({
         objective: request.objective,
         summary: "O pedido depende de busca web que ainda não está disponível neste ambiente.",
         confidence: 0.82,
@@ -768,10 +870,10 @@ export class CapabilityPlanner {
         shouldLogGap: true,
         webQuery: request.query,
         researchMode: request.mode,
-      };
+      }, goalContext);
     }
 
-    return {
+    return this.applyGoalContext({
       objective: request.objective,
       summary: "Há informação externa ou recente para buscar com fontes.",
       confidence: 0.88,
@@ -782,10 +884,13 @@ export class CapabilityPlanner {
       suggestedAction: "run_web_search",
       webQuery: request.query,
       researchMode: request.mode,
-    };
+    }, goalContext);
   }
 
-  private planTravelRequest(request: TravelRequest): CapabilityPlan {
+  private planTravelRequest(
+    request: TravelRequest,
+    goalContext: Pick<CapabilityPlan, "alignedGoals" | "activeGoalSummary">,
+  ): CapabilityPlan {
     const requiredCapabilities: string[] = [];
     const availability: CapabilityAvailabilityRecord[] = [];
     const missingRequirements: CapabilityGapRequirement[] = [];
@@ -844,7 +949,7 @@ export class CapabilityPlanner {
       );
 
     if (directReply && !shouldPreferRouteExecution) {
-      return {
+      return this.applyGoalContext({
         objective: request.objective,
         summary: "Estimar custo de viagem com dados já fornecidos.",
         confidence: 0.93,
@@ -854,12 +959,12 @@ export class CapabilityPlanner {
         missingUserData: [],
         suggestedAction: "respond_direct",
         directReply,
-      };
+      }, goalContext);
     }
 
     if (request.origin && request.destination && routeCapabilitiesReady) {
       if (request.objective === "travel_cost_estimate" && uniqueMissingUserData.length > 0) {
-        return {
+        return this.applyGoalContext({
           objective: request.objective,
           summary: "O Atlas consegue fechar o custo real se você informar os dados mínimos do veículo e do combustível.",
           confidence: 0.9,
@@ -878,10 +983,10 @@ export class CapabilityPlanner {
             consumptionKmPerLiter: request.consumptionKmPerLiter,
             vehicle: request.vehicle,
           },
-        };
+        }, goalContext);
       }
 
-      return {
+      return this.applyGoalContext({
         objective: request.objective,
         summary: "O Atlas consegue buscar a rota real e montar a resposta.",
         confidence: 0.91,
@@ -900,11 +1005,11 @@ export class CapabilityPlanner {
           consumptionKmPerLiter: request.consumptionKmPerLiter,
           vehicle: request.vehicle,
         },
-      };
+      }, goalContext);
     }
 
     if (missingRequirements.length === 0 && uniqueMissingUserData.length > 0) {
-      return {
+      return this.applyGoalContext({
         objective: request.objective,
         summary: "O Atlas consegue continuar se você informar os dados mínimos que faltam.",
         confidence: 0.86,
@@ -913,10 +1018,10 @@ export class CapabilityPlanner {
         missingRequirements: [],
         missingUserData: uniqueMissingUserData,
         suggestedAction: "ask_user_data",
-      };
+      }, goalContext);
     }
 
-    return {
+    return this.applyGoalContext({
       objective: request.objective,
       summary: "O pedido depende de rota/distância/pedágio que o Atlas ainda não calcula sozinho neste ambiente.",
       confidence: 0.84,
@@ -930,7 +1035,7 @@ export class CapabilityPlanner {
           ? "travel_estimation_missing"
           : "maps_required",
       shouldLogGap: missingRequirements.length > 0,
-    };
+    }, goalContext);
   }
 
   private resolveAvailabilityByName(name: string): CapabilityAvailabilityRecord {

@@ -41,6 +41,16 @@ function buildPlanner(input?: {
   mapsReady?: boolean;
   whatsappEnabled?: boolean;
   whatsappSidecarEnabled?: boolean;
+  planningContext?: {
+    goalSummary?: string;
+    activeGoals?: Array<{
+      title: string;
+      description?: string;
+      domain: "revenue" | "product" | "personal" | "content" | "ops" | "other";
+      deadline?: string;
+      progress?: number;
+    }>;
+  };
 }): CapabilityPlanner {
   const logger = new SilentLogger();
   const toolRegistry = new ToolPluginRegistry([], logger);
@@ -93,6 +103,7 @@ function buildPlanner(input?: {
     googleMaps,
     externalReasoning,
     logger,
+    () => input?.planningContext,
   );
 }
 
@@ -274,6 +285,54 @@ async function run(): Promise<void> {
       && webComparisonPlan.suggestedAction === "run_web_search"
       && webComparisonPlan.researchMode === "executive",
     detail: JSON.stringify(webComparisonPlan, null, 2),
+  });
+
+  const goalAlignedTravelPlanner = buildPlanner({
+    planningContext: {
+      goalSummary: "Objetivos: Planejar viagem para palestra em Recife",
+      activeGoals: [
+        {
+          title: "Planejar viagem para palestra em Recife",
+          description: "Fechar deslocamento e custos da viagem de dezembro",
+          domain: "ops",
+          progress: 0.2,
+        },
+      ],
+    },
+  });
+  const goalAlignedTravelPlan = goalAlignedTravelPlanner.plan(
+    "compare preços de passagens aéreas de Porto Alegre para Recife em dezembro",
+  );
+  results.push({
+    name: "travel_search_plan_mentions_aligned_active_goal",
+    passed:
+      goalAlignedTravelPlan?.objective === "flight_search"
+      && goalAlignedTravelPlan.alignedGoals?.includes("Planejar viagem para palestra em Recife")
+      && goalAlignedTravelPlan.summary.includes("objetivo ativo"),
+    detail: JSON.stringify(goalAlignedTravelPlan, null, 2),
+  });
+
+  const goalAlignedWebPlanner = buildPlanner({
+    planningContext: {
+      goalSummary: "Objetivos: Acompanhar cotação do dólar para revisão de preços",
+      activeGoals: [
+        {
+          title: "Acompanhar cotação do dólar",
+          description: "Usar isso para revisar preços e margens",
+          domain: "revenue",
+          progress: 0.4,
+        },
+      ],
+    },
+  });
+  const goalAlignedWebPlan = goalAlignedWebPlanner.plan("qual a cotação do dólar hoje?");
+  results.push({
+    name: "web_research_plan_mentions_aligned_active_goal",
+    passed:
+      goalAlignedWebPlan?.objective === "recent_information_lookup"
+      && goalAlignedWebPlan.alignedGoals?.includes("Acompanhar cotação do dólar")
+      && goalAlignedWebPlan.summary.includes("objetivo ativo"),
+    detail: JSON.stringify(goalAlignedWebPlan, null, 2),
   });
 
   const vagueWebPlan = planner.plan("pesquise isso");
