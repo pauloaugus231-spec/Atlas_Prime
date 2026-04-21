@@ -3449,6 +3449,13 @@ function isCalendarPeriodDeletePrompt(prompt: string): boolean {
     "cancele minha agenda",
     "exclua meus compromissos",
     "exclua meus eventos",
+    "apague meus compromissos",
+    "apague meus eventos",
+    "remova meus compromissos",
+    "remova meus eventos",
+    "tire meus compromissos",
+    "tire meus eventos",
+    "limpe minha agenda",
   ]);
 }
 
@@ -3535,6 +3542,8 @@ function isCalendarDeletePrompt(prompt: string): boolean {
     "apagar",
     "remova",
     "remover",
+    "tire",
+    "tirar",
   ]);
   const hasCalendarObject = includesAny(normalized, [
     "evento",
@@ -3545,12 +3554,14 @@ function isCalendarDeletePrompt(prompt: string): boolean {
     "reuniao",
     "reunião",
   ]);
-  return hasDeleteVerb && hasCalendarObject;
+  return (hasDeleteVerb && hasCalendarObject)
+    || (includesAny(normalized, ["nao vou mais", "não vou mais"]) && hasCalendarObject);
 }
 
 function extractCalendarDeleteTopic(prompt: string): string | undefined {
   const patterns = [
-    /\b(?:cancele|cancela|cancelar|exclua|excluir|delete|apague|apagar|remova|remover)\s+(?:o|a|os|as)?\s*(?:evento|compromisso|reuniao|reunião)?\s+["“]?(.+?)["”]?(?=(?:\s+amanh[ãa]|\s+hoje|\s+dia\s+\d|\s+em\s+\d{1,2}\/\d{1,2}|\s+na\s+conta\b|\s+no\s+calend[aá]rio\b|\s+na\s+agenda\b|\s+se\s+for\s+recorrent|\s+e\s+se\s+for\s+recorrent|\?|$))/i,
+    /\b(?:cancele|cancela|cancelar|exclua|excluir|delete|apague|apagar|remova|remover|tire|tirar)\s+(?:da\s+(?:minha\s+)?agenda\s+)?(?:o|a|os|as|meu|minha)?\s*(?:evento|compromisso|reuniao|reunião)?\s+["“]?(.+?)["”]?(?=(?:\s+amanh[ãa]|\s+hoje|\s+dia\s+\d|\s+em\s+\d{1,2}\/\d{1,2}|\s+na\s+conta\b|\s+no\s+calend[aá]rio\b|\s+na\s+agenda\b|\s+se\s+for\s+recorrent|\s+e\s+se\s+for\s+recorrent|\?|$))/i,
+    /\b(?:nao vou mais|não vou mais)\s+(?:nesse|nessa|no|na|ao|a[oà])?\s*(?:evento|compromisso|reuniao|reunião)?\s*["“]?(.+?)["”]?(?=(?:\s+amanh[ãa]|\s+hoje|\s+dia\s+\d|\s+em\s+\d{1,2}\/\d{1,2}|\?|$))/i,
   ];
   for (const pattern of patterns) {
     const match = prompt.match(pattern);
@@ -3578,7 +3589,24 @@ function cleanCalendarEventTopicReference(value: string | undefined): string | u
     .replace(/[?.!,;:]+$/g, "")
     .trim();
 
-  return cleaned || undefined;
+  if (!cleaned) {
+    return undefined;
+  }
+
+  const normalized = normalizeEmailAnalysisText(cleaned);
+  if ([
+    "evento",
+    "compromisso",
+    "reuniao",
+    "reunião",
+    "agenda",
+    "calendario",
+    "calendário",
+  ].includes(normalized)) {
+    return undefined;
+  }
+
+  return cleaned;
 }
 
 function matchesCalendarEventTopic(summary: string, topic: string): boolean {

@@ -379,6 +379,41 @@ async function run(): Promise<void> {
 
   {
     const result = await (core as any).tryRunDirectGoogleEventDelete(
+      "tire da minha agenda a reunião caps amanhã",
+      "req-delete-natural",
+      logger,
+      orchestration,
+    );
+    results.push(assert(
+      "agent_core_google_event_delete_wrapper_accepts_more_natural_prompt",
+      Boolean(
+        result?.reply?.includes("Rascunho de exclusão de evento Google pronto.") &&
+        result.reply.includes("- Atual: Paulo - Reunião CAPS") &&
+        result.reply.includes("- Conta: abordagem"),
+      ),
+      result?.reply,
+    ));
+  }
+
+  {
+    const result = await (core as any).tryRunDirectGoogleEventDelete(
+      "cancele meu evento",
+      "req-delete-clarify",
+      logger,
+      orchestration,
+    );
+    results.push(assert(
+      "agent_core_google_event_delete_wrapper_asks_for_reference_when_missing",
+      Boolean(
+        result?.reply?.includes("Consigo cancelar o evento, mas preciso saber qual é.") &&
+        result.reply.includes("reunião CAPS amanhã"),
+      ),
+      result?.reply,
+    ));
+  }
+
+  {
+    const result = await (core as any).tryRunDirectGoogleEventDelete(
       "cancele meus compromissos amanhã",
       "req-delete-batch",
       logger,

@@ -982,7 +982,7 @@ export class GoogleWorkspaceDirectService {
     if (!topic) {
       return {
         requestId: input.requestId,
-        reply: "Consigo cancelar o evento, mas preciso do título ou de uma referência mais específica.",
+        reply: "Consigo cancelar o evento, mas preciso saber qual é. Diga em uma frase curta, por exemplo: `cancele o evento reunião CAPS amanhã` ou `tire da minha agenda o compromisso no CREAS hoje`.",
         messages: this.deps.buildBaseMessages(input.userPrompt, input.orchestration),
         toolExecutions: [],
       };
