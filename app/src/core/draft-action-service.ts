@@ -38,11 +38,21 @@ export interface PendingYouTubePublishDraft {
   tags: string[];
 }
 
+export interface PendingAutonomyCapabilityDraft {
+  kind: "autonomy_capability";
+  suggestionId: string;
+  title: string;
+  capabilityName: string;
+  arguments: Record<string, unknown>;
+  summary?: string;
+}
+
 export type PendingActionDraft =
   | PendingEmailDraft
   | PendingWhatsAppReplyDraft
   | PendingMonitoredChannelAlertDraft
   | PendingYouTubePublishDraft
+  | PendingAutonomyCapabilityDraft
   | PendingGoogleTaskDraft
   | PendingGoogleEventDraft
   | PendingGoogleEventUpdateDraft
@@ -104,6 +114,7 @@ export function extractPendingActionDraft(text: string): PendingActionDraft | un
   return (
     extractPendingEmailDraft(text)
     ?? extractPendingWhatsAppReplyDraft(text)
+    ?? parseJsonDraft<PendingAutonomyCapabilityDraft>(text, "AUTONOMY_CAPABILITY_DRAFT")
     ?? parseJsonDraft<PendingGoogleTaskDraft>(text, "GOOGLE_TASK_DRAFT")
     ?? parseJsonDraft<PendingGoogleEventDraft>(text, "GOOGLE_EVENT_DRAFT")
     ?? parseJsonDraft<PendingGoogleEventUpdateDraft>(text, "GOOGLE_EVENT_UPDATE_DRAFT")
@@ -189,6 +200,25 @@ export function parsePendingActionDraftPayload(payload: string): PendingActionDr
       };
     }
 
+    if (
+      parsed.kind === "autonomy_capability"
+      && typeof parsed.suggestionId === "string"
+      && typeof parsed.title === "string"
+      && typeof parsed.capabilityName === "string"
+      && parsed.arguments
+      && typeof parsed.arguments === "object"
+      && !Array.isArray(parsed.arguments)
+    ) {
+      return {
+        kind: "autonomy_capability",
+        suggestionId: parsed.suggestionId,
+        title: parsed.title,
+        capabilityName: parsed.capabilityName,
+        arguments: parsed.arguments as Record<string, unknown>,
+        summary: typeof parsed.summary === "string" ? parsed.summary : undefined,
+      };
+    }
+
     if (parsed.kind === "google_task" && typeof parsed.title === "string") {
       return parsed as unknown as PendingGoogleTaskDraft;
     }
@@ -229,6 +259,7 @@ export function stripPendingDraftMarkers(text: string): string {
   return text
     .replace(/EMAIL_REPLY_DRAFT[\s\S]*?END_EMAIL_REPLY_DRAFT/gi, "")
     .replace(/WHATSAPP_REPLY_DRAFT[\s\S]*?END_WHATSAPP_REPLY_DRAFT/gi, "")
+    .replace(/AUTONOMY_CAPABILITY_DRAFT[\s\S]*?END_AUTONOMY_CAPABILITY_DRAFT/gi, "")
     .replace(/GOOGLE_TASK_DRAFT[\s\S]*?END_GOOGLE_TASK_DRAFT/gi, "")
     .replace(/GOOGLE_EVENT_DRAFT[\s\S]*?END_GOOGLE_EVENT_DRAFT/gi, "")
     .replace(/GOOGLE_EVENT_UPDATE_DRAFT[\s\S]*?END_GOOGLE_EVENT_UPDATE_DRAFT/gi, "")
@@ -281,6 +312,9 @@ export function buildPendingActionSubject(draft: PendingActionDraft): string {
   }
   if (draft.kind === "monitored_channel_alert") {
     return `Alerta monitorado${draft.sourceAccount ? ` ${draft.sourceAccount}` : ""}: ${draft.sourcePushName ?? draft.sourceNumber}`;
+  }
+  if (draft.kind === "autonomy_capability") {
+    return `Ação aprovada: ${draft.title}`;
   }
   if (draft.kind === "google_task") {
     return `Tarefa Google: ${draft.title}`;

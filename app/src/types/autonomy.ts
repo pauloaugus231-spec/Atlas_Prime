@@ -63,7 +63,16 @@ export interface AutonomySuggestion {
 
 export interface AutonomyAuditRecord {
   id: string;
-  kind: "autonomy_loop_run" | "observation_recorded" | "suggestion_upserted" | "suggestion_status_changed";
+  kind:
+    | "autonomy_loop_run"
+    | "observation_recorded"
+    | "suggestion_upserted"
+    | "suggestion_status_changed"
+    | "suggestion_action_planned"
+    | "suggestion_action_blocked"
+    | "suggestion_action_approval_requested"
+    | "suggestion_action_executed"
+    | "suggestion_action_failed";
   observationId?: string;
   suggestionId?: string;
   payload: Record<string, unknown>;

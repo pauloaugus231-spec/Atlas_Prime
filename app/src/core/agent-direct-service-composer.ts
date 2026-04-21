@@ -113,6 +113,7 @@ import { SuggestionStore } from "./autonomy/suggestion-store.js";
 import { AutonomyAuditStore } from "./autonomy/autonomy-audit-store.js";
 import { FeedbackStore } from "./autonomy/feedback-store.js";
 import { AutonomyLoop } from "./autonomy/autonomy-loop.js";
+import { AutonomyActionService } from "./autonomy/autonomy-action-service.js";
 import { AutonomyDirectService } from "./autonomy/autonomy-direct-service.js";
 import {
   selectRelevantLearnedPreferences,
@@ -600,6 +601,7 @@ export interface AgentDirectServiceComposerDependencies {
   logger: Logger;
   fileAccess: FileAccessPolicy;
   client: LlmClient;
+  capabilityRegistry: CapabilityRegistry;
   autonomyObservations: ObservationStore;
   autonomySuggestions: SuggestionStore;
   autonomyAudit: AutonomyAuditStore;
@@ -677,10 +679,20 @@ export class AgentDirectServiceComposer {
         child: () => fallbackLogger,
       };
       const baseLogger = this.deps.logger ?? fallbackLogger;
+      const actionService = new AutonomyActionService({
+        logger: baseLogger.child({ scope: "autonomy-action-service" }),
+        capabilityRegistry: this.deps.capabilityRegistry,
+        observations: this.deps.autonomyObservations,
+        suggestions: this.deps.autonomySuggestions,
+        audit: this.deps.autonomyAudit,
+        feedback: this.deps.autonomyFeedback,
+        executeToolDirect: (toolName, rawArguments) => this.deps.executeToolDirect(toolName, rawArguments),
+      });
 
       return new AutonomyDirectService({
         logger: baseLogger.child({ scope: "autonomy-direct-service" }),
         loop: this.deps.autonomyLoop,
+        actionService,
         suggestions: this.deps.autonomySuggestions,
         observations: this.deps.autonomyObservations,
         audit: this.deps.autonomyAudit,

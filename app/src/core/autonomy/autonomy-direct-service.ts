@@ -4,6 +4,7 @@ import type { Logger } from "../../types/logger.js";
 import type { OrchestrationContext } from "../../types/orchestration.js";
 import type { UserPreferences } from "../../types/user-preferences.js";
 import type { AutonomySuggestion } from "../../types/autonomy.js";
+import { AutonomyActionService } from "./autonomy-action-service.js";
 import { AutonomyAuditStore } from "./autonomy-audit-store.js";
 import { AutonomyLoop } from "./autonomy-loop.js";
 import { FeedbackStore } from "./feedback-store.js";
@@ -187,6 +188,7 @@ function resolveTarget(
 export interface AutonomyDirectServiceDependencies {
   logger: Logger;
   loop: Pick<AutonomyLoop, "runOnce">;
+  actionService: Pick<AutonomyActionService, "approveSuggestion">;
   suggestions: Pick<SuggestionStore, "getById" | "listByStatus" | "updateStatus">;
   observations: Pick<ObservationStore, "getById">;
   audit: Pick<AutonomyAuditStore, "record">;
@@ -213,7 +215,7 @@ export class AutonomyDirectService {
 
   private buildRenderableSuggestions(nowIso: string): RenderableSuggestion[] {
     const suggestions = this.deps.suggestions
-      .listByStatus(["queued", "notified", "approved", "snoozed"], 8)
+      .listByStatus(["queued", "notified", "snoozed"], 8)
       .filter((item) => isVisibleSuggestion(item, nowIso));
 
     return suggestions.map((suggestion) => ({
@@ -315,34 +317,19 @@ export class AutonomyDirectService {
         );
       }
 
-      this.deps.suggestions.updateStatus({
-        id: target.item.suggestion.id,
-        status: "approved",
-      });
-      this.deps.feedback.record({
-        suggestionId: target.item.suggestion.id,
-        feedbackKind: "accepted",
-        note: "approved_via_natural_language",
-      });
-      this.deps.audit.record({
-        kind: "suggestion_status_changed",
-        suggestionId: target.item.suggestion.id,
-        observationId: target.item.suggestion.observationId,
-        payload: {
-          previousStatus: target.item.suggestion.status,
-          nextStatus: "approved",
-          reason: "operator_approved",
-        },
-      });
+      const outcome = await this.deps.actionService.approveSuggestion(target.item.suggestion);
 
       return this.buildResult(
         input,
-        this.renderer.renderApproved(target.item, target.index),
+        outcome.kind === "approved_only"
+          ? this.renderer.renderApproved(target.item, target.index)
+          : outcome.reply,
         "autonomy_review_approve",
         {
           updated: true,
           suggestionId: target.item.suggestion.id,
-          nextStatus: "approved",
+          nextStatus: outcome.kind === "executed" ? "executed" : "approved",
+          outcome: outcome.kind,
         },
       );
     }

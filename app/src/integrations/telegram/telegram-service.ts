@@ -4,6 +4,7 @@ import { buildTelegramChannelPrompt, type ChannelConversationTurn } from "../../
 import {
   stripPendingDraftMarkers,
   type PendingActionDraft,
+  type PendingAutonomyCapabilityDraft,
   type PendingEmailDraft,
   type PendingWhatsAppReplyDraft,
   type PendingYouTubePublishDraft,
@@ -3501,6 +3502,8 @@ export class TelegramService {
                 text: pendingDraft.replyText,
               }),
             }
+        : pendingDraft.kind === "autonomy_capability"
+          ? await this.core.executeToolDirect(pendingDraft.capabilityName, pendingDraft.arguments)
         : pendingDraft.kind === "google_task"
             ? await this.core.executeToolDirect("execute_task_operation", {
                 action: "create",
@@ -3631,9 +3634,14 @@ export class TelegramService {
       ? true
       : pendingDraft.kind === "youtube_publish"
         ? true
+      : pendingDraft.kind === "autonomy_capability"
+        ? record?.ok !== false
       : pendingDraft.kind === "google_event_import_batch"
         ? Array.isArray(record?.created) && record.created.length > 0
         : record?.ok === true;
+    const autonomyExecutionDetail = "content" in execution && typeof execution.content === "string"
+      ? execution.content.trim()
+      : "";
     const reply = pendingDraft.kind === "email_reply"
       ? ok
         ? buildEmailSendSuccessMessage(execution.rawResult, pendingDraft.uid)
@@ -3648,6 +3656,15 @@ export class TelegramService {
           ].filter(Boolean).join("\n")
       : pendingDraft.kind === "whatsapp_reply"
         ? buildWhatsAppSendSuccessMessage(execution.rawResult, pendingDraft)
+      : pendingDraft.kind === "autonomy_capability"
+          ? ok
+            ? [
+                `Ação executada: ${pendingDraft.title}.`,
+                autonomyExecutionDetail
+                  ? autonomyExecutionDetail
+                  : pendingDraft.summary,
+              ].filter(Boolean).join("\n")
+            : buildGenericControlledActionFailureMessage(`a ação ${pendingDraft.title}`, execution.rawResult)
         : pendingDraft.kind === "google_task"
           ? ok
             ? buildGoogleTaskCreateSuccessMessage(execution.rawResult)

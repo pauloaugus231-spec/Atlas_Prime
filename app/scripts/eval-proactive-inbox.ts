@@ -92,6 +92,23 @@ async function main(): Promise<void> {
     const service = new AutonomyDirectService({
       logger,
       loop: { runOnce: async () => ({ observations: [], assessments: [], suggestions: [] }) },
+      actionService: {
+        approveSuggestion: async (approvedSuggestion) => {
+          suggestions.updateStatus({
+            id: approvedSuggestion.id,
+            status: "approved",
+          });
+          feedback.record({
+            suggestionId: approvedSuggestion.id,
+            feedbackKind: "accepted",
+            note: "approved_in_eval_stub",
+          });
+          return {
+            kind: "approved_only" as const,
+            reply: `Marquei isso como aprovado: ${approvedSuggestion.title}. Vou tratar como direção confirmada daqui para frente.`,
+          };
+        },
+      },
       suggestions,
       observations,
       audit,

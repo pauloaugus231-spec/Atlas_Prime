@@ -82,7 +82,8 @@
     "eval:reasoning-engine": "tsx scripts/eval-reasoning-engine.ts",
     "eval:profile-travel-whatsapp": "tsx scripts/eval-profile-travel-whatsapp-routing.ts",
     "eval:autonomy-loop": "tsx scripts/eval-autonomy-loop.ts",
-    "eval:proactive-inbox": "tsx scripts/eval-proactive-inbox.ts"
+    "eval:proactive-inbox": "tsx scripts/eval-proactive-inbox.ts",
+    "eval:autonomy-audit": "tsx scripts/eval-autonomy-audit.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.101.1",

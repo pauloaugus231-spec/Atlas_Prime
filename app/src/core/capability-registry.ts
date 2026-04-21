@@ -99,6 +99,17 @@ function inferPluginRequiresApproval(toolName: string): boolean {
   return inferPluginRisk(toolName) !== "low" || inferPluginSideEffects(toolName)[0] !== "read";
 }
 
+function inferPluginAutonomyLevel(toolName: string): CapabilityDefinition["autonomyLevel"] {
+  const sideEffects = inferPluginSideEffects(toolName);
+  if (sideEffects.includes("send") || sideEffects.includes("publish")) {
+    return "L5";
+  }
+  if (sideEffects.includes("write") || sideEffects.includes("schedule") || sideEffects.includes("exec")) {
+    return "L4";
+  }
+  return "L1";
+}
+
 export class CapabilityRegistry {
   private readonly validators = new Map<string, ValidateFunction<Record<string, unknown>>>();
   private readonly handlers = new Map<string, CapabilityHandler>();
@@ -136,6 +147,13 @@ export class CapabilityRegistry {
         risk: inferPluginRisk(loaded.plugin.name),
         sideEffects: inferPluginSideEffects(loaded.plugin.name),
         requiresApproval: inferPluginRequiresApproval(loaded.plugin.name),
+        autonomyLevel: inferPluginAutonomyLevel(loaded.plugin.name),
+        reversible: inferPluginSideEffects(loaded.plugin.name).every((item) => item === "read"),
+        writesExternalSystem: inferPluginSideEffects(loaded.plugin.name).some((item) =>
+          item === "write" || item === "schedule" || item === "publish" || item === "exec"
+        ),
+        sendsToExternalRecipient: inferPluginSideEffects(loaded.plugin.name).includes("send"),
+        auditRequired: inferPluginSideEffects(loaded.plugin.name).some((item) => item !== "read"),
         exposeToModel: loaded.plugin.exposeToModel,
       };
       this.catalog.set(definition.name, definition);

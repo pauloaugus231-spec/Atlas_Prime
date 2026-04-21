@@ -75,6 +75,15 @@ export function buildCompactPendingActionReply(draft: PendingActionDraft): strin
     return buildMonitoredChannelAlertReply(draft);
   }
 
+  if (draft.kind === "autonomy_capability") {
+    return [
+      `Ação pronta para aprovação: ${draft.title}.`,
+      `Capability: ${draft.capabilityName}`,
+      draft.summary ? `Contexto: ${draft.summary}` : undefined,
+      "Use `Enviar` para executar, `Editar` para refazer por conversa ou `Ignorar` para descartar.",
+    ].filter(Boolean).join("\n");
+  }
+
   if (draft.kind === "google_event") {
     return [
       `Evento pronto: ${draft.summary}.`,
@@ -144,6 +153,13 @@ function buildEditPrompt(draft: PendingActionDraft): string {
       "Rascunho de importação carregado.",
       "Para alterar o lote, o caminho mais seguro é reenviar o PDF ou o print com a agenda corrigida.",
       "Se quiser abortar o lote atual, use `cancelar rascunho`.",
+    ].join("\n");
+  }
+
+  if (draft.kind === "autonomy_capability") {
+    return [
+      "Essa ação de autonomia não tem edição inline neste passo.",
+      "Se quiser mudar o que ela vai fazer, me peça para refazer a sugestão ou gere uma nova revisão.",
     ].join("\n");
   }
 
@@ -244,16 +260,23 @@ export class TelegramApprovalUi {
     }
 
     if (parsed.action === "edit") {
-      if (draft.kind === "youtube_publish") {
+      if (draft.kind === "youtube_publish" || draft.kind === "autonomy_capability") {
         await this.api.answerCallbackQuery(callback.id, {
-          text: "Para ajustar o vídeo, gere um novo rascunho.",
+          text: draft.kind === "youtube_publish"
+            ? "Para ajustar o vídeo, gere um novo rascunho."
+            : "Essa ação precisa ser refeita pela conversa.",
         }).catch(() => undefined);
         await this.handlers.sendText(
           chatId,
-          [
-            "A publicação do YouTube não tem edição inline neste MVP.",
-            "Se quiser ajustar roteiro, título ou vídeo, gere um novo rascunho do item.",
-          ].join("\n"),
+          draft.kind === "youtube_publish"
+            ? [
+                "A publicação do YouTube não tem edição inline neste MVP.",
+                "Se quiser ajustar roteiro, título ou vídeo, gere um novo rascunho do item.",
+              ].join("\n")
+            : [
+                "Essa ação de autonomia não tem edição inline neste passo.",
+                "Se quiser mudar o que será executado, me peça para refazer a sugestão em linguagem natural.",
+              ].join("\n"),
           {
             reply_to_message_id: callback.message?.message_id,
             disable_web_page_preview: true,
