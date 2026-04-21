@@ -6,6 +6,7 @@ import type {
 } from "../types/personal-operational-memory.js";
 import type { OrchestrationContext } from "../types/orchestration.js";
 import type { UserPreferences } from "../types/user-preferences.js";
+import type { ReasoningTrace } from "./reasoning-engine.js";
 
 export interface ContextBundle {
   requestId: string;
@@ -20,6 +21,7 @@ export interface ContextBundle {
   messages: ConversationMessage[];
   tools: LlmToolDefinition[];
   maxToolIterations: number;
+  reasoningTrace?: ReasoningTrace;
 }
 
 export interface AssembleContextInput {

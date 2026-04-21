@@ -53,6 +53,8 @@ import { DraftApprovalService } from "./draft-approval-service.js";
 import { RequestOrchestrator } from "./request-orchestrator.js";
 import { GoalStore } from "./goal-store.js";
 import { DecisionsLoader } from "./decisions-loader.js";
+import { ReasoningEngine } from "./reasoning-engine.js";
+import { UserModelTracker } from "./user-model-tracker.js";
 import { setSystemPromptContextProvider } from "./system-prompt.js";
 
 function withLlmProviderConfig(config: AppConfig, providerConfig: LlmProviderConfig): AppConfig {
@@ -180,6 +182,16 @@ export async function createAgentCore() {
   const personalMemory = new PersonalOperationalMemoryStore(
     config.paths.preferencesDbPath,
     logger.child({ scope: "personal-operational-memory" }),
+  );
+  const reasoningEngine = new ReasoningEngine(
+    goalStore,
+    personalMemory,
+    memory,
+    logger.child({ scope: "reasoning-engine" }),
+  );
+  const userModelTracker = UserModelTracker.open(
+    config.paths.userBehaviorModelDbPath,
+    logger.child({ scope: "user-model-tracker" }),
   );
   const contentOps = new ContentOpsStore(
     config.paths.contentDbPath,
@@ -401,6 +413,8 @@ export async function createAgentCore() {
     pexelsMedia,
     projectOps,
     safeExec,
+    reasoningEngine,
+    userModelTracker,
   );
   const actionDispatcher = new AssistantActionDispatcher(
     core,
@@ -463,5 +477,7 @@ export async function createAgentCore() {
     projectOps,
     fileAccess,
     safeExec,
+    reasoningEngine,
+    userModelTracker,
   };
 }

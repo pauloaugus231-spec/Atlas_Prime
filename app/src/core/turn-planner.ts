@@ -5,6 +5,7 @@ import type { Logger } from "../types/logger.js";
 import type {
   PersonalOperationalProfile,
 } from "../types/personal-operational-memory.js";
+import type { ReasoningTrace } from "./reasoning-engine.js";
 
 export interface TurnOutcome {
   requestId: string;
@@ -28,6 +29,7 @@ export interface TurnPlannerDependencies {
     input: {
       profile?: PersonalOperationalProfile;
       operationalMode: "field" | null;
+      reasoningTrace?: ReasoningTrace;
     },
   ): string;
   resolveStructuredReply?(
@@ -67,6 +69,7 @@ export class TurnPlanner {
           ? this.deps.rewriteReply(context.activeUserPrompt, structured.visibleReply, {
               profile,
               operationalMode,
+              reasoningTrace: context.reasoningTrace,
             })
           : structured.visibleReply;
 
@@ -91,6 +94,7 @@ export class TurnPlanner {
     const reply = this.deps.rewriteReply(context.activeUserPrompt, synthesis.rawReply, {
       profile,
       operationalMode,
+      reasoningTrace: context.reasoningTrace,
     });
 
     this.logger.info("Turn planner produced assistant reply", {
@@ -98,6 +102,8 @@ export class TurnPlanner {
       channel: channelLabel,
       completion: synthesis.completion,
       structuredReplyHandled: false,
+      reasoningStyle: context.reasoningTrace?.suggestedResponseStyle,
+      energyHint: context.reasoningTrace?.energyHint,
     });
 
     return {

@@ -19,6 +19,7 @@ export interface AppPathsConfig {
   approvalInboxDbPath: string;
   clarificationInboxDbPath: string;
   whatsappMessagesDbPath: string;
+  userBehaviorModelDbPath: string;
 }
 
 export type LlmProvider = "ollama" | "openai";

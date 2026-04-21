@@ -78,7 +78,8 @@
     "whatsapp:sidecar": "tsx scripts/whatsapp-sidecar.ts",
     "container:bootstrap": "bash ./scripts/docker/bootstrap.sh",
     "container:healthcheck": "bash ./scripts/docker/healthcheck.sh",
-    "email:smoke": "tsx scripts/smoke-email.ts"
+    "email:smoke": "tsx scripts/smoke-email.ts",
+    "eval:reasoning-engine": "tsx scripts/eval-reasoning-engine.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.101.1",

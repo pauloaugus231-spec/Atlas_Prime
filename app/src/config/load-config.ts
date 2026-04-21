@@ -806,6 +806,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       approvalInboxDbPath: path.join(workspaceDir, ".agent-state", "approval-inbox.sqlite"),
       clarificationInboxDbPath: path.join(workspaceDir, ".agent-state", "clarification-inbox.sqlite"),
       whatsappMessagesDbPath: path.join(workspaceDir, ".agent-state", "whatsapp-messages.sqlite"),
+      userBehaviorModelDbPath: path.join(workspaceDir, ".agent-state", "user-behavior-model.sqlite"),
     },
     llm: buildLlmConfig(env),
     telegram: {
