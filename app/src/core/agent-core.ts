@@ -180,6 +180,7 @@ import { AgentDirectServiceRegistry } from "./agent-direct-service-registry.js";
 import { AgentDirectServiceComposer } from "./agent-direct-service-composer.js";
 import { ActivePlanningSessionService } from "./active-planning-session-service.js";
 import { ToolExecutionService } from "./tool-execution-service.js";
+import { ExternalReasoningRunner } from "./external-reasoning-runner.js";
 import {
   applyAtlasV2SceneEngine,
   applyReasoningReplyPolicy,
@@ -615,6 +616,7 @@ export class AgentCore {
   private readonly directServiceComposer: AgentDirectServiceComposer;
   private readonly activePlanningSession: ActivePlanningSessionService;
   private readonly toolExecutionService: ToolExecutionService;
+  private readonly externalReasoningRunner: ExternalReasoningRunner;
   private readonly createWebResearchService: (logger: Logger) => Pick<WebResearchService, "search" | "fetchPageExcerpt">;
 
   constructor(
@@ -699,6 +701,14 @@ export class AgentCore {
       googleWorkspaces: this.googleWorkspaces,
       projectOps: this.projectOps,
       safeExec: this.safeExec,
+    });
+    this.externalReasoningRunner = new ExternalReasoningRunner({
+      config: this.config,
+      contextPacks: this.contextPacks,
+      externalReasoning: this.externalReasoning,
+      personalMemory: this.personalMemory,
+      googleWorkspaces: this.googleWorkspaces,
+      logger: this.logger.child({ scope: "external-reasoning-runner" }),
     });
     this.contextAssembler = new ContextAssembler(
       this.logger.child({ scope: "context-assembler" }),
@@ -799,15 +809,15 @@ export class AgentCore {
         this.logger.child({ scope: "direct-route-runner" }),
       ),
       this.buildDirectRouteServiceDependencies(),
-      async (fallbackInput) => this.tryRunExternalReasoning(
-        fallbackInput.activeUserPrompt,
-        fallbackInput.requestId,
-        fallbackInput.requestLogger,
-        fallbackInput.intent,
-        fallbackInput.preferences,
-        fallbackInput.options,
-        "post_direct_routes",
-      ),
+      async (fallbackInput) => this.externalReasoningRunner.tryRun({
+        userPrompt: fallbackInput.activeUserPrompt,
+        requestId: fallbackInput.requestId,
+        requestLogger: fallbackInput.requestLogger,
+        intent: fallbackInput.intent,
+        preferences: fallbackInput.preferences,
+        options: fallbackInput.options,
+        stage: "post_direct_routes",
+      }),
     );
   }
 
@@ -873,38 +883,6 @@ export class AgentCore {
 
   private getContentGenerationDirectService(): ContentGenerationDirectService {
     return this.directServiceComposer.getContentGenerationDirectService();
-  }
-
-  private async tryRunPreLocalExternalReasoning(
-    input: {
-      activeUserPrompt: string;
-      requestId: string;
-      requestLogger: Logger;
-      intent: IntentResolution;
-      preferences: UserPreferences;
-      options?: AgentRunOptions;
-    },
-  ): Promise<AgentRunResult | null> {
-    const shouldBypassPreLocalExternalReasoning = shouldBypassPreLocalExternalReasoningForPrompt(
-      input.activeUserPrompt,
-      input.intent,
-    );
-    if (shouldBypassPreLocalExternalReasoning) {
-      input.requestLogger.info("Skipping external reasoning for direct local context command", {
-        mode: this.config.externalReasoning.mode,
-      });
-      return null;
-    }
-
-    return this.tryRunExternalReasoning(
-      input.activeUserPrompt,
-      input.requestId,
-      input.requestLogger,
-      input.intent,
-      input.preferences,
-      input.options,
-      "pre_local",
-    );
   }
 
   private buildDirectRouteServiceDependencies(): AgentDirectRouteServiceDependencies {
@@ -1839,7 +1817,7 @@ export class AgentCore {
       autonomyLevel: orchestration.policy.autonomyLevel,
     });
 
-    const preLocalExternalReasoningResult = await this.tryRunPreLocalExternalReasoning({
+    const preLocalExternalReasoningResult = await this.externalReasoningRunner.tryRunPreLocal({
       activeUserPrompt,
       requestId,
       requestLogger,
@@ -1993,284 +1971,6 @@ export class AgentCore {
       recentMessages: options?.recentMessages,
       accounts: this.googleWorkspaces,
     });
-  }
-
-  private async tryRunExternalReasoning(
-    userPrompt: string,
-    requestId: string,
-    requestLogger: Logger,
-    intent: IntentResolution,
-    preferences: UserPreferences,
-    options?: AgentRunOptions,
-    stage: ExternalReasoningStage = "post_direct_routes",
-  ): Promise<AgentRunResult | null> {
-    if (!shouldAttemptExternalReasoning(this.config.externalReasoning, userPrompt, intent, stage)) {
-      return null;
-    }
-
-    requestLogger.info("Trying external reasoning provider", {
-      mode: this.config.externalReasoning.mode,
-      stage,
-      primaryDomain: intent.orchestration.route.primaryDomain,
-      actionMode: intent.orchestration.route.actionMode,
-      compoundIntent: intent.compoundIntent,
-    });
-
-    try {
-      const contextPack = await this.contextPacks.buildForPrompt(userPrompt, intent);
-      const request = await this.buildExternalReasoningRequest(
-        userPrompt,
-        intent,
-        preferences,
-        contextPack,
-        options,
-      );
-      const response = await this.externalReasoning.reason(request);
-      requestLogger.info("External reasoning completed", {
-        mode: this.config.externalReasoning.mode,
-        stage,
-        responseKind: response.kind,
-      });
-      requestLogger.info(
-        response.kind === "assistant_decision"
-          ? "External reasoning assistant_decision accepted"
-          : "External reasoning text response accepted",
-        {
-          mode: this.config.externalReasoning.mode,
-          stage,
-        },
-      );
-      const personalProfile = this.personalMemory.getProfile();
-      const operationalMode = resolveEffectiveOperationalMode(userPrompt, personalProfile);
-
-      return {
-        requestId,
-        reply: rewriteConversationalSimpleReply(userPrompt, response.content, {
-          profile: personalProfile,
-          operationalMode,
-        }),
-        messages: buildBaseMessages(userPrompt, intent.orchestration, preferences),
-        toolExecutions: [
-          {
-            toolName: "external_reasoning",
-            resultPreview: JSON.stringify(
-              {
-                kind: response.kind,
-                primaryDomain: intent.orchestration.route.primaryDomain,
-                actionMode: intent.orchestration.route.actionMode,
-              },
-              null,
-              2,
-            ),
-          },
-        ],
-      };
-    } catch (error) {
-      requestLogger.warn("External reasoning failed; falling back to local flow", {
-        mode: this.config.externalReasoning.mode,
-        stage,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      return null;
-    }
-  }
-
-  private async buildExternalReasoningRequest(
-    userPrompt: string,
-    intent: IntentResolution,
-    preferences: UserPreferences,
-    contextPack: Awaited<ReturnType<ContextPackService["buildForPrompt"]>>,
-    options?: AgentRunOptions,
-  ): Promise<ExternalReasoningRequest> {
-    const personalProfile = this.personalMemory.getProfile();
-    const operationalState = this.personalMemory.getOperationalState();
-    const briefEvents = (contextPack?.brief?.events ?? [])
-      .slice(0, 6)
-      .flatMap((event) => {
-        if (!event.start) {
-          return [];
-        }
-        return [{
-          summary: event.summary,
-          start: event.start,
-          ...(event.location ? { location: event.location } : {}),
-          ...(event.account ? { account: event.account } : {}),
-        }];
-      });
-
-    const memorySignals = contextPack?.signals.filter((signal) =>
-      includesAny(signal.toLowerCase(), ["approval", "workflow", "memoria", "memória", "email", "tarefa", "clima"])
-    ) ?? [];
-    const personalSignals = [
-      ...personalProfile.savedFocus.map((item) => `foco salvo: ${item}`),
-      ...personalProfile.routineAnchors.map((item) => `rotina: ${item}`),
-      ...personalProfile.operationalRules.map((item) => `regra operacional: ${item}`),
-    ].slice(0, 8);
-    const relevantLearnedPreferences = selectRelevantLearnedPreferences(
-      userPrompt,
-      this.personalMemory.listLearnedPreferences({
-        activeOnly: true,
-        limit: 12,
-      }),
-      4,
-    );
-    const tasksContext = await this.buildExternalReasoningTasksContext(userPrompt, intent, contextPack);
-    const operationalMode = resolveEffectiveOperationalMode(userPrompt, personalProfile);
-
-    return {
-      user_message: userPrompt,
-      ...(options?.chatId !== undefined ? { chat_id: String(options.chatId) } : {}),
-      intent: {
-        primary_domain: intent.orchestration.route.primaryDomain,
-        secondary_domains: intent.orchestration.route.secondaryDomains,
-        mentioned_domains: intent.mentionedDomains,
-        action_mode: intent.orchestration.route.actionMode,
-        confidence: intent.orchestration.route.confidence,
-        compound: intent.compoundIntent,
-      },
-      context: {
-        signals: contextPack?.signals ?? [],
-        ...(briefEvents.length > 0
-          ? {
-              calendar: {
-                timezone: this.config.google.defaultTimezone,
-                events: briefEvents,
-              },
-            }
-          : {}),
-        ...(memorySignals.length > 0 ? { memory: memorySignals } : {}),
-        ...(personalSignals.length > 0 ? { personal: personalSignals } : {}),
-        personal_profile: summarizeIdentityProfileForReasoning(personalProfile),
-        operational_state: summarizeOperationalStateForReasoning(operationalState),
-        ...(relevantLearnedPreferences.length > 0
-          ? {
-              learned_preferences: relevantLearnedPreferences.map((item) => ({
-                type: item.type,
-                description: item.description,
-                value: item.value,
-                confidence: item.confidence,
-                confirmations: item.confirmations,
-              })),
-            }
-          : {}),
-        ...(operationalMode ? { operational_mode: operationalMode } : {}),
-        ...(tasksContext ? { tasks: tasksContext } : {}),
-        preferences: {
-          response_style: preferences.responseStyle,
-          response_length: preferences.responseLength,
-          proactive_next_step: preferences.proactiveNextStep,
-        },
-        recent_messages: intent.historyUserTurns.slice(-6),
-      },
-    };
-  }
-
-  private shouldAttachTasksContextToExternalReasoning(
-    userPrompt: string,
-    intent: IntentResolution,
-    contextPack: Awaited<ReturnType<ContextPackService["buildForPrompt"]>>,
-  ): boolean {
-    const normalizedPrompt = normalizeEmailAnalysisText(userPrompt);
-    if (includesAny(normalizedPrompt, [
-      "taref",
-      "google tasks",
-      "task",
-      "penden",
-      "lembrete",
-      "concluir",
-      "finalizar",
-      "follow up",
-    ])) {
-      return true;
-    }
-
-    if ((contextPack?.signals ?? []).some((signal) =>
-      includesAny(normalizeEmailAnalysisText(signal), ["taref", "google tasks", "task", "penden"])
-    )) {
-      return true;
-    }
-
-    return intent.orchestration.route.primaryDomain === "secretario_operacional"
-      && ["plan", "analyze", "execute"].includes(intent.orchestration.route.actionMode);
-  }
-
-  private async buildExternalReasoningTasksContext(
-    userPrompt: string,
-    intent: IntentResolution,
-    contextPack: Awaited<ReturnType<ContextPackService["buildForPrompt"]>>,
-  ): Promise<ExternalReasoningRequest["context"]["tasks"] | undefined> {
-    if (!this.shouldAttachTasksContextToExternalReasoning(userPrompt, intent, contextPack)) {
-      return undefined;
-    }
-
-    const candidateAliases = resolvePromptAccountAliases(userPrompt, this.googleWorkspaces.getAliases());
-    const lists: NonNullable<ExternalReasoningRequest["context"]["tasks"]>["lists"] = [];
-    const items: NonNullable<ExternalReasoningRequest["context"]["tasks"]>["items"] = [];
-
-    for (const alias of candidateAliases) {
-      const workspace = this.googleWorkspaces.getWorkspace(alias);
-      if (!workspace.getStatus().ready) {
-        continue;
-      }
-
-      try {
-        const taskLists = await workspace.listTaskLists();
-        lists.push(
-          ...taskLists.slice(0, 3).map((taskList) => ({
-            account: alias,
-            id: taskList.id,
-            title: taskList.title,
-          })),
-        );
-
-        const tasks = await workspace.listTasks({
-          maxResults: 4,
-          showCompleted: false,
-        });
-        items.push(
-          ...tasks.slice(0, 4).map((task) => ({
-            account: alias,
-            task_id: task.id,
-            task_list_id: task.taskListId,
-            task_list_title: task.taskListTitle,
-            title: task.title,
-            status: task.status,
-            ...(task.due ? { due: task.due } : {}),
-          })),
-        );
-      } catch (error) {
-        this.logger.debug("Skipping Google Tasks context for external reasoning", {
-          account: alias,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-
-      if (lists.length >= 6 && items.length >= 8) {
-        break;
-      }
-    }
-
-    if (lists.length === 0 && items.length === 0) {
-      return undefined;
-    }
-
-    const recentFocus = intent.historyUserTurns
-      .map((turn) => turn.trim())
-      .filter((turn) => includesAny(normalizeEmailAnalysisText(turn), ["taref", "task", "penden", "concluir", "finalizar"]))
-      .slice(-2);
-
-    return {
-      lists: lists.slice(0, 6),
-      items: items.slice(0, 8),
-      ...(recentFocus.length > 0 ? { recent_focus: recentFocus } : {}),
-      guidance: [
-        "For task create, include title.",
-        "For task update/delete, include task_id and task_list_id when known.",
-        "If only the task list title is known, you may include task_list_title.",
-        "If only the current task title is known, you may include target_title.",
-        "Never invent task_id or task_list_id. If uncertain, return text or should_execute=false.",
-      ],
-    };
   }
 
   private async resolveEmailReferenceFromPrompt(
