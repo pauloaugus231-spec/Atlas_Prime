@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import process from "node:process";
-import { AgentCore } from "../src/core/agent-core.js";
+import { DeliberativeReasoningRuntime } from "../src/core/deliberative-reasoning-runtime.js";
 import { ReasoningEngine, type ProactiveInsight } from "../src/core/reasoning-engine.js";
 import { UserModelTracker } from "../src/core/user-model-tracker.js";
 import type { ActiveGoal } from "../src/core/goal-store.js";
@@ -207,11 +207,7 @@ async function run(): Promise<void> {
 
   {
     const engine = makeReasoningEngine([revenueGoal]);
-    const core = Object.create(AgentCore.prototype) as AgentCore & {
-      reasoningEngine: ReasoningEngine;
-      userModelTracker?: UserModelTracker;
-    };
-    core.reasoningEngine = engine;
+    const runtime = new DeliberativeReasoningRuntime({ reasoningEngine: engine });
     const context: ContextBundle = {
       requestId: "reasoning-pipeline-1",
       userPrompt: "falar com cliente amanhã",
@@ -244,13 +240,11 @@ async function run(): Promise<void> {
       tools: [],
       maxToolIterations: 1,
     } as ContextBundle;
-    const enriched = (core as unknown as {
-      enrichContextWithReasoning(
-        context: ContextBundle,
-        intent: { compoundIntent: boolean },
-        requestLogger: Logger,
-      ): ContextBundle;
-    }).enrichContextWithReasoning(context, { compoundIntent: false }, logger);
+    const enriched = runtime.enrichContext({
+      context,
+      intent: { compoundIntent: false } as any,
+      requestLogger: logger,
+    });
 
     results.push(assert(
       "pipeline_enriches_context_bundle_with_reasoning_trace",

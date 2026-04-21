@@ -44,7 +44,6 @@ import { IntentRouter, type IntentResolution } from "./intent-router.js";
 import { AssistantActionDispatcher } from "./action-dispatcher.js";
 import {
   ContextAssembler,
-  type ContextBundle,
 } from "./context-assembler.js";
 import { ContextPackService } from "./context-pack.js";
 import { MemoryEntityStore } from "./memory-entity-store.js";
@@ -116,7 +115,6 @@ import {
 } from "./turn-planner.js";
 import {
   ReasoningEngine,
-  type ReasoningTrace,
 } from "./reasoning-engine.js";
 import { UserModelTracker } from "./user-model-tracker.js";
 import {
@@ -180,6 +178,7 @@ import { ToolExecutionService } from "./tool-execution-service.js";
 import { ExternalReasoningRunner } from "./external-reasoning-runner.js";
 import { WorkflowSupportService } from "./workflow-support-service.js";
 import { AgentDirectRouteHandlers } from "./agent-direct-route-handlers.js";
+import { DeliberativeReasoningRuntime } from "./deliberative-reasoning-runtime.js";
 import {
   DailyEditorialResearchService,
   type DailyEditorialResearchInput,
@@ -612,6 +611,7 @@ export class AgentCore {
   private readonly externalReasoningRunner: ExternalReasoningRunner;
   private readonly workflowSupportService: WorkflowSupportService;
   private readonly dailyEditorialResearchService: DailyEditorialResearchService;
+  private readonly deliberativeReasoningRuntime: DeliberativeReasoningRuntime;
   private readonly createWebResearchService: (logger: Logger) => Pick<WebResearchService, "search" | "fetchPageExcerpt">;
 
   constructor(
@@ -716,6 +716,10 @@ export class AgentCore {
       client: this.client,
       contentOps: this.contentOps,
       runUserPrompt: (prompt) => this.runUserPrompt(prompt),
+    });
+    this.deliberativeReasoningRuntime = new DeliberativeReasoningRuntime({
+      reasoningEngine: this.reasoningEngine,
+      userModelTracker: this.userModelTracker,
     });
     this.contextAssembler = new ContextAssembler(
       this.logger.child({ scope: "context-assembler" }),
@@ -1060,7 +1064,11 @@ export class AgentCore {
       preferences,
       recentMessages: intent.historyUserTurns.slice(-6),
     });
-    const contextWithReasoning = this.enrichContextWithReasoning(context, intent, requestLogger);
+    const contextWithReasoning = this.deliberativeReasoningRuntime.enrichContext({
+      context,
+      intent,
+      requestLogger,
+    });
     const synthesis = await this.responseSynthesizer.synthesize(contextWithReasoning, { requestLogger });
     const outcome = await this.turnPlanner.plan(contextWithReasoning, synthesis, { channelLabel: "core" });
 
@@ -1070,95 +1078,6 @@ export class AgentCore {
       messages: outcome.messages,
       toolExecutions: outcome.toolExecutions,
     };
-  }
-
-  private enrichContextWithReasoning(
-    context: ContextBundle,
-    intent: IntentResolution,
-    requestLogger: Logger,
-  ): ContextBundle {
-    if (!this.reasoningEngine || !context.operationalState || !context.profile) {
-      return context;
-    }
-
-    try {
-      const trace = this.reasoningEngine.analyze({
-        userPrompt: context.activeUserPrompt,
-        operationalState: context.operationalState,
-        profile: context.profile,
-        recentMessages: context.recentMessages,
-        currentHour: new Date().getHours(),
-      });
-      const surfacedInsights = trace.proactiveInsights
-        .filter((insight) => this.reasoningEngine?.shouldSurfaceInsight(insight) ?? false)
-        .slice(0, 2);
-      const reasoningTrace: ReasoningTrace = {
-        ...trace,
-        proactiveInsights: surfacedInsights,
-      };
-      const insightMessage = surfacedInsights.length > 0
-        ? [{
-            role: "system" as const,
-            content: [
-              "Percepção proativa do Atlas antes de responder:",
-              ...surfacedInsights.map((insight) => `[${insight.urgency}] ${insight.message}`),
-            ].join("\n"),
-          }]
-        : [];
-
-      this.recordUserModelInteraction(context, intent, surfacedInsights.length > 0, requestLogger);
-      requestLogger.info("Deliberative reasoning applied", {
-        insightCount: surfacedInsights.length,
-        responseStyle: reasoningTrace.suggestedResponseStyle,
-        energyHint: reasoningTrace.energyHint,
-      });
-
-      return {
-        ...context,
-        reasoningTrace,
-        messages: [
-          ...context.messages,
-          ...insightMessage,
-        ],
-      };
-    } catch (error) {
-      requestLogger.warn("Deliberative reasoning failed; continuing without trace", {
-        error: error instanceof Error ? error.message : String(error),
-      });
-      return context;
-    }
-  }
-
-  private recordUserModelInteraction(
-    context: ContextBundle,
-    intent: IntentResolution,
-    hadProactiveInsight: boolean,
-    requestLogger: Logger,
-  ): void {
-    if (!this.userModelTracker) {
-      return;
-    }
-
-    try {
-      const promptLength = context.activeUserPrompt.length;
-      const promptComplexity =
-        intent.compoundIntent || /estrat[eé]gia|decis[aã]o|compar|diagn[oó]stico|plano/i.test(context.activeUserPrompt)
-          ? "strategic"
-          : promptLength > 180 || context.activeUserPrompt.split(/[.!?]/).filter(Boolean).length > 2
-            ? "complex"
-            : "simple";
-      this.userModelTracker.updateFromInteraction({
-        hour: new Date().getHours(),
-        domain: context.orchestration.route.primaryDomain,
-        promptComplexity,
-        hadProactiveInsight,
-        userReacted: false,
-      });
-    } catch (error) {
-      requestLogger.debug("User behavior model update skipped", {
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
   }
 
   async executeToolDirect(toolName: string, rawArguments: unknown): Promise<{
