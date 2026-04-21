@@ -179,6 +179,7 @@ import {
 import { AgentDirectServiceRegistry } from "./agent-direct-service-registry.js";
 import { AgentDirectServiceComposer } from "./agent-direct-service-composer.js";
 import { ActivePlanningSessionService } from "./active-planning-session-service.js";
+import { ToolExecutionService } from "./tool-execution-service.js";
 import {
   applyAtlasV2SceneEngine,
   applyReasoningReplyPolicy,
@@ -613,6 +614,7 @@ export class AgentCore {
   private readonly messagingDirectService: MessagingDirectService;
   private readonly directServiceComposer: AgentDirectServiceComposer;
   private readonly activePlanningSession: ActivePlanningSessionService;
+  private readonly toolExecutionService: ToolExecutionService;
   private readonly createWebResearchService: (logger: Logger) => Pick<WebResearchService, "search" | "fetchPageExcerpt">;
 
   constructor(
@@ -678,6 +680,26 @@ export class AgentCore {
         };
       },
     );
+    this.toolExecutionService = new ToolExecutionService({
+      config: this.config,
+      logger: this.logger,
+      fileAccess: this.fileAccess,
+      pluginRegistry: this.pluginRegistry,
+      memory: this.memory,
+      preferences: this.preferences,
+      personalMemory: this.personalMemory,
+      growthOps: this.growthOps,
+      contentOps: this.contentOps,
+      socialAssistant: this.socialAssistant,
+      workflows: this.workflows,
+      email: this.email,
+      emailWriter: this.emailWriter,
+      emailAccounts: this.emailAccounts,
+      googleWorkspace: this.googleWorkspace,
+      googleWorkspaces: this.googleWorkspaces,
+      projectOps: this.projectOps,
+      safeExec: this.safeExec,
+    });
     this.contextAssembler = new ContextAssembler(
       this.logger.child({ scope: "context-assembler" }),
       {
@@ -695,7 +717,7 @@ export class AgentCore {
       this.client,
       this.logger.child({ scope: "response-synthesizer" }),
       {
-        executeTool: async (input) => this.executeSynthesizedTool(input),
+        executeTool: async (input) => this.toolExecutionService.executeSynthesizedTool(input),
       },
     );
     const assistantActionDispatcher = new AssistantActionDispatcher(
@@ -763,7 +785,7 @@ export class AgentCore {
       projectOps: this.projectOps,
       safeExec: this.safeExec,
       createWebResearchService: this.createWebResearchService,
-      executeToolDirect: (toolName, rawArguments) => this.executeToolDirect(toolName, rawArguments),
+      executeToolDirect: (toolName, rawArguments) => this.toolExecutionService.executeToolDirect(toolName, rawArguments),
       buildActiveGoalUserDataReply: (goal, plan) => this.activePlanningSession.buildActiveGoalUserDataReply(goal, plan),
       resolveEmailReferenceFromPrompt: (prompt, logger) => this.resolveEmailReferenceFromPrompt(prompt, logger),
       runDailyEditorialResearch: (input) => this.runDailyEditorialResearch(input),
@@ -1952,71 +1974,12 @@ export class AgentCore {
     }
   }
 
-  private async executeSynthesizedTool(input: ExecuteSynthesizedToolInput): Promise<{
-    content: string;
-    rawResult?: unknown;
-  }> {
-    return this.pluginRegistry.execute(input.toolName, input.rawArguments, {
-      requestId: input.requestId,
-      toolCallId: input.toolCallId,
-      config: this.config,
-      logger: input.requestLogger,
-      fileAccess: this.fileAccess,
-      memory: this.memory,
-      preferences: this.preferences,
-      personalMemory: this.personalMemory,
-      growthOps: this.growthOps,
-      contentOps: this.contentOps,
-      socialAssistant: this.socialAssistant,
-      workflows: this.workflows,
-      email: this.email,
-      emailWriter: this.emailWriter,
-      emailAccounts: this.emailAccounts,
-      googleWorkspace: this.googleWorkspace,
-      googleWorkspaces: this.googleWorkspaces,
-      projectOps: this.projectOps,
-      safeExec: this.safeExec,
-      orchestration: input.context.orchestration,
-    });
-  }
-
   async executeToolDirect(toolName: string, rawArguments: unknown): Promise<{
     requestId: string;
     content: string;
     rawResult: unknown;
   }> {
-    const requestId = randomUUID();
-    const toolCallId = randomUUID();
-    const orchestration = buildOrchestrationContext(`executar ferramenta ${toolName}`);
-    const requestLogger = this.logger.child({ requestId, tool: toolName, toolCallId, direct: true });
-    const execution = await this.pluginRegistry.execute(toolName, rawArguments, {
-      requestId,
-      toolCallId,
-      config: this.config,
-      logger: requestLogger,
-      fileAccess: this.fileAccess,
-      memory: this.memory,
-      preferences: this.preferences,
-      personalMemory: this.personalMemory,
-      growthOps: this.growthOps,
-      contentOps: this.contentOps,
-      socialAssistant: this.socialAssistant,
-      workflows: this.workflows,
-      email: this.email,
-      emailWriter: this.emailWriter,
-      emailAccounts: this.emailAccounts,
-      googleWorkspace: this.googleWorkspace,
-      googleWorkspaces: this.googleWorkspaces,
-      projectOps: this.projectOps,
-      safeExec: this.safeExec,
-      orchestration,
-    });
-
-    return {
-      requestId,
-      content: execution.content,
-      rawResult: execution.rawResult,
-    };
+    return this.toolExecutionService.executeToolDirect(toolName, rawArguments);
   }
 
   async resolveStructuredTaskOperationPayload(
