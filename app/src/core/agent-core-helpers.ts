@@ -2785,37 +2785,4 @@ export function buildInboxTriageReply(items: InboxTriageItem[], options: { unrea
   return lines.join("\n").trim();
 }
 
-export function buildBaseMessages(
-  userPrompt: string,
-  orchestration: OrchestrationContext,
-  preferences?: UserPreferences,
-): ConversationMessage[] {
-  return [
-    {
-      role: "system",
-      content: buildSystemPrompt(),
-    },
-    {
-      role: "system",
-      content: buildOrchestrationSystemMessage(orchestration),
-    },
-    ...(preferences
-      ? [
-          {
-            role: "system" as const,
-            content: [
-              `Preferências atuais do usuário:`,
-              `- estilo de resposta: ${preferences.responseStyle}`,
-              `- tamanho preferido: ${preferences.responseLength}`,
-              `- sugerir próxima ação: ${preferences.proactiveNextStep ? "sim" : "não"}`,
-              `- nome preferido do agente: ${preferences.preferredAgentName}`,
-            ].join("\n"),
-          },
-        ]
-      : []),
-    {
-      role: "user",
-      content: userPrompt,
-    },
-  ];
-}
+export * from "./base-message-helpers.js";
