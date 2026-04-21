@@ -57,14 +57,7 @@ import {
 } from "./response-synthesizer.js";
 import { SocialAssistantStore } from "./social-assistant.js";
 import { UserPreferencesStore } from "./user-preferences.js";
-import {
-  WhatsAppMessageStore,
-  type WhatsAppMessageRecord,
-} from "./whatsapp-message-store.js";
-import {
-  describeWhatsAppRoute,
-  resolveWhatsAppAccountAlias,
-} from "./whatsapp-routing.js";
+import { WhatsAppMessageStore } from "./whatsapp-message-store.js";
 import { WorkflowOrchestratorStore } from "./workflow-orchestrator.js";
 import { buildOrchestrationContext, buildOrchestrationSystemMessage } from "./orchestration.js";
 import { buildSystemPrompt } from "./system-prompt.js";
@@ -92,9 +85,7 @@ import { GoogleWorkspaceAccountsService } from "../integrations/google/google-wo
 import { GoogleWorkspaceService } from "../integrations/google/google-workspace.js";
 import { PexelsMediaService, type PexelsVideoSuggestion } from "../integrations/media/pexels.js";
 import { SupabaseMacCommandQueue } from "../integrations/supabase/mac-command-queue.js";
-import { EvolutionApiClient, type EvolutionRecentChatRecord } from "../integrations/whatsapp/evolution-api.js";
 import type { OrchestrationContext } from "../types/orchestration.js";
-import type { ApprovalInboxItemRecord } from "../types/approval-inbox.js";
 import type { MemoryEntityKind, MemoryEntityRecord } from "../types/memory-entities.js";
 import type { UserPreferences } from "../types/user-preferences.js";
 import type {
@@ -174,6 +165,7 @@ import {
   mergeTravelPlanningGoal,
   type ActivePlanningGoal,
 } from "./active-goal-state.js";
+import { MessagingDirectService } from "./messaging-direct-service.js";
 
 function stripCodeFences(value: string): string {
   const trimmed = value.trim();
@@ -210,29 +202,6 @@ function extractActiveUserPrompt(prompt: string): string {
 
   const extracted = prompt.slice(index + marker.length).trim();
   return extracted || prompt.trim();
-}
-
-function extractTelegramHistoryUserTurns(prompt: string): string[] {
-  const historyMarker = "Histórico recente do chat:";
-  const currentMarker = "Mensagem atual do usuário:";
-  const historyIndex = prompt.indexOf(historyMarker);
-  const currentIndex = prompt.indexOf(currentMarker);
-  if (historyIndex === -1 || currentIndex === -1 || currentIndex <= historyIndex) {
-    return [];
-  }
-
-  return prompt
-    .slice(historyIndex + historyMarker.length, currentIndex)
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.startsWith("Usuário: "))
-    .map((line) => line.replace(/^Usuário:\s*/i, "").trim())
-    .filter(Boolean);
-}
-
-function normalizePhoneDigits(value: string | undefined): string | undefined {
-  const digits = value?.replace(/\D+/g, "") ?? "";
-  return digits || undefined;
 }
 
 function normalizeSyntheticArguments(value: unknown): unknown {
@@ -788,199 +757,6 @@ function extractGoogleContactsQuery(prompt: string): string | undefined {
     /(?:contato|contacts?)\s+["“]?(.+?)["”]?(?=(?:[?.!,;:]|$))/i,
   );
   return genericMatch?.[1]?.trim();
-}
-
-function isWhatsAppSendPrompt(prompt: string): boolean {
-  const normalized = normalizeEmailAnalysisText(prompt);
-  return includesAny(normalized, ["whatsapp", "zap"]) && includesAny(normalized, [
-    "mande mensagem",
-    "manda mensagem",
-    "enviar mensagem",
-    "envie mensagem",
-    "responda no whatsapp",
-    "responde no whatsapp",
-    "manda no whatsapp",
-    "envie no whatsapp",
-  ]);
-}
-
-function isWhatsAppRecentSearchPrompt(prompt: string): boolean {
-  const normalized = normalizeEmailAnalysisText(prompt);
-  const hasMessageLookupIntent = includesAny(normalized, [
-    "mensagem recente",
-    "mensagens recentes",
-    "ultima mensagem",
-    "última mensagem",
-    "ultimas mensagens",
-    "últimas mensagens",
-    "liste mensagens",
-    "listar mensagens",
-    "mostre mensagens",
-    "ver mensagens",
-    "procure no whatsapp",
-    "busque no whatsapp",
-    "veja no whatsapp",
-    "conversa recente",
-  ]);
-  const hasWhatsAppContext = includesAny(normalized, ["whatsapp", "zap", "abordagem"]);
-  return hasMessageLookupIntent && hasWhatsAppContext;
-}
-
-function isGenericWhatsAppFollowUp(prompt: string): boolean {
-  const normalized = normalizeEmailAnalysisText(prompt);
-  return normalized === "procure no whatsapp" || normalized === "busque no whatsapp" || normalized === "veja no whatsapp";
-}
-
-function isWhatsAppPendingApprovalsPrompt(prompt: string): boolean {
-  const normalized = normalizeEmailAnalysisText(prompt);
-  return includesAny(normalized, ["whatsapp", "zap"]) && includesAny(normalized, [
-    "aprovações pendentes",
-    "aprovacoes pendentes",
-    "pendencias",
-    "pendências",
-    "rascunhos pendentes",
-  ]);
-}
-
-function findRecentWhatsAppSendPrompt(fullPrompt: string): string | undefined {
-  const historyTurns = extractTelegramHistoryUserTurns(fullPrompt).reverse();
-  return historyTurns.find((turn) => isWhatsAppSendPrompt(turn));
-}
-
-function isClearlyNonWhatsAppIntent(prompt: string): boolean {
-  const normalized = normalizeEmailAnalysisText(prompt);
-
-  if (isGoogleEventCreatePrompt(prompt) || isGoogleTaskCreatePrompt(prompt)) {
-    return true;
-  }
-
-  return includesAny(normalized, [
-    "meu calendario",
-    "meu calendário",
-    "minha agenda",
-    "coloque um evento",
-    "coloca um evento",
-    "crie um evento",
-    "crie uma tarefa",
-    "adicione uma tarefa",
-    "liste meus compromissos",
-    "liste minhas tarefas",
-    "procure no whatsapp",
-    "busque no whatsapp",
-    "veja no whatsapp",
-    "pesquise na internet",
-    "procure na internet",
-    "pesquise sobre",
-    "clima em",
-    "previsao do tempo",
-    "previsão do tempo",
-    "morning briefing",
-    "procure o contato",
-    "liste workflows",
-    "mostre o workflow",
-  ]);
-}
-
-function isLikelyWhatsAppBodyFollowUp(prompt: string): boolean {
-  const trimmed = prompt.trim();
-  if (!trimmed) {
-    return false;
-  }
-
-  const normalized = normalizeEmailAnalysisText(trimmed);
-  if (isClearlyNonWhatsAppIntent(trimmed)) {
-    return false;
-  }
-  if (
-    isWhatsAppSendPrompt(trimmed) ||
-    isWhatsAppRecentSearchPrompt(trimmed) ||
-    isGenericWhatsAppFollowUp(trimmed)
-  ) {
-    return false;
-  }
-
-  return ![
-    "sim",
-    "ok",
-    "agendar",
-    "confirmar",
-    "enviar",
-    "mande",
-    "autorizo",
-    "autorizo envio",
-    "deixe o envio de lado",
-    "cancele",
-    "cancela",
-    "ignorar",
-  ].includes(normalized);
-}
-
-function extractWhatsAppTargetReference(prompt: string): string | undefined {
-  const patterns = [
-    /(?:procure|busque|veja)\s+(?:no\s+)?(?:whatsapp|zap)\s+por\s+(.+?)(?=(?:[?.!,;]|$))/i,
-    /(?:whatsapp|zap)\s+(?:de|do|da|para|pro|pra)\s+(.+?)(?=(?:\s+(?:mensagem|texto|dizendo|com a mensagem|com o texto)|\s*[:|]|[?.!,;]|$))/i,
-    /(?:mande|manda|envie|enviar|responda|responde)\s+(?:mensagem\s+)?(?:para|pro|pra)\s+(.+?)(?=(?:\s+(?:no\s+)?(?:whatsapp|zap)|\s+(?:mensagem|texto|dizendo|com a mensagem|com o texto)|\s*[:|]|[?.!,;]|$))/i,
-    /(?:mensagens?(?:\s+recentes?)?|conversas?(?:\s+recentes?)?)\s+(?:de|do|da|com)\s+(.+?)(?=(?:[?.!,;]|$))/i,
-  ];
-  for (const pattern of patterns) {
-    const match = prompt.match(pattern);
-    const value = match?.[1]?.trim();
-    if (value) {
-      return value.replace(/^["“'`]+|["”'`]+$/g, "").trim();
-    }
-  }
-  return undefined;
-}
-
-function extractWhatsAppMessageBody(prompt: string): string | undefined {
-  const quoted = prompt.match(/["“]([^"”]+)["”]/);
-  if (quoted?.[1]?.trim()) {
-    return quoted[1].trim();
-  }
-
-  const pipeMatch = prompt.match(/\|\s*(.+)$/);
-  if (pipeMatch?.[1]?.trim()) {
-    return pipeMatch[1].trim();
-  }
-
-  const patterns = [
-    /(?:mensagem|texto)\s*:\s*([\s\S]+)$/i,
-    /(?:dizendo|com a mensagem|com o texto)\s+([\s\S]+)$/i,
-    /:\s*([\s\S]+)$/i,
-  ];
-  for (const pattern of patterns) {
-    const match = prompt.match(pattern);
-    const value = match?.[1]?.trim();
-    if (value) {
-      return value.replace(/^["“'`]+|["”'`]+$/g, "").trim();
-    }
-  }
-  return undefined;
-}
-
-function extractWhatsAppSearchQuery(currentPrompt: string, fullPrompt: string): string | undefined {
-  const current = extractWhatsAppTargetReference(currentPrompt);
-  if (current) {
-    return current;
-  }
-
-  if (!isGenericWhatsAppFollowUp(currentPrompt)) {
-    return undefined;
-  }
-
-  const historyTurns = extractTelegramHistoryUserTurns(fullPrompt).reverse();
-  for (const turn of historyTurns) {
-    const candidate = extractWhatsAppTargetReference(turn);
-    if (candidate) {
-      return candidate;
-    }
-    const genericRecent = turn.match(/mensagem(?:\s+recente)?\s+de\s+(.+?)(?=(?:[?.!,;]|$))/i);
-    if (genericRecent?.[1]?.trim()) {
-      return genericRecent[1].trim();
-    }
-  }
-
-  return undefined;
 }
 
 function isWebResearchPrompt(prompt: string): boolean {
@@ -6128,178 +5904,6 @@ function buildOperationalPlanContract(
   };
 }
 
-function buildWhatsAppDraftMarker(draft: {
-  instanceName?: string;
-  account?: string;
-  remoteJid: string;
-  number: string;
-  pushName?: string;
-  inboundText?: string;
-  replyText: string;
-  relationship?: string;
-  persona?: string;
-}): string {
-  return [
-    "WHATSAPP_REPLY_DRAFT",
-    JSON.stringify({
-      kind: "whatsapp_reply",
-      instanceName: draft.instanceName,
-      account: draft.account,
-      remoteJid: draft.remoteJid,
-      number: draft.number,
-      pushName: draft.pushName,
-      inboundText: draft.inboundText ?? "",
-      replyText: draft.replyText,
-      relationship: draft.relationship,
-      persona: draft.persona,
-    }),
-    "END_WHATSAPP_REPLY_DRAFT",
-  ].join("\n");
-}
-
-function buildWhatsAppDirectDraftReply(input: {
-  nameOrNumber: string;
-  number: string;
-  text: string;
-  account?: string;
-  instanceName?: string;
-  marker: string;
-}): string {
-  return [
-    input.marker,
-    `Rascunho WhatsApp pronto para ${input.nameOrNumber}.`,
-    `Número: ${input.number}`,
-    ...(input.account ? [`Conta operacional: ${input.account}`] : []),
-    ...(input.instanceName ? [`Instância: ${input.instanceName}`] : []),
-    `Mensagem: ${input.text}`,
-    "Confirme com `enviar` ou use os botões `Enviar`, `Editar` ou `Ignorar`.",
-  ].join("\n");
-}
-
-function buildWhatsAppRecentMessagesReply(query: string, messages: WhatsAppMessageRecord[]): string {
-  if (messages.length === 0) {
-    return [
-      `Não encontrei mensagens registradas de ${query} no WhatsApp do Atlas.`,
-      "Se a conversa chegou antes da integração, ela ainda não aparece no histórico local.",
-    ].join("\n");
-  }
-
-  const formatter = new Intl.DateTimeFormat("pt-BR", {
-    timeZone: "America/Sao_Paulo",
-    day: "2-digit",
-    month: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-
-  return [
-    `Mensagens recentes de ${query}: ${messages.length}.`,
-    ...messages.map((item) => {
-      const when = formatter.format(new Date(item.createdAt));
-      const who = item.pushName ?? item.number ?? item.remoteJid;
-      const direction = item.direction === "inbound" ? "recebida" : "enviada";
-      return `- ${direction} | ${when} | ${who} | ${item.text}`;
-    }),
-  ].join("\n");
-}
-
-function buildWhatsAppScopedRecentMessagesReply(label: string, messages: WhatsAppMessageRecord[]): string {
-  if (messages.length === 0) {
-    return [
-      `Não encontrei mensagens registradas no WhatsApp da conta ${label}.`,
-      "Envie uma mensagem nova para essa instância e tente novamente.",
-    ].join("\n");
-  }
-
-  const formatter = new Intl.DateTimeFormat("pt-BR", {
-    timeZone: "America/Sao_Paulo",
-    day: "2-digit",
-    month: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-
-  return [
-    `Mensagens recentes do WhatsApp ${label}: ${messages.length}.`,
-    ...messages.map((item) => {
-      const when = formatter.format(new Date(item.createdAt));
-      const who = item.pushName ?? item.number ?? item.remoteJid;
-      const direction = item.direction === "inbound" ? "recebida" : "enviada";
-      return `- ${direction} | ${when} | ${who} | ${item.text}`;
-    }),
-  ].join("\n");
-}
-
-function buildWhatsAppScopedRecentChatsReply(label: string, chats: EvolutionRecentChatRecord[]): string {
-  const filteredChats = chats.filter((item) => !item.isSystem).slice(0, 8);
-  if (filteredChats.length === 0) {
-    return [
-      `Não encontrei conversas recentes no WhatsApp da conta ${label}.`,
-      "Se a instância acabou de conectar, tente de novo em alguns instantes.",
-    ].join("\n");
-  }
-
-  const formatter = new Intl.DateTimeFormat("pt-BR", {
-    timeZone: "America/Sao_Paulo",
-    day: "2-digit",
-    month: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-
-  const summarize = (value: string | undefined): string => {
-    const compact = (value ?? "sem texto").replace(/\s+/g, " ").trim();
-    return compact.length > 180 ? `${compact.slice(0, 177)}...` : compact;
-  };
-  const hasUrgencySignal = (value: string | undefined): boolean => {
-    const normalized = normalizeEmailAnalysisText(value ?? "");
-    return includesAny(normalized, [
-      "urgente",
-      "urgencia",
-      "urgência",
-      "agora",
-      "hoje ainda",
-      "assim que puder",
-      "me liga",
-      "me ligue",
-      "responde",
-      "preciso de ti",
-      "preciso de voce",
-      "preciso de você",
-    ]);
-  };
-
-  return [
-    `Conversas recentes do WhatsApp ${label}: ${filteredChats.length}.`,
-    ...filteredChats.map((item) => {
-      const when = item.updatedAt ? formatter.format(new Date(item.updatedAt)) : "sem horário";
-      const priority = item.mentionedJids.length > 0 || hasUrgencySignal(item.lastMessageText);
-      const groupLabel = item.chatName ?? item.remoteJid;
-      const directLabel = item.senderName ?? item.remoteJidAlt ?? item.remoteJid;
-      const direction = item.fromMe ? "enviada" : "recebida";
-      const text = summarize(item.lastMessageText);
-      if (item.isGroup) {
-        const sender = item.senderName && item.senderName !== item.chatName
-          ? item.senderName
-          : "autor não identificado";
-        return `- ${priority ? "[PRIORIDADE] " : ""}${when} | grupo: ${groupLabel} | autor: ${sender} | ${direction} | ${text}`;
-      }
-      return `- ${priority ? "[PRIORIDADE] " : ""}${when} | direto: ${directLabel} | ${direction} | ${text}`;
-    }),
-  ].join("\n");
-}
-
-function buildWhatsAppPendingApprovalsReply(items: ApprovalInboxItemRecord[]): string {
-  if (items.length === 0) {
-    return "Não há aprovações pendentes de WhatsApp.";
-  }
-
-  return [
-    `Aprovações pendentes de WhatsApp: ${items.length}.`,
-    ...items.map((item) => `- #${item.id} | ${item.subject}`),
-  ].join("\n");
-}
-
 function shouldAutoCreateGoogleEvent(prompt: string, draft: PendingGoogleEventDraft, writeReady: boolean): boolean {
   if (!writeReady) {
     return false;
@@ -9909,6 +9513,7 @@ export class AgentCore {
   private readonly responseSynthesizer: ResponseSynthesizer;
   private readonly turnPlanner: TurnPlanner;
   private readonly directRouteRunner: DirectRouteRunner;
+  private readonly messagingDirectService: MessagingDirectService;
   private readonly activeGoals = new Map<string, ActivePlanningGoal>();
 
   constructor(
@@ -9994,6 +9599,16 @@ export class AgentCore {
     this.directRouteRunner = new DirectRouteRunner(
       this.logger.child({ scope: "direct-route-runner" }),
     );
+    this.messagingDirectService = new MessagingDirectService({
+      whatsappConfig: this.config.whatsapp,
+      logger: this.logger.child({ scope: "messaging-direct-service" }),
+      contacts: this.contacts,
+      approvals: this.approvals,
+      whatsappMessages: this.whatsappMessages,
+      buildBaseMessages: (userPrompt, orchestration) => buildBaseMessages(userPrompt, orchestration),
+      buildMessageHistoryReply: (input) => this.responseOs.buildMessageHistoryReply(input),
+      buildApprovalReviewReply: (input) => this.responseOs.buildApprovalReviewReply(input),
+    });
   }
 
   resolveIntent(userPrompt: string): IntentResolution {
@@ -10386,23 +10001,23 @@ export class AgentCore {
         ),
       }),
       ...buildMessagingDirectRoutes({
-        whatsappSend: async (input) => this.tryRunDirectWhatsAppSend(
-          input.activeUserPrompt,
-          input.userPrompt,
-          input.requestId,
-          input.orchestration,
-        ),
-        whatsappRecentSearch: async (input) => this.tryRunDirectWhatsAppRecentSearch(
-          input.activeUserPrompt,
-          input.userPrompt,
-          input.requestId,
-          input.orchestration,
-        ),
-        whatsappPendingApprovals: async (input) => this.tryRunDirectWhatsAppPendingApprovals(
-          input.activeUserPrompt,
-          input.requestId,
-          input.orchestration,
-        ),
+        whatsappSend: async (input) => this.messagingDirectService.tryRunWhatsAppSend({
+          activeUserPrompt: input.activeUserPrompt,
+          fullPrompt: input.userPrompt,
+          requestId: input.requestId,
+          orchestration: input.orchestration,
+        }),
+        whatsappRecentSearch: async (input) => this.messagingDirectService.tryRunWhatsAppRecentSearch({
+          activeUserPrompt: input.activeUserPrompt,
+          fullPrompt: input.userPrompt,
+          requestId: input.requestId,
+          orchestration: input.orchestration,
+        }),
+        whatsappPendingApprovals: async (input) => this.messagingDirectService.tryRunWhatsAppPendingApprovals({
+          activeUserPrompt: input.activeUserPrompt,
+          requestId: input.requestId,
+          orchestration: input.orchestration,
+        }),
       }),
       ...buildKnowledgeAndProjectDirectRoutes({
         weather: async (input) => this.tryRunDirectWeather(
@@ -13449,316 +13064,6 @@ export class AgentCore {
           resultPreview: JSON.stringify(result, null, 2).slice(0, 240),
         },
       ],
-    };
-  }
-
-  private resolveWhatsAppTarget(prompt: string): {
-    number?: string;
-    displayName?: string;
-    remoteJid?: string;
-    relationship?: ContactRelationship;
-    persona?: ContactPersona;
-  } {
-    const directNumber = normalizePhoneDigits(extractPhoneFromText(prompt));
-    const targetReference = extractWhatsAppTargetReference(prompt);
-
-    if (directNumber) {
-      return {
-        number: directNumber,
-        displayName: targetReference,
-        remoteJid: `${directNumber}@s.whatsapp.net`,
-      };
-    }
-
-    if (!targetReference) {
-      return {};
-    }
-
-    const candidates = this.contacts.searchContacts(targetReference, 6);
-    const exactDisplay = candidates.find((item) =>
-      normalizeAliasToken(item.displayName ?? "") === normalizeAliasToken(targetReference),
-    );
-    const whatsappCandidate = [exactDisplay, ...candidates].find((item) => {
-      if (!item) {
-        return false;
-      }
-      if (item.channel === "whatsapp" && normalizePhoneDigits(item.identifier)) {
-        return true;
-      }
-      return Boolean(normalizePhoneDigits(item.identifier));
-    });
-
-    const number = normalizePhoneDigits(whatsappCandidate?.identifier);
-    if (!number) {
-      const recentWhatsAppContacts = this.whatsappMessages.searchContacts(targetReference, 6);
-      const exactRecent = recentWhatsAppContacts.find((item) =>
-        normalizeAliasToken(item.pushName ?? "") === normalizeAliasToken(targetReference),
-      );
-      const fallbackRecent = exactRecent ?? recentWhatsAppContacts[0];
-      const fallbackNumber = normalizePhoneDigits(fallbackRecent?.number ?? undefined);
-
-      if (!fallbackNumber) {
-        return {
-          displayName: targetReference,
-        };
-      }
-
-      return {
-        number: fallbackNumber,
-        displayName: fallbackRecent?.pushName ?? targetReference,
-        remoteJid: fallbackRecent?.remoteJid ?? `${fallbackNumber}@s.whatsapp.net`,
-      };
-    }
-
-    return {
-      number,
-      displayName: whatsappCandidate?.displayName ?? targetReference,
-      remoteJid: `${number}@s.whatsapp.net`,
-      relationship: whatsappCandidate?.relationship,
-      persona: whatsappCandidate?.persona,
-    };
-  }
-
-  private async tryRunDirectWhatsAppSend(
-    activeUserPrompt: string,
-    fullPrompt: string,
-    requestId: string,
-    orchestration: OrchestrationContext,
-  ): Promise<AgentRunResult | null> {
-    const recentSendPrompt = findRecentWhatsAppSendPrompt(fullPrompt);
-    const currentHasPhone = Boolean(normalizePhoneDigits(extractPhoneFromText(activeUserPrompt)));
-    const currentHasExplicitBody = Boolean(extractWhatsAppMessageBody(activeUserPrompt));
-    const currentLooksLikeBodyFollowUp =
-      Boolean(recentSendPrompt) &&
-      !currentHasPhone &&
-      !currentHasExplicitBody &&
-      isLikelyWhatsAppBodyFollowUp(activeUserPrompt);
-    const isFollowUpForRecentSend =
-      !isWhatsAppSendPrompt(activeUserPrompt) &&
-      Boolean(recentSendPrompt) &&
-      (currentHasPhone || currentHasExplicitBody || currentLooksLikeBodyFollowUp);
-
-    if (!isWhatsAppSendPrompt(activeUserPrompt) && !isFollowUpForRecentSend) {
-      return null;
-    }
-
-    const whatsappStatus = this.config.whatsapp.enabled;
-    if (!whatsappStatus) {
-      return {
-        requestId,
-        reply: "O WhatsApp do Atlas não está habilitado neste ambiente.",
-        messages: buildBaseMessages(activeUserPrompt, orchestration),
-        toolExecutions: [],
-      };
-    }
-
-    const baseTargetPrompt =
-      currentHasPhone || extractWhatsAppTargetReference(activeUserPrompt)
-        ? activeUserPrompt
-        : recentSendPrompt ?? activeUserPrompt;
-    const target = this.resolveWhatsAppTarget(baseTargetPrompt);
-    const body = extractWhatsAppMessageBody(activeUserPrompt) ?? (currentLooksLikeBodyFollowUp ? activeUserPrompt.trim() : undefined);
-
-    if (!target.number && target.displayName) {
-      return {
-        requestId,
-        reply: [
-          `Não encontrei o número de WhatsApp de ${target.displayName}.`,
-          "Responda em uma linha neste formato: `+55... | sua mensagem`.",
-        ].join("\n"),
-        messages: buildBaseMessages(activeUserPrompt, orchestration),
-        toolExecutions: [],
-      };
-    }
-
-    if (!target.number) {
-      return {
-        requestId,
-        reply: "Para enviar no WhatsApp, me passe em uma linha: `+55... | sua mensagem`.",
-        messages: buildBaseMessages(activeUserPrompt, orchestration),
-        toolExecutions: [],
-      };
-    }
-
-    if (!body) {
-      return {
-        requestId,
-        reply: [
-          `Tenho o destino: ${target.displayName ?? target.number} (${target.number}).`,
-          "Agora me diga o texto em uma linha, por exemplo: `Olá, bom dia.`",
-        ].join("\n"),
-        messages: buildBaseMessages(activeUserPrompt, orchestration),
-        toolExecutions: [],
-      };
-    }
-
-    const whatsappRoutingContext = [recentSendPrompt, baseTargetPrompt, activeUserPrompt]
-      .filter(Boolean)
-      .join("\n");
-    const accountAlias = resolveWhatsAppAccountAlias(this.config.whatsapp, {
-      text: whatsappRoutingContext,
-      fallback: "primary",
-    });
-    const route = describeWhatsAppRoute(this.config.whatsapp, {
-      accountAlias,
-      text: whatsappRoutingContext,
-    });
-    if (!route.instanceName) {
-      return {
-        requestId,
-        reply: [
-          `Não encontrei uma instância de WhatsApp configurada para a conta ${accountAlias}.`,
-          "Defina `WHATSAPP_INSTANCE_ACCOUNTS` para mapear a instância correta antes de enviar.",
-        ].join("\n"),
-        messages: buildBaseMessages(activeUserPrompt, orchestration),
-        toolExecutions: [],
-      };
-    }
-
-    const marker = buildWhatsAppDraftMarker({
-      instanceName: route.instanceName,
-      account: route.accountAlias,
-      remoteJid: target.remoteJid ?? `${target.number}@s.whatsapp.net`,
-      number: target.number,
-      pushName: target.displayName,
-      inboundText: "",
-      replyText: body,
-      relationship: target.relationship,
-      persona: target.persona,
-    });
-
-    return {
-      requestId,
-      reply: buildWhatsAppDirectDraftReply({
-        nameOrNumber: target.displayName ?? target.number,
-        number: target.number,
-        text: body,
-        account: route.accountAlias,
-        instanceName: route.instanceName,
-        marker,
-      }),
-      messages: buildBaseMessages(activeUserPrompt, orchestration),
-      toolExecutions: [],
-    };
-  }
-
-  private async tryRunDirectWhatsAppRecentSearch(
-    activeUserPrompt: string,
-    fullPrompt: string,
-    requestId: string,
-    orchestration: OrchestrationContext,
-  ): Promise<AgentRunResult | null> {
-    if (!isWhatsAppRecentSearchPrompt(activeUserPrompt)) {
-      return null;
-    }
-
-    if (!this.config.whatsapp.enabled) {
-      return {
-        requestId,
-        reply: "O WhatsApp do Atlas não está habilitado neste ambiente.",
-        messages: buildBaseMessages(activeUserPrompt, orchestration),
-        toolExecutions: [],
-      };
-    }
-
-    const query = extractWhatsAppSearchQuery(activeUserPrompt, fullPrompt);
-    if (!query) {
-      return {
-        requestId,
-        reply: "Diga de quem devo procurar as mensagens recentes no WhatsApp.",
-        messages: buildBaseMessages(activeUserPrompt, orchestration),
-        toolExecutions: [],
-      };
-    }
-
-    const normalizedQuery = normalizeEmailAnalysisText(query);
-    const route = describeWhatsAppRoute(this.config.whatsapp, {
-      text: [activeUserPrompt, fullPrompt].join("\n"),
-    });
-    const isScopedAccountQuery = normalizedQuery === route.accountAlias || normalizedQuery === normalizeEmailAnalysisText(route.instanceName ?? "");
-    if (isScopedAccountQuery && route.instanceName && this.config.whatsapp.enabled) {
-      try {
-        const whatsapp = new EvolutionApiClient(
-          this.config.whatsapp,
-          this.logger.child({ scope: "whatsapp-evolution" }),
-        );
-        const chats = await whatsapp.findChats(route.instanceName, 8);
-        if (chats.length > 0) {
-          return {
-            requestId,
-            reply: buildWhatsAppScopedRecentChatsReply(route.accountAlias, chats),
-            messages: buildBaseMessages(activeUserPrompt, orchestration),
-            toolExecutions: [],
-          };
-        }
-      } catch (error) {
-        this.logger.warn("WhatsApp recent chat fallback failed", {
-          account: route.accountAlias,
-          instanceName: route.instanceName,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-    }
-    const messages = isScopedAccountQuery && route.instanceName
-      ? this.whatsappMessages.listRecentByInstance(route.instanceName, 8)
-      : this.whatsappMessages.searchRecent(query, 8);
-    return {
-      requestId,
-      reply: this.responseOs.buildMessageHistoryReply({
-        scopeLabel: isScopedAccountQuery && route.instanceName
-          ? `WhatsApp ${route.accountAlias}`
-          : `WhatsApp para ${query}`,
-        items: messages.map((item) => ({
-          when: new Intl.DateTimeFormat("pt-BR", {
-            timeZone: "America/Sao_Paulo",
-            day: "2-digit",
-            month: "2-digit",
-            hour: "2-digit",
-            minute: "2-digit",
-          }).format(new Date(item.createdAt)),
-          who: item.pushName ?? item.number ?? item.remoteJid,
-          direction: item.direction === "inbound" ? "recebida" : "enviada",
-          text: item.text,
-        })),
-        recommendedNextStep: messages[0]
-          ? `Ler a última mensagem e decidir se o próximo passo é responder, acompanhar ou registrar contexto.`
-          : undefined,
-      }),
-      messages: buildBaseMessages(activeUserPrompt, orchestration),
-      toolExecutions: [],
-    };
-  }
-
-  private async tryRunDirectWhatsAppPendingApprovals(
-    activeUserPrompt: string,
-    requestId: string,
-    orchestration: OrchestrationContext,
-  ): Promise<AgentRunResult | null> {
-    if (!isWhatsAppPendingApprovalsPrompt(activeUserPrompt)) {
-      return null;
-    }
-
-    const pending = this.approvals
-      .listPendingAll(12)
-      .filter((item) => item.actionKind === "whatsapp_reply");
-    const rankedPending = rankApprovals(pending);
-
-    return {
-      requestId,
-      reply: this.responseOs.buildApprovalReviewReply({
-        scopeLabel: "WhatsApp",
-        items: rankedPending.map((entry) => ({
-          id: entry.item.id,
-          subject: entry.item.subject,
-          actionKind: entry.item.actionKind,
-          createdAt: entry.item.createdAt,
-        })),
-        recommendedNextStep: rankedPending[0]
-          ? `Decidir a resposta pendente de WhatsApp: ${rankedPending[0].item.subject}.`
-          : undefined,
-      }),
-      messages: buildBaseMessages(activeUserPrompt, orchestration),
-      toolExecutions: [],
     };
   }
 

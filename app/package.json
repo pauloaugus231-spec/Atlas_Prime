@@ -38,6 +38,7 @@
     "eval:telegram-phase3": "tsx scripts/eval-telegram-phase3.ts",
     "eval:agent-core-phase4": "tsx scripts/eval-agent-core-phase4.ts",
     "eval:agent-core-phase5": "tsx scripts/eval-agent-core-phase5.ts",
+    "eval:agent-core-phase6": "tsx scripts/eval-agent-core-phase6.ts",
     "eval:request-orchestration": "tsx scripts/eval-request-orchestration.ts",
     "eval:personal-memory": "tsx scripts/eval-personal-memory.ts",
     "eval:personal-context": "tsx scripts/eval-personal-context-layers.ts",
