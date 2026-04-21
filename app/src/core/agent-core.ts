@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { AppConfig } from "../types/config.js";
@@ -15,8 +15,6 @@ import { FileAccessPolicy, type ReadableRootKey } from "./file-access-policy.js"
 import { ContentOpsStore } from "./content-ops.js";
 import { GrowthOpsStore } from "./growth-ops.js";
 import type { FounderOpsSnapshot } from "./founder-ops.js";
-import { inferPreferredDomains, resolveKnowledgeAlias } from "./knowledge-aliases.js";
-import { LocalKnowledgeService } from "./local-knowledge.js";
 import {
   adjustEventDraftFromInstruction,
   buildGoogleEventDeleteDraftReply,
@@ -167,6 +165,15 @@ import {
 } from "./active-goal-state.js";
 import { MessagingDirectService } from "./messaging-direct-service.js";
 import { GoogleWorkspaceDirectService } from "./google-workspace-direct-service.js";
+import { ExternalIntelligenceDirectService } from "./external-intelligence-direct-service.js";
+import { CapabilityActionService } from "./capability-action-service.js";
+import { CapabilityInspectionService } from "./capability-inspection-service.js";
+import { KnowledgeProjectDirectService } from "./knowledge-project-direct-service.js";
+import { MemoryContactDirectService } from "./memory-contact-direct-service.js";
+import { OperationalReviewDirectService } from "./operational-review-direct-service.js";
+import { OperationalContextDirectService } from "./operational-context-direct-service.js";
+import { WorkspaceMacDirectService } from "./workspace-mac-direct-service.js";
+import { WorkflowDirectService } from "./workflow-direct-service.js";
 
 function stripCodeFences(value: string): string {
   const trimmed = value.trim();
@@ -659,14 +666,6 @@ function extractMacProjectCommand(prompt: string): { argv: string[]; projectAlia
   }
 
   return undefined;
-}
-
-function normalizeAliasToken(value: string): string {
-  return value
-    .normalize("NFD")
-    .replace(/\p{Diacritic}/gu, "")
-    .toLowerCase()
-    .replace(/[\s._/-]+/g, "");
 }
 
 function isGoogleTasksPrompt(prompt: string): boolean {
@@ -3009,17 +3008,28 @@ function extractProjectRoot(prompt: string): ReadableRootKey {
 }
 
 function extractProjectPath(prompt: string): string | undefined {
-  const folderMatch = prompt.match(
-    /(?:pasta|diretorio|diretório|caminho|path)\s+["“]?(.+?)["”]?(?=(?:\s+(?:dentro\s+de|no\s+root|em\s+authorized_|para\s+o\s+workspace|para\s+workspace|e\s+(?:rode|execute|analise|análise|leia|resuma|espelhe|copie|clone))|[?.!,;:]|$))/i,
+  const clean = (value: string | undefined): string | undefined => {
+    const cleaned = value
+      ?.trim()
+      .replace(/^["“”']+/, "")
+      .replace(/["“”']+$/g, "")
+      .replace(/[.,;:!?]+$/g, "")
+      .trim();
+    return cleaned || undefined;
+  };
+
+  const quotedMatch = prompt.match(
+    /(?:pasta|diretorio|diretório|caminho|path|projeto|repositorio|repositório)\s+["“]([^"”]+?)["”]/i,
   );
-  if (folderMatch?.[1]?.trim()) {
-    return folderMatch[1].trim();
+  const quoted = clean(quotedMatch?.[1]);
+  if (quoted) {
+    return quoted;
   }
 
-  const projectMatch = prompt.match(
-    /(?:projeto|repositorio|repositório)\s+["“]?(.+?)["”]?(?=(?:\s+(?:dentro\s+de|no\s+root|em\s+authorized_|para\s+o\s+workspace|para\s+workspace|e\s+(?:rode|execute|analise|análise|leia|resuma|espelhe|copie|clone))|[?.!,;:]|$))/i,
+  const unquotedMatch = prompt.match(
+    /(?:pasta|diretorio|diretório|caminho|path|projeto|repositorio|repositório)\s+(.+?)(?=(?:\s+(?:dentro\s+de|no\s+root|em\s+(?:authorized_|projetos\s+autorizados|workspace(?:\s+origem)?|conteudo|conteúdo|financeiro|social|admin)|para\s+(?:o\s+)?workspace|no\s+(?:meu\s+)?mac|no\s+computador|e\s+(?:rode|execute|analise|análise|leia|resuma|espelhe|copie|clone))|[?.!,;:]|$))/i,
   );
-  return projectMatch?.[1]?.trim();
+  return clean(unquotedMatch?.[1]);
 }
 
 function isMirrorProjectPrompt(prompt: string): boolean {
@@ -3038,10 +3048,19 @@ function isMirrorProjectPrompt(prompt: string): boolean {
 }
 
 function extractMirrorTargetPath(prompt: string): string | undefined {
+  const clean = (value: string | undefined): string | undefined => {
+    const cleaned = value
+      ?.trim()
+      .replace(/^["“”']+/, "")
+      .replace(/["“”']+$/g, "")
+      .replace(/[.,;:!?]+$/g, "")
+      .trim();
+    return cleaned || undefined;
+  };
   const match = prompt.match(
-    /(?:para|no|na)\s+workspace(?:\/|\\)["“]?([A-Za-z0-9_./ -]+?)["”]?(?=(?:[?.!,;:]|$))/i,
+    /(?:para|no|na)\s+(?:o\s+)?workspace(?:\/|\\)?["“]?(.+?)["”]?(?=(?:\s+e\s+(?:rode|execute|analise|análise|leia|resuma|espelhe|copie|clone)|[?.!,;:]|$))/i,
   );
-  return match?.[1]?.trim();
+  return clean(match?.[1]);
 }
 
 function extractMirrorSourceRoot(prompt: string): ReadableRootKey {
@@ -9516,6 +9535,16 @@ export class AgentCore {
   private readonly directRouteRunner: DirectRouteRunner;
   private readonly messagingDirectService: MessagingDirectService;
   private googleWorkspaceDirectService?: GoogleWorkspaceDirectService;
+  private externalIntelligenceDirectService?: ExternalIntelligenceDirectService;
+  private capabilityActionService?: CapabilityActionService;
+  private capabilityInspectionService?: CapabilityInspectionService;
+  private knowledgeProjectDirectService?: KnowledgeProjectDirectService;
+  private memoryContactDirectService?: MemoryContactDirectService;
+  private operationalContextDirectService?: OperationalContextDirectService;
+  private operationalReviewDirectService?: OperationalReviewDirectService;
+  private workspaceMacDirectService?: WorkspaceMacDirectService;
+  private workflowDirectService?: WorkflowDirectService;
+  private readonly createWebResearchService: (logger: Logger) => Pick<WebResearchService, "search" | "fetchPageExcerpt">;
   private readonly activeGoals = new Map<string, ActivePlanningGoal>();
 
   constructor(
@@ -9556,6 +9585,7 @@ export class AgentCore {
     private readonly projectOps: ProjectOpsService,
     private readonly safeExec: SafeExecService,
   ) {
+    this.createWebResearchService = (logger) => new WebResearchService(logger);
     this.capabilityPlanner = new CapabilityPlanner(
       this.config,
       this.capabilityRegistry,
@@ -9785,6 +9815,827 @@ export class AgentCore {
     }
 
     return this.googleWorkspaceDirectService;
+  }
+
+  private getExternalIntelligenceDirectService(): ExternalIntelligenceDirectService {
+    if (!this.externalIntelligenceDirectService) {
+      const fallbackLogger: Logger = {
+        debug: () => undefined,
+        info: () => undefined,
+        warn: () => undefined,
+        error: () => undefined,
+        child: () => fallbackLogger,
+      };
+      const fallbackClient: Pick<LlmClient, "chat"> = {
+        chat: async () => ({
+          model: "fallback",
+          done: true,
+          message: {
+            role: "assistant",
+            content: "",
+          },
+        }),
+      };
+      const baseLogger = this.logger ?? fallbackLogger;
+      const createWebResearchService = this.createWebResearchService ?? ((logger: Logger) => new WebResearchService(logger));
+
+      this.externalIntelligenceDirectService = new ExternalIntelligenceDirectService({
+        logger: baseLogger.child({ scope: "external-intelligence-direct-service" }),
+        client: this.client ?? fallbackClient,
+        googleMaps: this.googleMaps,
+        createWebResearchService,
+        buildBaseMessages: (userPrompt, orchestration, preferences) =>
+          buildBaseMessages(userPrompt, orchestration, preferences),
+        helpers: {
+          isWebResearchPrompt,
+          isImplicitResearchPrompt,
+          extractWebResearchQuery,
+          extractWebResearchMode,
+          maxResearchResultsForMode,
+          excerptBudgetForResearchMode,
+          inferOfficialFallbackUrls,
+          buildResearchFocusTerms,
+          extractRequestedResearchFactTypes,
+          inferResearchSynthesisProfile,
+          fetchOfficialAliasSources: (service, urls, logger, focusTerms, maxChars) =>
+            fetchOfficialAliasSources(service as WebResearchService, urls, logger, focusTerms, maxChars),
+          scoreFocusedExcerpt,
+          buildDeterministicFactLookupReply,
+          buildWebResearchReply,
+          stripResearchReplyMarkdown,
+          extractResearchFacts,
+          buildMapsRouteReply,
+          buildPlaceDiscoveryReply,
+        },
+      });
+    }
+
+    return this.externalIntelligenceDirectService;
+  }
+
+  private getCapabilityActionService(): CapabilityActionService {
+    if (!this.capabilityActionService) {
+      const fallbackLogger: Logger = {
+        debug: () => undefined,
+        info: () => undefined,
+        warn: () => undefined,
+        error: () => undefined,
+        child: () => fallbackLogger,
+      };
+      const baseLogger = this.logger ?? fallbackLogger;
+      const fallbackPersonalMemory = {
+        recordProductGapObservation: (input: import("../types/product-gaps.js").CreateProductGapObservationInput) => ({
+          id: 1,
+          signature: input.signature,
+          type: input.type,
+          description: input.description,
+          inferredObjective: input.inferredObjective,
+          missingCapabilities: input.missingCapabilities,
+          missingRequirementKinds: input.missingRequirementKinds,
+          contextSummary: input.contextSummary,
+          relatedSkill: input.relatedSkill,
+          channel: input.channel,
+          impact: input.impact === "high" || input.impact === "low" ? input.impact : "medium",
+          recurrence: 1,
+          status: "open",
+          createdAt: new Date(0).toISOString(),
+          updatedAt: new Date(0).toISOString(),
+          lastObservedAt: new Date(0).toISOString(),
+        }),
+      };
+
+      this.capabilityActionService = new CapabilityActionService({
+        logger: baseLogger.child({ scope: "capability-action-service" }),
+        personalMemory: this.personalMemory ?? fallbackPersonalMemory,
+        buildBaseMessages: (userPrompt, orchestration, preferences) =>
+          buildBaseMessages(userPrompt, orchestration, preferences),
+        helpers: {
+          buildActiveGoalUserDataReply: (goal, plan) => this.buildActiveGoalUserDataReply(goal, plan),
+          buildCapabilityPlanUserDataReply,
+          buildCapabilityGapReply,
+          buildCapabilityGapSignature,
+        },
+      });
+    }
+
+    return this.capabilityActionService;
+  }
+
+  private getCapabilityInspectionService(): CapabilityInspectionService {
+    if (!this.capabilityInspectionService) {
+      const fallbackLogger: Logger = {
+        debug: () => undefined,
+        info: () => undefined,
+        warn: () => undefined,
+        error: () => undefined,
+        child: () => fallbackLogger,
+      };
+      const baseLogger = this.logger ?? fallbackLogger;
+      const fallbackCapabilityPlanner = {
+        isCapabilityInspectionPrompt: () => false,
+        listCapabilityAvailability: () => [] as CapabilityAvailabilityRecord[],
+      };
+      const fallbackPersonalMemory = {
+        listProductGaps: () => [] as ProductGapRecord[],
+      };
+
+      this.capabilityInspectionService = new CapabilityInspectionService({
+        logger: baseLogger.child({ scope: "capability-inspection-service" }),
+        capabilityPlanner: this.capabilityPlanner ?? fallbackCapabilityPlanner,
+        personalMemory: this.personalMemory ?? fallbackPersonalMemory,
+        buildBaseMessages: (userPrompt, orchestration, preferences) =>
+          buildBaseMessages(userPrompt, orchestration, preferences),
+        helpers: {
+          buildCapabilityAvailabilityReply,
+          buildProductGapsReply,
+          buildProductGapDetailReply,
+        },
+      });
+    }
+
+    return this.capabilityInspectionService;
+  }
+
+  private getKnowledgeProjectDirectService(): KnowledgeProjectDirectService {
+    if (!this.knowledgeProjectDirectService) {
+      const fallbackLogger: Logger = {
+        debug: () => undefined,
+        info: () => undefined,
+        warn: () => undefined,
+        error: () => undefined,
+        child: () => fallbackLogger,
+      };
+      const baseLogger = this.logger ?? fallbackLogger;
+      const fallbackFileAccess = {
+        resolveReadablePathFromRoot: () => {
+          throw new Error("File access indisponivel.");
+        },
+      };
+      const fallbackProjectOps = {
+        scanProject: async () => ({}),
+        getGitStatus: async () => undefined as unknown as Record<string, unknown>,
+      };
+
+      this.knowledgeProjectDirectService = new KnowledgeProjectDirectService({
+        logger: baseLogger.child({ scope: "knowledge-project-direct-service" }),
+        fileAccess: this.fileAccess ?? fallbackFileAccess,
+        projectOps: this.projectOps ?? fallbackProjectOps,
+        executeToolDirect: (toolName, rawArguments) => this.executeToolDirect(toolName, rawArguments),
+        buildBaseMessages: (userPrompt, orchestration, preferences) =>
+          buildBaseMessages(userPrompt, orchestration, preferences),
+        helpers: {
+          isInternalKnowledgePrompt,
+          extractInternalKnowledgeQuery,
+          buildInternalKnowledgeReply,
+          isProjectScanPrompt,
+          extractProjectRoot,
+          extractProjectPath,
+          buildProjectScanReply,
+          isMirrorProjectPrompt,
+          extractMirrorSourceRoot,
+          extractMirrorTargetPath,
+        },
+      });
+    }
+
+    return this.knowledgeProjectDirectService;
+  }
+
+  private getOperationalContextDirectService(): OperationalContextDirectService {
+    if (!this.operationalContextDirectService) {
+      const fallbackLogger: Logger = {
+        debug: () => undefined,
+        info: () => undefined,
+        warn: () => undefined,
+        error: () => undefined,
+        child: () => fallbackLogger,
+      };
+      const baseLogger = this.logger ?? fallbackLogger;
+      let fallbackPreferences: UserPreferences = {
+        responseStyle: "executive",
+        responseLength: "medium",
+        proactiveNextStep: false,
+        autoSourceFallback: false,
+        preferredAgentName: "Atlas",
+      };
+      const fallbackProfile: PersonalOperationalProfile = {
+        displayName: "Usuário",
+        primaryRole: "operador",
+        routineSummary: [],
+        timezone: this.config.google.defaultTimezone,
+        preferredChannels: ["telegram"],
+        priorityAreas: [],
+        defaultAgendaScope: "both",
+        workCalendarAliases: [],
+        responseStyle: "direto",
+        briefingPreference: "executivo",
+        detailLevel: "equilibrado",
+        tonePreference: "objetivo",
+        defaultOperationalMode: "normal",
+        mobilityPreferences: [],
+        autonomyPreferences: [],
+        savedFocus: [],
+        routineAnchors: [],
+        operationalRules: [],
+        attire: {
+          umbrellaProbabilityThreshold: 40,
+          coldTemperatureC: 14,
+          lightClothingTemperatureC: 24,
+          carryItems: [],
+        },
+        fieldModeHours: 6,
+      };
+      const fallbackOperationalState: OperationalState = {
+        mode: "normal",
+        focus: [],
+        weeklyPriorities: [],
+        pendingAlerts: [],
+        criticalTasks: [],
+        upcomingCommitments: [],
+        briefing: {},
+        recentContext: [],
+        signals: [],
+        pendingApprovals: 0,
+        updatedAt: new Date(0).toISOString(),
+      };
+      const fallbackGoogleWorkspace = {
+        getStatus: () => ({
+          ready: false,
+          message: "Google Workspace indisponível.",
+        }),
+        getDailyBrief: async () => ({
+          timezone: this.config.google.defaultTimezone,
+          windowStart: new Date(0).toISOString(),
+          windowEnd: new Date(0).toISOString(),
+          events: [],
+          tasks: [],
+        }),
+      };
+      const fallbackMemory = {
+        getDailyFocus: () => [],
+      };
+      const fallbackPersonalOs = {
+        getExecutiveMorningBrief: async () => ({
+          timezone: this.config.google.defaultTimezone,
+          events: [],
+          taskBuckets: {
+            today: [],
+            overdue: [],
+            stale: [],
+            actionableCount: 0,
+          },
+          emails: [],
+          approvals: [],
+          workflows: [],
+          focus: [],
+          memoryEntities: {
+            total: 0,
+            byKind: {},
+            recent: [],
+          },
+          motivation: {
+            text: "Sem mensagem do dia.",
+          },
+          founderSnapshot: {
+            sections: [],
+          },
+          personalFocus: [],
+          overloadLevel: "leve" as const,
+          mobilityAlerts: [],
+          operationalSignals: [],
+          conflictSummary: {
+            overlaps: 0,
+            duplicates: 0,
+            naming: 0,
+          },
+        }),
+      };
+      const fallbackPreferencesStore = {
+        get: () => fallbackPreferences,
+        update: (input: import("../types/user-preferences.js").UpdateUserPreferencesInput) => {
+          fallbackPreferences = {
+            ...fallbackPreferences,
+            ...input,
+          };
+          return fallbackPreferences;
+        },
+      };
+      const fallbackPersonalMemory = {
+        getProfile: () => fallbackProfile,
+        getOperationalState: () => fallbackOperationalState,
+        findLearnedPreferences: () => [] as LearnedPreference[],
+        findItems: () => [] as PersonalOperationalMemoryItem[],
+      };
+      const fallbackExecuteToolDirect = async () => ({
+        requestId: "fallback-operational-context",
+        content: "",
+        rawResult: {},
+      });
+
+      this.operationalContextDirectService = new OperationalContextDirectService({
+        logger: baseLogger.child({ scope: "operational-context-direct-service" }),
+        googleWorkspace: this.googleWorkspace ?? fallbackGoogleWorkspace,
+        memory: this.memory ?? fallbackMemory,
+        personalOs: this.personalOs ?? fallbackPersonalOs,
+        preferences: this.preferences ?? fallbackPreferencesStore,
+        personalMemory: this.personalMemory ?? fallbackPersonalMemory,
+        executeToolDirect: (toolName, rawArguments) =>
+          this.executeToolDirect ? this.executeToolDirect(toolName, rawArguments) : fallbackExecuteToolDirect(),
+        buildBaseMessages: (userPrompt, orchestration, preferences) =>
+          buildBaseMessages(userPrompt, orchestration, preferences),
+        helpers: {
+          isOperationalBriefPrompt,
+          buildOperationalBriefReply,
+          isMorningBriefPrompt,
+          buildMorningBriefReply,
+          resolveEffectiveOperationalMode,
+          isPersonalOperationalProfileShowPrompt,
+          buildPersonalOperationalProfileReply,
+          isOperationalStateShowPrompt,
+          buildOperationalStateReply,
+          isLearnedPreferencesListPrompt,
+          resolveLearnedPreferencesListFilter,
+          buildLearnedPreferencesReply,
+          isLearnedPreferencesDeletePrompt,
+          extractLearnedPreferenceId,
+          extractLearnedPreferenceDeleteTarget,
+          buildLearnedPreferenceDeactivatedReply,
+          isPersonalOperationalProfileUpdatePrompt,
+          extractPersonalOperationalProfileUpdate,
+          buildPersonalOperationalProfileUpdatedReply,
+          isPersonalOperationalProfileDeletePrompt,
+          extractPersonalOperationalProfileRemoveQuery,
+          removeFromPersonalOperationalProfile,
+          buildPersonalOperationalProfileRemovedReply,
+          isPersonalMemoryListPrompt,
+          buildPersonalMemoryListReply,
+          isPersonalMemorySavePrompt,
+          extractPersonalMemoryStatement,
+          inferPersonalMemoryKind,
+          buildPersonalMemoryTitle,
+          buildPersonalMemorySavedReply,
+          isPersonalMemoryUpdatePrompt,
+          extractPersonalMemoryId,
+          extractPersonalMemoryUpdateTarget,
+          extractPersonalMemoryUpdateContent,
+          buildPersonalMemoryAmbiguousReply,
+          buildPersonalMemoryUpdatedReply,
+          isPersonalMemoryDeletePrompt,
+          extractPersonalMemoryDeleteTarget,
+          buildPersonalMemoryDeletedReply,
+        },
+      });
+    }
+
+    return this.operationalContextDirectService;
+  }
+
+  private getMemoryContactDirectService(): MemoryContactDirectService {
+    if (!this.memoryContactDirectService) {
+      const fallbackLogger: Logger = {
+        debug: () => undefined,
+        info: () => undefined,
+        warn: () => undefined,
+        error: () => undefined,
+        child: () => fallbackLogger,
+      };
+      const baseLogger = this.logger ?? fallbackLogger;
+      const fallbackContacts = {
+        listContacts: () => [] as ContactProfileRecord[],
+        upsertContact: (input: UpsertContactProfileInput) => ({
+          id: 0,
+          channel: input.channel,
+          identifier: input.identifier,
+          displayName: input.displayName ?? null,
+          relationship: input.relationship,
+          persona: input.persona,
+          priority: input.priority ?? "media",
+          company: input.company ?? null,
+          preferredTone: input.preferredTone ?? null,
+          notes: input.notes ?? null,
+          tags: input.tags ?? [],
+          source: input.source ?? null,
+          createdAt: new Date(0).toISOString(),
+          updatedAt: new Date(0).toISOString(),
+        }),
+      };
+      const fallbackEntityLinker = {
+        upsertContact: () => undefined,
+      };
+      const fallbackMemoryEntities = {
+        list: () => [] as MemoryEntityRecord[],
+        search: () => [] as MemoryEntityRecord[],
+      };
+
+      this.memoryContactDirectService = new MemoryContactDirectService({
+        logger: baseLogger.child({ scope: "memory-contact-direct-service" }),
+        contacts: this.contacts ?? fallbackContacts,
+        entityLinker: this.entityLinker ?? fallbackEntityLinker,
+        memoryEntities: this.memoryEntities ?? fallbackMemoryEntities,
+        buildBaseMessages: (userPrompt, orchestration, preferences) =>
+          buildBaseMessages(userPrompt, orchestration, preferences),
+        helpers: {
+          isContactListPrompt,
+          isContactUpsertPrompt,
+          extractContactProfileInput,
+          buildContactSaveReply,
+          buildContactListReply,
+          isMemoryEntityListPrompt,
+          isMemoryEntitySearchPrompt,
+          extractMemoryEntityKindFromPrompt,
+          extractMemoryEntitySearchQuery,
+          buildMemoryEntityListReply,
+        },
+      });
+    }
+
+    return this.memoryContactDirectService;
+  }
+
+  private getWorkflowDirectService(): WorkflowDirectService {
+    if (!this.workflowDirectService) {
+      const fallbackLogger: Logger = {
+        debug: () => undefined,
+        info: () => undefined,
+        warn: () => undefined,
+        error: () => undefined,
+        child: () => fallbackLogger,
+      };
+      const baseLogger = this.logger ?? fallbackLogger;
+      const fallbackPlan: WorkflowPlanRecord = {
+        id: 0,
+        title: "Workflow fallback",
+        objective: "fallback",
+        executiveSummary: "fallback",
+        status: "draft",
+        primaryDomain: "secretario_operacional",
+        secondaryDomains: [],
+        deliverables: [],
+        nextAction: null,
+        createdAt: new Date(0).toISOString(),
+        updatedAt: new Date(0).toISOString(),
+        steps: [],
+      };
+      const fallbackStep: WorkflowStepRecord = {
+        planId: 0,
+        stepNumber: 1,
+        title: "Etapa fallback",
+        ownerDomain: "secretario_operacional",
+        taskType: "execution",
+        objective: "fallback",
+        deliverable: "fallback",
+        successCriteria: "fallback",
+        dependsOn: [],
+        suggestedTools: [],
+        status: "pending",
+        notes: null,
+      };
+      const fallbackArtifact: WorkflowArtifactRecord = {
+        id: 0,
+        planId: 0,
+        stepNumber: 1,
+        artifactType: "execution_brief",
+        title: "Artefato fallback",
+        summary: "fallback",
+        content: "fallback",
+        filePath: null,
+        createdAt: new Date(0).toISOString(),
+      };
+      const fallbackPlanBuilder = {
+        createPlanFromPrompt: async () => fallbackPlan,
+      };
+      const fallbackEntityLinker = {
+        upsertWorkflowRun: () => undefined,
+      };
+      const fallbackWorkflows = {
+        listPlans: () => [] as WorkflowPlanRecord[],
+        latestPlan: () => null,
+        getPlan: () => null,
+        listArtifacts: () => [] as WorkflowArtifactRecord[],
+        saveArtifact: () => fallbackArtifact,
+      };
+      const fallbackWorkflowRuntime = {
+        startStep: () => ({
+          plan: fallbackPlan,
+          step: fallbackStep,
+        }),
+        completeStep: () => ({
+          plan: fallbackPlan,
+          step: {
+            ...fallbackStep,
+            status: "completed" as const,
+          },
+        }),
+        blockStep: () => ({
+          plan: fallbackPlan,
+          step: {
+            ...fallbackStep,
+            status: "blocked" as const,
+          },
+        }),
+        failStep: () => ({
+          plan: fallbackPlan,
+          step: {
+            ...fallbackStep,
+            status: "failed" as const,
+          },
+        }),
+        markWaitingApproval: () => ({
+          plan: fallbackPlan,
+          step: {
+            ...fallbackStep,
+            status: "waiting_approval" as const,
+          },
+        }),
+        resetStepToPending: () => ({
+          plan: fallbackPlan,
+          step: fallbackStep,
+        }),
+        resumeStep: () => ({
+          plan: {
+            ...fallbackPlan,
+            status: "active" as const,
+          },
+          step: {
+            ...fallbackStep,
+            status: "in_progress" as const,
+          },
+        }),
+      };
+
+      this.workflowDirectService = new WorkflowDirectService({
+        logger: baseLogger.child({ scope: "workflow-direct-service" }),
+        planBuilder: this.planBuilder ?? fallbackPlanBuilder,
+        entityLinker: this.entityLinker ?? fallbackEntityLinker,
+        workflows: this.workflows ?? fallbackWorkflows,
+        workflowRuntime: this.workflowRuntime ?? fallbackWorkflowRuntime,
+        buildWorkflowExecutionBrief: (plan, step, requestLogger) => this.buildWorkflowExecutionBrief(plan, step, requestLogger),
+        saveWorkflowExecutionArtifact: (plan, step, brief) => this.saveWorkflowExecutionArtifact(plan, step, brief),
+        generateWorkflowDomainDeliverable: (plan, step, brief, requestLogger) =>
+          this.generateWorkflowDomainDeliverable(plan, step, brief, requestLogger),
+        buildBaseMessages: (userPrompt, orchestration, preferences) =>
+          buildBaseMessages(userPrompt, orchestration, preferences),
+        helpers: {
+          isWorkflowPlanningPrompt,
+          isWorkflowShowPrompt,
+          buildWorkflowPlanReply,
+          isWorkflowListPrompt,
+          buildWorkflowListReply,
+          isWorkflowArtifactListPrompt,
+          extractWorkflowPlanId,
+          extractWorkflowStepNumber,
+          buildWorkflowArtifactsReply,
+          isWorkflowExecutionPrompt,
+          shouldAutoExecuteWorkflowDeliverable,
+          buildWorkflowExecutionReply,
+          isWorkflowStepUpdatePrompt,
+          extractWorkflowStepStatus,
+          buildWorkflowStepUpdateReply,
+        },
+      });
+    }
+
+    return this.workflowDirectService;
+  }
+
+  private getOperationalReviewDirectService(): OperationalReviewDirectService {
+    if (!this.operationalReviewDirectService) {
+      const fallbackLogger: Logger = {
+        debug: () => undefined,
+        info: () => undefined,
+        warn: () => undefined,
+        error: () => undefined,
+        child: () => fallbackLogger,
+      };
+      const baseLogger = this.logger ?? fallbackLogger;
+      const fallbackClient: Pick<LlmClient, "chat"> = {
+        chat: async () => ({
+          model: "fallback",
+          done: true,
+          message: {
+            role: "assistant",
+            content: "",
+          },
+        }),
+      };
+      const fallbackEmail: EmailReader = {
+        getStatus: async () => ({
+          enabled: false,
+          configured: false,
+          ready: false,
+          mailbox: "INBOX",
+          message: "Email indisponível.",
+        }),
+        listRecentMessages: async () => [],
+        scanRecentMessages: async () => [],
+        readMessage: async () => ({
+          uid: "fallback",
+          subject: "(sem assunto)",
+          from: [],
+          to: [],
+          cc: [],
+          replyTo: [],
+          date: null,
+          flags: [],
+          preview: "",
+          messageId: null,
+          text: "",
+          truncated: false,
+          references: [],
+        }),
+      };
+      const fallbackResponseOs = {
+        buildSupportQueueReply: () => "Support review indisponível.",
+        buildInboxTriageReply: () => "Inbox triage indisponível.",
+        buildFollowUpReviewReply: () => "Follow-up review indisponível.",
+        buildCommitmentPrepReply: () => "Preparação de compromisso indisponível.",
+      };
+      const fallbackCommunicationRouter = {
+        classify: () => ({
+          relationship: "unknown",
+          persona: "operacional_neutro",
+          actionPolicy: "manual_review",
+        }),
+      };
+      const fallbackApprovals = {
+        listPendingAll: () => [],
+      };
+      const fallbackWhatsAppMessages = {
+        listRecent: () => [],
+      };
+      const fallbackGrowthOps = {
+        listLeads: () => [] as LeadRecord[],
+      };
+      const fallbackPersonalOs = {
+        getExecutiveMorningBrief: async () => ({
+          timezone: this.config.google.defaultTimezone,
+          events: [],
+          taskBuckets: {
+            today: [],
+            overdue: [],
+            stale: [],
+            actionableCount: 0,
+          },
+          emails: [],
+          approvals: [],
+          workflows: [],
+          focus: [],
+          memoryEntities: {
+            total: 0,
+            byKind: {},
+            recent: [],
+          },
+          motivation: {
+            text: "Sem mensagem do dia.",
+          },
+          founderSnapshot: {
+            executiveLine: "Founder snapshot indisponível.",
+            sections: [],
+            trackedMetrics: [],
+          },
+          personalFocus: [],
+          overloadLevel: "leve" as const,
+          mobilityAlerts: [],
+          operationalSignals: [],
+          conflictSummary: {
+            overlaps: 0,
+            duplicates: 0,
+            naming: 0,
+          },
+        }),
+      };
+      const fallbackContextPacks = {
+        buildForPrompt: async () => null,
+      };
+
+      this.operationalReviewDirectService = new OperationalReviewDirectService({
+        logger: baseLogger.child({ scope: "operational-review-direct-service" }),
+        client: this.client ?? fallbackClient,
+        email: this.email ?? fallbackEmail,
+        approvals: this.approvals ?? fallbackApprovals,
+        whatsappMessages: this.whatsappMessages ?? fallbackWhatsAppMessages,
+        communicationRouter: this.communicationRouter ?? fallbackCommunicationRouter,
+        contextPacks: this.contextPacks ?? fallbackContextPacks,
+        responseOs: this.responseOs ?? fallbackResponseOs,
+        growthOps: this.growthOps ?? fallbackGrowthOps,
+        personalOs: this.personalOs ?? fallbackPersonalOs,
+        resolveEmailReferenceFromPrompt: (prompt, logger) => this.resolveEmailReferenceFromPrompt(prompt, logger),
+        buildBaseMessages: (userPrompt, orchestration, preferences) =>
+          buildBaseMessages(userPrompt, orchestration, preferences),
+        helpers: {
+          isSupportReviewPrompt,
+          isInboxTriagePrompt,
+          isFollowUpReviewPrompt,
+          isNextCommitmentPrepPrompt,
+          isEmailDraftPrompt,
+          summarizeEmailForOperations,
+          extractEmailIdentifier,
+          normalizeEmailAnalysisText,
+          includesAny,
+          isUrgentSupportSignal,
+          extractSupportTheme,
+          classifyFollowUpBucket,
+          formatFollowUpDueLabel,
+          truncateBriefText,
+          formatBriefDateTime: (value, timezone) => formatBriefDateTime(value ?? null, timezone),
+          summarizeCalendarLocation,
+          extractEmailUidFromPrompt,
+          buildEmailLookupMissReply: (request) => buildEmailLookupMissReply(request as {
+            senderQuery?: string;
+            category?: EmailOperationalGroup;
+            unreadOnly: boolean;
+            sinceHours: number;
+            existenceOnly: boolean;
+          }),
+          extractDisplayName,
+          inferReplyContext,
+          extractToneHint,
+          extractExactReplyBody,
+          hasAffirmativeIntent,
+          buildAffirmativeReplyTemplate,
+          hasRejectionIntent,
+          buildRejectionReplyTemplate,
+          stripCodeFences,
+        },
+      });
+    }
+
+    return this.operationalReviewDirectService;
+  }
+
+  private getWorkspaceMacDirectService(): WorkspaceMacDirectService {
+    if (!this.workspaceMacDirectService) {
+      const fallbackLogger: Logger = {
+        debug: () => undefined,
+        info: () => undefined,
+        warn: () => undefined,
+        error: () => undefined,
+        child: () => fallbackLogger,
+      };
+      const baseLogger = this.logger ?? fallbackLogger;
+      const fallbackFileAccess = {
+        describeReadableRoots: () => ({
+          workspace: "",
+          authorized_projects: "",
+          authorized_dev: "",
+          authorized_social: "",
+          authorized_content: "",
+          authorized_finance: "",
+          authorized_admin: "",
+        }),
+      };
+      const fallbackSafeExec = {
+        execute: async () => {
+          throw new Error("safe_exec indisponivel.");
+        },
+      };
+      const fallbackMacCommandQueue = {
+        getStatus: () => ({
+          enabled: false,
+          configured: false,
+          ready: false,
+          targetHost: "atlas_mac",
+          commandsTable: "mac_commands",
+          workersTable: "mac_workers",
+          message: "Fila remota do Mac indisponível.",
+        }),
+        listPending: async () => [],
+        enqueueCommand: async () => ({
+          id: "fallback",
+          summary: "fallback",
+          targetHost: "atlas_mac",
+        }),
+      };
+
+      this.workspaceMacDirectService = new WorkspaceMacDirectService({
+        logger: baseLogger.child({ scope: "workspace-mac-direct-service" }),
+        workspaceDir: this.config.paths.workspaceDir,
+        authorizedProjectsDir: this.config.paths.authorizedProjectsDir,
+        fileAccess: this.fileAccess ?? fallbackFileAccess,
+        safeExec: this.safeExec ?? fallbackSafeExec,
+        macCommandQueue: this.macCommandQueue ?? fallbackMacCommandQueue,
+        buildBaseMessages: (userPrompt, orchestration, preferences) =>
+          buildBaseMessages(userPrompt, orchestration, preferences),
+        helpers: {
+          isAllowedSpacesPrompt,
+          buildAllowedSpacesReply,
+          extractSafeExecRequest,
+          buildSafeExecReply,
+          isMacQueueStatusPrompt,
+          isMacQueueListPrompt,
+          buildMacQueueStatusReply,
+          buildMacQueueListReply,
+          buildMacQueueEnqueueReply,
+          extractMacOpenApp,
+          extractMacOpenUrl,
+          extractMacNotificationText,
+          extractMacProjectOpenAlias,
+          extractMacProjectCommand,
+        },
+      });
+    }
+
+    return this.workspaceMacDirectService;
   }
 
   private async tryRunPreLocalExternalReasoning(
@@ -10762,192 +11613,64 @@ export class AgentCore {
   }): Promise<AgentRunResult | null> {
     const { plan } = input;
 
-    if (plan.suggestedAction === "respond_direct") {
-      if (input.activeGoalChatId !== undefined) {
-        this.clearChatState(input.activeGoalChatId);
-      }
-      return {
-        requestId: input.requestId,
-        reply: plan.directReply ?? plan.summary,
-        messages: buildBaseMessages(input.userPrompt, input.orchestration, input.preferences),
-        toolExecutions: [
-          {
-            toolName: "capability_planner",
-            resultPreview: JSON.stringify({
-              objective: plan.objective,
-              suggestedAction: plan.suggestedAction,
-            }),
-          },
-        ],
-      };
-    }
-
     if (plan.suggestedAction === "run_web_search") {
-      return this.executeDirectWebResearch({
+      return this.getExternalIntelligenceDirectService().executeWebResearch({
         userPrompt: input.userPrompt,
         query: plan.webQuery ?? input.userPrompt,
         requestId: input.requestId,
         requestLogger: input.requestLogger,
         orchestration: input.orchestration,
         researchMode: plan.researchMode ?? "executive",
+        preferences: input.preferences,
       });
     }
 
     if (plan.suggestedAction === "run_maps_route") {
-      if (!plan.routeRequest) {
-        return null;
-      }
-
-      const route = await this.googleMaps.computeRoute({
-        origin: plan.routeRequest.origin,
-        destination: plan.routeRequest.destination,
-        includeTolls: plan.routeRequest.includeTolls,
+      const result = await this.getExternalIntelligenceDirectService().executeMapsRoutePlan({
+        userPrompt: input.userPrompt,
+        requestId: input.requestId,
+        requestLogger: input.requestLogger,
+        orchestration: input.orchestration,
+        preferences: input.preferences,
+        plan,
       });
-
-      if (!route) {
-        return {
-          requestId: input.requestId,
-          reply: "Não consegui fechar essa rota com segurança. Me confirma origem e destino do jeito mais direto possível.",
-          messages: buildBaseMessages(input.userPrompt, input.orchestration, input.preferences),
-          toolExecutions: [
-            {
-              toolName: "maps.route",
-              resultPreview: JSON.stringify({
-                origin: plan.routeRequest.origin,
-                destination: plan.routeRequest.destination,
-                found: false,
-              }),
-            },
-          ],
-        };
-      }
-
-      if (input.activeGoalChatId !== undefined) {
+      if (result && input.activeGoalChatId !== undefined) {
         this.clearChatState(input.activeGoalChatId);
       }
-
-      return {
-        requestId: input.requestId,
-        reply: buildMapsRouteReply({
-          objective: plan.objective,
-          route,
-          roundTrip: plan.routeRequest.roundTrip,
-          fuelPricePerLiter: plan.routeRequest.fuelPricePerLiter,
-          consumptionKmPerLiter: plan.routeRequest.consumptionKmPerLiter,
-        }),
-        messages: buildBaseMessages(input.userPrompt, input.orchestration, input.preferences),
-        toolExecutions: [
-          {
-            toolName: "maps.route",
-            resultPreview: JSON.stringify({
-              origin: route.origin.formattedAddress,
-              destination: route.destination.formattedAddress,
-              distanceMeters: route.distanceMeters,
-              durationSeconds: route.durationSeconds,
-              hasTolls: route.hasTolls,
-              tolls: route.tolls,
-              roundTrip: plan.routeRequest.roundTrip,
-            }).slice(0, 240),
-          },
-        ],
-      };
+      return result;
     }
 
     if (plan.suggestedAction === "run_maps_places_search") {
-      if (!plan.placesRequest) {
-        return null;
-      }
-
-      const placesResult = await this.googleMaps.searchPlaces(plan.placesRequest.query, {
-        maxResults: plan.placesRequest.maxResults,
+      const result = await this.getExternalIntelligenceDirectService().executeMapsPlacesSearchPlan({
+        userPrompt: input.userPrompt,
+        requestId: input.requestId,
+        requestLogger: input.requestLogger,
+        orchestration: input.orchestration,
+        preferences: input.preferences,
+        plan,
       });
-
-      if (input.activeGoalChatId !== undefined) {
+      if (result && input.activeGoalChatId !== undefined) {
         this.clearChatState(input.activeGoalChatId);
       }
-
-      return {
-        requestId: input.requestId,
-        reply: buildPlaceDiscoveryReply({
-          categoryLabel: plan.placesRequest.categoryLabel,
-          locationQuery: plan.placesRequest.locationQuery,
-          results: placesResult.results,
-        }),
-        messages: buildBaseMessages(input.userPrompt, input.orchestration, input.preferences),
-        toolExecutions: [
-          {
-            toolName: "maps.places_search",
-            resultPreview: JSON.stringify({
-              query: plan.placesRequest.query,
-              total: placesResult.results.length,
-              topResult: placesResult.results[0]?.formattedAddress ?? null,
-            }).slice(0, 240),
-          },
-        ],
-      };
+      return result;
     }
-
-    if (plan.suggestedAction === "ask_user_data") {
-      return {
-        requestId: input.requestId,
-        reply: input.activeGoal
-          ? this.buildActiveGoalUserDataReply(input.activeGoal, plan)
-          : buildCapabilityPlanUserDataReply(plan),
-        messages: buildBaseMessages(input.userPrompt, input.orchestration, input.preferences),
-        toolExecutions: [
-          {
-            toolName: "capability_planner",
-            resultPreview: JSON.stringify({
-              objective: plan.objective,
-              suggestedAction: plan.suggestedAction,
-              missingUserData: plan.missingUserData,
-            }),
-          },
-        ],
-      };
-    }
-
-    if (plan.suggestedAction !== "handle_gap") {
+    const actionResult = this.getCapabilityActionService().executePlanAction({
+      userPrompt: input.userPrompt,
+      requestId: input.requestId,
+      requestLogger: input.requestLogger,
+      orchestration: input.orchestration,
+      preferences: input.preferences,
+      plan,
+      relatedSkill: input.relatedSkill,
+      activeGoal: input.activeGoal,
+    });
+    if (!actionResult) {
       return null;
     }
-
-    const missingCapabilities = [...new Set(plan.missingRequirements
-      .filter((item) => item.kind !== "user_data")
-      .map((item) => item.name))];
-    const missingRequirementKinds = [...new Set(plan.missingRequirements
-      .filter((item) => item.kind !== "user_data")
-      .map((item) => item.kind))];
-    const gap = plan.shouldLogGap
-      ? this.personalMemory.recordProductGapObservation({
-          signature: buildCapabilityGapSignature(plan),
-          type: plan.gapType ?? "capability_gap",
-          description: input.userPrompt,
-          inferredObjective: plan.objective,
-          missingCapabilities,
-          missingRequirementKinds,
-          contextSummary: plan.summary,
-          relatedSkill: input.relatedSkill,
-          impact: plan.objective === "travel_cost_estimate" ? "high" : "medium",
-        })
-      : undefined;
-
-    return {
-      requestId: input.requestId,
-      reply: buildCapabilityGapReply(plan, gap),
-      messages: buildBaseMessages(input.userPrompt, input.orchestration, input.preferences),
-      toolExecutions: [
-        {
-          toolName: "capability_planner",
-          resultPreview: JSON.stringify({
-            objective: plan.objective,
-            suggestedAction: plan.suggestedAction,
-            gapId: gap?.id ?? null,
-            missingCapabilities,
-            missingUserData: plan.missingUserData,
-          }),
-        },
-      ],
-    };
+    if (actionResult.shouldClearChatState && input.activeGoalChatId !== undefined) {
+      this.clearChatState(input.activeGoalChatId);
+    }
+    return actionResult.runResult;
   }
 
   private async tryRunActiveGoalTurn(
@@ -11858,53 +12581,12 @@ export class AgentCore {
     requestLogger: Logger,
     orchestration: OrchestrationContext,
   ): Promise<AgentRunResult | null> {
-    if (!isOperationalBriefPrompt(userPrompt)) {
-      return null;
-    }
-
-    const status = this.googleWorkspace.getStatus();
-    if (!status.ready) {
-      return {
-        requestId,
-        reply: `A integração Google Workspace não está pronta. ${status.message}`,
-        messages: buildBaseMessages(userPrompt, orchestration),
-        toolExecutions: [],
-      };
-    }
-
-    requestLogger.info("Using direct operational brief route", {
-      domain: orchestration.route.primaryDomain,
-    });
-
-    const brief = await this.googleWorkspace.getDailyBrief();
-    const focus = this.memory.getDailyFocus(4).map((item) => ({
-      title: item.item.title,
-      whyNow: item.whyNow,
-      nextAction: item.nextAction,
-    }));
-
-    return {
+    return this.getOperationalContextDirectService().tryRunOperationalBrief({
+      userPrompt,
       requestId,
-      reply: buildOperationalBriefReply({
-        brief,
-        focus,
-      }),
-      messages: buildBaseMessages(userPrompt, orchestration),
-      toolExecutions: [
-        {
-          toolName: "daily_operational_brief",
-          resultPreview: JSON.stringify(
-            {
-              events: brief.events.length,
-              tasks: brief.tasks.length,
-              focus: focus.length,
-            },
-            null,
-            2,
-          ),
-        },
-      ],
-    };
+      requestLogger,
+      orchestration,
+    });
   }
 
   private async tryRunDirectMorningBrief(
@@ -11913,44 +12595,12 @@ export class AgentCore {
     requestLogger: Logger,
     orchestration: OrchestrationContext,
   ): Promise<AgentRunResult | null> {
-    if (!isMorningBriefPrompt(userPrompt)) {
-      return null;
-    }
-
-    requestLogger.info("Using direct morning brief route", {
-      domain: orchestration.route.primaryDomain,
-    });
-
-    const brief = await this.personalOs.getExecutiveMorningBrief();
-    const profile = this.personalMemory.getProfile();
-    const operationalMode = resolveEffectiveOperationalMode(userPrompt, profile);
-
-    return {
+    return this.getOperationalContextDirectService().tryRunMorningBrief({
+      userPrompt,
       requestId,
-      reply: buildMorningBriefReply(brief, {
-        compact: operationalMode === "field",
-        operationalMode,
-        profile,
-      }),
-      messages: buildBaseMessages(userPrompt, orchestration),
-      toolExecutions: [
-        {
-          toolName: "morning_brief",
-          resultPreview: JSON.stringify(
-            {
-              events: brief.events.length,
-              tasks: brief.taskBuckets.actionableCount,
-              emails: brief.emails.length,
-              approvals: brief.approvals.length,
-              workflows: brief.workflows.length,
-              founderSections: brief.founderSnapshot.sections.length,
-            },
-            null,
-            2,
-          ),
-        },
-      ],
-    };
+      requestLogger,
+      orchestration,
+    });
   }
 
   private async tryRunDirectMacQueueStatus(
@@ -11958,22 +12608,11 @@ export class AgentCore {
     requestId: string,
     orchestration: OrchestrationContext,
   ): Promise<AgentRunResult | null> {
-    if (!isMacQueueStatusPrompt(userPrompt)) {
-      return null;
-    }
-
-    const status = this.macCommandQueue.getStatus();
-    return {
+    return this.getWorkspaceMacDirectService().tryRunMacQueueStatus({
+      userPrompt,
       requestId,
-      reply: buildMacQueueStatusReply({ status }),
-      messages: buildBaseMessages(userPrompt, orchestration),
-      toolExecutions: [
-        {
-          toolName: "mac_queue_status",
-          resultPreview: JSON.stringify(status, null, 2),
-        },
-      ],
-    };
+      orchestration,
+    });
   }
 
   private async tryRunDirectMacQueueList(
@@ -11981,127 +12620,11 @@ export class AgentCore {
     requestId: string,
     orchestration: OrchestrationContext,
   ): Promise<AgentRunResult | null> {
-    if (!isMacQueueListPrompt(userPrompt)) {
-      return null;
-    }
-
-    const status = this.macCommandQueue.getStatus();
-    if (!status.ready) {
-      return {
-        requestId,
-        reply: buildMacQueueStatusReply({ status }),
-        messages: buildBaseMessages(userPrompt, orchestration),
-        toolExecutions: [],
-      };
-    }
-
-    const items = await this.macCommandQueue.listPending(10);
-    return {
+    return this.getWorkspaceMacDirectService().tryRunMacQueueList({
+      userPrompt,
       requestId,
-      reply: buildMacQueueListReply(items),
-      messages: buildBaseMessages(userPrompt, orchestration),
-      toolExecutions: [
-        {
-          toolName: "mac_queue_list",
-          resultPreview: JSON.stringify({ count: items.length }, null, 2),
-        },
-      ],
-    };
-  }
-
-  private resolveHostProjectPath(alias: string): string | undefined {
-    const normalizedAlias = normalizeAliasToken(alias);
-    const documentsRoot = process.env.HOST_USER_DOCUMENTS_DIR?.trim();
-    const authorizedProjectsRoot = this.config.paths.authorizedProjectsDir;
-    const roots = [
-      documentsRoot,
-      this.config.paths.workspaceDir,
-      authorizedProjectsRoot,
-      path.join(authorizedProjectsRoot, "Dev"),
-      path.join(authorizedProjectsRoot, "Social"),
-      path.join(authorizedProjectsRoot, "Conteudo"),
-      path.join(authorizedProjectsRoot, "Financeiro"),
-      path.join(authorizedProjectsRoot, "Admin"),
-    ].filter((value): value is string => Boolean(value));
-
-    for (const root of roots) {
-      const direct = path.resolve(root, alias);
-      if (existsSync(direct)) {
-        return direct;
-      }
-      if (!existsSync(root)) {
-        continue;
-      }
-      for (const entry of readdirSync(root, { withFileTypes: true })) {
-        if (entry.isDirectory() && normalizeAliasToken(entry.name) === normalizedAlias) {
-          return path.join(root, entry.name);
-        }
-      }
-    }
-
-    return undefined;
-  }
-
-  private buildMacQueueIntent(userPrompt: string):
-    | {
-        summary: string;
-        argv: string[];
-        cwd?: string;
-      }
-    | undefined {
-    const appName = extractMacOpenApp(userPrompt);
-    if (appName) {
-      return {
-        summary: `Abrir app no Mac: ${appName}`,
-        argv: ["open", "-a", appName],
-      };
-    }
-
-    const url = extractMacOpenUrl(userPrompt);
-    if (url) {
-      return {
-        summary: `Abrir URL no Mac: ${url}`,
-        argv: ["open", url],
-      };
-    }
-
-    const notificationText = extractMacNotificationText(userPrompt);
-    if (notificationText) {
-      return {
-        summary: `Notificação local no Mac: ${notificationText.slice(0, 60)}`,
-        argv: [
-          "osascript",
-          "-e",
-          `display notification "${notificationText.replace(/"/g, '\\"')}" with title "Atlas Prime"`,
-        ],
-      };
-    }
-
-    const projectAlias = extractMacProjectOpenAlias(userPrompt);
-    if (projectAlias) {
-      const projectPath = this.resolveHostProjectPath(projectAlias);
-      if (projectPath) {
-        return {
-          summary: `Abrir projeto no VS Code: ${projectAlias}`,
-          argv: ["code", "-r", projectPath],
-          cwd: projectPath,
-        };
-      }
-    }
-
-    const projectCommand = extractMacProjectCommand(userPrompt);
-    if (projectCommand) {
-      const projectPath = this.resolveHostProjectPath(projectCommand.projectAlias);
-      if (projectPath) {
-        return {
-          summary: `Executar ${projectCommand.argv.join(" ")} no projeto ${projectCommand.projectAlias}`,
-          argv: projectCommand.argv,
-          cwd: projectPath,
-        };
-      }
-    }
-
-    return undefined;
+      orchestration,
+    });
   }
 
   private async tryRunDirectMacQueueEnqueue(
@@ -12109,50 +12632,11 @@ export class AgentCore {
     requestId: string,
     orchestration: OrchestrationContext,
   ): Promise<AgentRunResult | null> {
-    const status = this.macCommandQueue.getStatus();
-    const intent = this.buildMacQueueIntent(userPrompt);
-    if (!intent) {
-      return null;
-    }
-
-    if (!status.ready) {
-      return {
-        requestId,
-        reply: buildMacQueueStatusReply({ status }),
-        messages: buildBaseMessages(userPrompt, orchestration),
-        toolExecutions: [],
-      };
-    }
-
-    const command = await this.macCommandQueue.enqueueCommand({
-      summary: intent.summary,
-      argv: intent.argv,
-      cwd: intent.cwd,
-      requestedBy: "atlas",
-    });
-
-    return {
+    return this.getWorkspaceMacDirectService().tryRunMacQueueEnqueue({
+      userPrompt,
       requestId,
-      reply: buildMacQueueEnqueueReply({
-        id: command.id,
-        summary: command.summary,
-        targetHost: command.targetHost,
-      }),
-      messages: buildBaseMessages(userPrompt, orchestration),
-      toolExecutions: [
-        {
-          toolName: "mac_queue_enqueue",
-          resultPreview: JSON.stringify(
-            {
-              id: command.id,
-              summary: command.summary,
-            },
-            null,
-            2,
-          ),
-        },
-      ],
-    };
+      orchestration,
+    });
   }
 
   private async tryRunDirectGoogleTasks(
@@ -12315,274 +12799,12 @@ export class AgentCore {
     requestLogger: Logger,
     orchestration: OrchestrationContext,
   ): Promise<AgentRunResult | null> {
-    if (!isInternalKnowledgePrompt(userPrompt)) {
-      return null;
-    }
-
-    const query = extractInternalKnowledgeQuery(userPrompt);
-    if (!query) {
-      return null;
-    }
-
-    const alias = resolveKnowledgeAlias(query);
-    requestLogger.info("Using direct internal knowledge route", {
-      query,
-      alias: alias?.id,
-    });
-
-    const localKnowledge = new LocalKnowledgeService(
-      this.fileAccess,
-      requestLogger.child({ scope: "local-knowledge" }),
-    );
-    const matches = await localKnowledge.search({
-      query,
-      alias,
-      maxResults: 5,
-    });
-
-    return {
-      requestId,
-      reply: buildInternalKnowledgeReply({
-        query,
-        aliasLabel: alias?.label,
-        matches,
-      }),
-      messages: buildBaseMessages(userPrompt, orchestration),
-      toolExecutions: [
-        {
-          toolName: "internal_search",
-          resultPreview: JSON.stringify(
-            {
-              query,
-              total: matches.length,
-            },
-            null,
-            2,
-          ),
-        },
-      ],
-    };
-  }
-
-  private async executeDirectWebResearch(
-    input: {
-      userPrompt: string;
-      query: string;
-      requestId: string;
-      requestLogger: Logger;
-      orchestration: OrchestrationContext;
-      researchMode: WebResearchMode;
-    },
-  ): Promise<AgentRunResult> {
-    const {
+    return this.getKnowledgeProjectDirectService().tryRunInternalKnowledgeLookup({
       userPrompt,
-      query,
       requestId,
       requestLogger,
       orchestration,
-      researchMode,
-    } = input;
-    const alias = resolveKnowledgeAlias(query);
-    const preferredDomains = inferPreferredDomains(query, alias);
-
-    requestLogger.info("Using direct web research route", {
-      query,
-      mode: researchMode,
-      alias: alias?.id,
-      preferredDomains,
     });
-
-    const service = new WebResearchService(requestLogger.child({ scope: "web-research" }));
-    const results = await service.search({
-      query,
-      maxResults: maxResearchResultsForMode(researchMode),
-      includePageExcerpt: isAddressLookupPrompt(userPrompt) || researchMode !== "quick",
-      preferredDomains,
-      seedQueries: alias?.webQueries,
-      mode: researchMode,
-    });
-
-    const officialFallbackUrls = inferOfficialFallbackUrls(query, alias?.officialUrls);
-    const hasPreferredWebResult = results.some((item) =>
-      preferredDomains.some((domain) => item.sourceHost === domain || item.sourceHost.endsWith(`.${domain}`)),
-    );
-    const focusTerms = buildResearchFocusTerms(query, alias);
-    const requestedFactTypes = extractRequestedResearchFactTypes(userPrompt);
-    const synthesisProfile = inferResearchSynthesisProfile(userPrompt, query);
-
-    let officialFallbackResults: Array<{
-      title: string;
-      url: string;
-      sourceHost: string;
-      excerpt?: string;
-    }> = [];
-    if (
-      (results.length === 0 ||
-        requestedFactTypes.length > 0 ||
-        (alias && !hasPreferredWebResult)) &&
-      officialFallbackUrls.length
-    ) {
-      officialFallbackResults = await fetchOfficialAliasSources(
-        service,
-        officialFallbackUrls,
-        requestLogger.child({ scope: "official-alias-source" }),
-        focusTerms,
-        excerptBudgetForResearchMode(researchMode),
-      );
-    }
-
-    const mergedResults = [...results];
-    for (const item of officialFallbackResults) {
-      const existingIndex = mergedResults.findIndex((existing) => existing.url === item.url);
-      if (existingIndex === -1) {
-        mergedResults.push({
-          ...item,
-          snippet: "",
-          publishedAt: undefined,
-          score: 220 + scoreFocusedExcerpt(item.excerpt, focusTerms),
-        });
-        continue;
-      }
-
-      const existing = mergedResults[existingIndex];
-      mergedResults[existingIndex] = {
-        ...existing,
-        title: existing.title || item.title,
-        sourceHost: existing.sourceHost || item.sourceHost,
-        excerpt:
-          (item.excerpt && item.excerpt.length > (existing.excerpt?.length ?? 0))
-            ? item.excerpt
-            : existing.excerpt,
-        score: Math.max(existing.score ?? 0, 220 + scoreFocusedExcerpt(item.excerpt, focusTerms)),
-      };
-    }
-
-    const sortedMergedResults = [...mergedResults].sort((left, right) => (right.score ?? 0) - (left.score ?? 0));
-
-    const preferredWebResults = sortedMergedResults.filter((item) =>
-      preferredDomains.some((domain) => item.sourceHost === domain || item.sourceHost.endsWith(`.${domain}`)),
-    );
-    const finalResults =
-      preferredWebResults.length > 0
-        ? preferredWebResults
-        : alias && officialFallbackResults.length > 0
-          ? officialFallbackResults.map((item) => ({
-              ...item,
-              snippet: "",
-              publishedAt: undefined,
-              score: 220 + scoreFocusedExcerpt(item.excerpt, focusTerms),
-            }))
-          : sortedMergedResults;
-
-    if (requestedFactTypes.length > 0) {
-      const factExtractors: Record<ResearchFactType, (text: string) => string | undefined> = {
-        address: extractAddressFromText,
-        phone: extractPhoneFromText,
-        hours: extractHoursFromText,
-        capacity: extractCapacityFromText,
-      };
-
-      const sourcePool = finalResults.map((item) => ({
-        label: item.title || item.sourceHost,
-        url: item.url,
-        sourceHost: item.sourceHost,
-        score: item.score ?? 0,
-        text: `${item.snippet}\n${item.excerpt ?? ""}`,
-      }));
-
-      const bestFacts: Partial<Record<ResearchFactType, { value: string; label: string; url?: string; score: number }>> = {};
-      for (const source of sourcePool) {
-        for (const factType of requestedFactTypes) {
-          const value = factExtractors[factType](source.text);
-          if (!value) {
-            continue;
-          }
-
-          const candidateScore = source.score + scoreFocusedExcerpt(source.text, focusTerms);
-          const previous = bestFacts[factType];
-          if (!previous || candidateScore > previous.score) {
-            bestFacts[factType] = {
-              value,
-              label: source.label,
-              url: source.url,
-              score: candidateScore,
-            };
-          }
-        }
-      }
-
-      if (Object.keys(bestFacts).length > 0) {
-        const sources = Array.from(
-          new Map(
-            Object.values(bestFacts)
-              .filter((item): item is { value: string; label: string; url?: string; score: number } => Boolean(item))
-              .map((item) => [`${item.label}|${item.url ?? ""}`, { label: item.label, url: item.url }]),
-          ).values(),
-        );
-
-        return {
-          requestId,
-          reply: buildDeterministicFactLookupReply({
-            query,
-            aliasLabel: alias?.label,
-            facts: Object.fromEntries(
-              Object.entries(bestFacts).map(([key, value]) => [key, value?.value]),
-            ) as Partial<Record<ResearchFactType, string>>,
-            requestedTypes: requestedFactTypes,
-            sources,
-          }),
-          messages: buildBaseMessages(userPrompt, orchestration),
-          toolExecutions: [
-            {
-              toolName: "web_search",
-              resultPreview: JSON.stringify(
-                {
-                  query,
-                  total: finalResults.length,
-                  factTypes: requestedFactTypes,
-                },
-                null,
-                2,
-              ),
-            },
-          ],
-        };
-      }
-    }
-
-    const synthesizedReply = await this.synthesizeWebResearchReply({
-      query,
-      mode: researchMode,
-      profile: synthesisProfile,
-      aliasLabel: alias?.label,
-      results: finalResults,
-      service,
-      logger: requestLogger.child({ scope: "web-research-synthesis" }),
-    });
-
-    return {
-      requestId,
-      reply: synthesizedReply ?? buildWebResearchReply({
-        query,
-        aliasLabel: alias?.label,
-        results: finalResults,
-      }),
-      messages: buildBaseMessages(userPrompt, orchestration),
-      toolExecutions: [
-        {
-          toolName: "web_search",
-          resultPreview: JSON.stringify(
-              {
-                query,
-                mode: researchMode,
-                total: finalResults.length,
-              },
-            null,
-            2,
-          ),
-        },
-      ],
-    };
   }
 
   private async tryRunDirectWebResearch(
@@ -12591,182 +12813,12 @@ export class AgentCore {
     requestLogger: Logger,
     orchestration: OrchestrationContext,
   ): Promise<AgentRunResult | null> {
-    if (!isWebResearchPrompt(userPrompt) && !isImplicitResearchPrompt(userPrompt)) {
-      return null;
-    }
-
-    const query = extractWebResearchQuery(userPrompt);
-    if (!query) {
-      return null;
-    }
-
-    return this.executeDirectWebResearch({
+    return this.getExternalIntelligenceDirectService().tryRunWebResearch({
       userPrompt,
-      query,
       requestId,
       requestLogger,
       orchestration,
-      researchMode: extractWebResearchMode(userPrompt),
     });
-  }
-
-  private async synthesizeWebResearchReply(input: {
-    query: string;
-    mode: WebResearchMode;
-    profile: ResearchSynthesisProfile;
-    aliasLabel?: string;
-    results: Array<{
-      title: string;
-      url: string;
-      sourceHost: string;
-      snippet: string;
-      excerpt?: string;
-      publishedAt?: string;
-    }>;
-    service: WebResearchService;
-    logger: Logger;
-  }): Promise<string | null> {
-    if (input.results.length === 0) {
-      return null;
-    }
-
-    try {
-      const enrichedSources = await Promise.all(
-        input.results.slice(0, maxResearchResultsForMode(input.mode)).map(async (result, index) => {
-          let excerpt = result.excerpt?.trim() || "";
-          if (!excerpt) {
-            try {
-              excerpt = await input.service.fetchPageExcerpt(
-                result.url,
-                excerptBudgetForResearchMode(input.mode),
-              );
-            } catch {
-              excerpt = result.snippet?.trim() || "";
-            }
-          }
-
-          return {
-            id: index + 1,
-            title: result.title,
-            url: result.url,
-            sourceHost: result.sourceHost,
-            publishedAt: result.publishedAt,
-            content: (excerpt || result.snippet || "").slice(0, 2200),
-          };
-        }),
-      );
-
-      const sourceBlocks = enrichedSources
-        .filter((item) => item.content.trim())
-        .map((item) => {
-          const facts = extractResearchFacts(item.content);
-          return [
-            `[${item.id}] ${item.title}`,
-            `Fonte: ${item.sourceHost}`,
-            `URL: ${item.url}`,
-            ...(item.publishedAt ? [`Publicado: ${item.publishedAt}`] : []),
-            ...(facts.length > 0 ? ["Fatos extraídos:", ...facts.map((fact) => `- ${fact}`)] : []),
-            "Conteúdo:",
-            item.content,
-          ].join("\n");
-        })
-        .join("\n\n");
-
-      const consolidatedFacts = new Map<string, number[]>();
-      for (const item of enrichedSources) {
-        for (const fact of extractResearchFacts(item.content)) {
-          const existing = consolidatedFacts.get(fact) ?? [];
-          existing.push(item.id);
-          consolidatedFacts.set(fact, existing);
-        }
-      }
-
-      const consolidatedFactLines = [...consolidatedFacts.entries()]
-        .slice(0, 8)
-        .map(([fact, sourceIds]) => `- ${fact} [${[...new Set(sourceIds)].join(", ")}]`);
-
-      if (!sourceBlocks.trim()) {
-        return null;
-      }
-
-      const modeInstructions =
-        input.profile === "market"
-          ? [
-              "Entregue a resposta exatamente com estas seções em markdown: '## Mercado', '## Concorrentes', '## Sinais de demanda', '## Oportunidades', '## Riscos', '## Recomendação prática'.",
-              "Em cada seção, use bullets curtos e concretos.",
-              "Se uma seção não tiver evidência suficiente, diga isso explicitamente.",
-              "Na seção '## Recomendação prática', termine com 3 ações priorizadas.",
-            ]
-          : input.mode === "quick"
-          ? [
-              "Entregue uma resposta curta e objetiva.",
-              "Comece com a resposta direta em até 3 frases.",
-              "Se necessário, use no máximo 3 bullets curtos.",
-              "Use no máximo 4 fontes.",
-              "Evite seções longas.",
-            ]
-          : input.mode === "deep"
-            ? [
-                "Entregue uma resposta mais profunda e analítica.",
-                "Comece com a conclusão principal em 1 parágrafo.",
-                "Depois organize em seções curtas e úteis, como '## Resumo', '## Evidências', '## Riscos ou oportunidades', '## Pontos em aberto'.",
-                "Para pesquisas de mercado, concorrência ou tendências, destaque sinais concretos, oportunidades e limites da evidência.",
-                "Use até 8 fontes, priorizando as mais fortes.",
-              ]
-            : [
-                "Entregue uma resposta executiva.",
-                "Comece com a resposta direta em 1 parágrafo.",
-                "Depois use seções curtas somente se isso melhorar a clareza.",
-                "Use até 6 fontes.",
-              ];
-
-      const response = await this.client.chat({
-        messages: [
-          {
-            role: "system",
-            content: [
-              "Você é um sintetizador de pesquisa com fontes.",
-              "Use somente as fontes fornecidas.",
-              "Não invente fatos, números, horários, endereços ou contexto ausente.",
-              "Se houver divergência ou incerteza, diga isso explicitamente.",
-              "Se uma fonte trouxer uma seção 'Fatos extraídos', trate esses fatos como sinais prioritários daquela própria fonte.",
-              "Se houver uma seção 'Fatos consolidados', priorize esses fatos na resposta inicial.",
-              "Responda em pt-BR.",
-              "Formato geral:",
-              "1. Cite afirmações com referências inline no formato [1], [2].",
-              "2. Termine com uma seção 'Fontes' listando [n] título - URL.",
-              "3. Não mencione que você recebeu trechos ou contexto interno.",
-              ...modeInstructions,
-            ].join(" "),
-          },
-          {
-            role: "user",
-            content: [
-              `Consulta: ${input.query}`,
-              ...(input.aliasLabel ? [`Entidade reconhecida: ${input.aliasLabel}`] : []),
-              ...(consolidatedFactLines.length > 0
-                ? ["", "Fatos consolidados:", ...consolidatedFactLines]
-                : []),
-              "",
-              "Fontes disponíveis:",
-              sourceBlocks,
-            ].join("\n"),
-          },
-        ],
-      });
-
-      const content = stripResearchReplyMarkdown(response.message.content ?? "");
-      if (!content) {
-        return null;
-      }
-
-      return content;
-    } catch (error) {
-      input.logger.warn("Research synthesis failed, using fallback reply", {
-        error: error instanceof Error ? error.message : String(error),
-      });
-      return null;
-    }
   }
 
   private async tryRunDirectWeather(
@@ -12875,22 +12927,11 @@ export class AgentCore {
     requestId: string,
     orchestration: OrchestrationContext,
   ): Promise<AgentRunResult | null> {
-    if (!isAllowedSpacesPrompt(userPrompt)) {
-      return null;
-    }
-
-    const roots = this.fileAccess.describeReadableRoots();
-    return {
+    return this.getWorkspaceMacDirectService().tryRunAllowedSpaces({
+      userPrompt,
       requestId,
-      reply: buildAllowedSpacesReply(roots),
-      messages: buildBaseMessages(userPrompt, orchestration),
-      toolExecutions: [
-        {
-          toolName: "list_allowed_spaces",
-          resultPreview: JSON.stringify(roots, null, 2),
-        },
-      ],
-    };
+      orchestration,
+    });
   }
 
   private async tryRunDirectProjectScan(
@@ -12899,69 +12940,12 @@ export class AgentCore {
     requestLogger: Logger,
     orchestration: OrchestrationContext,
   ): Promise<AgentRunResult | null> {
-    if (!isProjectScanPrompt(userPrompt)) {
-      return null;
-    }
-
-    if (!orchestration.policy.capabilities.canRunProjectTools) {
-      return {
-        requestId,
-        reply: "A politica atual do dominio nao permite analise de projeto nesta solicitacao.",
-        messages: buildBaseMessages(userPrompt, orchestration),
-        toolExecutions: [],
-      };
-    }
-
-    const root = extractProjectRoot(userPrompt);
-    const projectPath = extractProjectPath(userPrompt) ?? ".";
-    requestLogger.info("Using direct project scan route", {
-      root,
-      projectPath,
-    });
-
-    const project = await this.projectOps.scanProject({
-      root,
-      path: projectPath,
-    });
-    const gitStatus =
-      root === "workspace" || root === "authorized_projects" || root === "authorized_dev"
-        ? await this.projectOps.getGitStatus(root, projectPath).catch(() => undefined)
-        : undefined;
-
-    return {
+    return this.getKnowledgeProjectDirectService().tryRunProjectScan({
+      userPrompt,
       requestId,
-      reply: buildProjectScanReply(project, gitStatus),
-      messages: buildBaseMessages(userPrompt, orchestration),
-      toolExecutions: [
-        {
-          toolName: "scan_project",
-          resultPreview: JSON.stringify(
-            {
-              root,
-              project_name: project.project_name,
-              absolute_path: project.absolute_path,
-            },
-            null,
-            2,
-          ),
-        },
-        ...(gitStatus
-          ? [
-              {
-                toolName: "project_git_status",
-                resultPreview: JSON.stringify(
-                  {
-                    branch: gitStatus.branch,
-                    dirty: gitStatus.dirty,
-                  },
-                  null,
-                  2,
-                ),
-              },
-            ]
-          : []),
-      ],
-    };
+      requestLogger,
+      orchestration,
+    });
   }
 
   private async tryRunDirectProjectMirror(
@@ -12970,89 +12954,12 @@ export class AgentCore {
     requestLogger: Logger,
     orchestration: OrchestrationContext,
   ): Promise<AgentRunResult | null> {
-    if (!isMirrorProjectPrompt(userPrompt)) {
-      return null;
-    }
-
-    if (!orchestration.policy.capabilities.canRunProjectTools) {
-      return {
-        requestId,
-        reply: "A politica atual do dominio nao permite preparar espelhos de projeto nesta solicitacao.",
-        messages: buildBaseMessages(userPrompt, orchestration),
-        toolExecutions: [],
-      };
-    }
-
-    const root = extractMirrorSourceRoot(userPrompt);
-    const projectPath = extractProjectPath(userPrompt) ?? ".";
-    const targetPath = extractMirrorTargetPath(userPrompt);
-    requestLogger.info("Using direct project mirror route", {
-      root,
-      projectPath,
-      targetPath,
-    });
-
-    let result: Record<string, unknown>;
-    try {
-      const execution = await this.executeToolDirect("mirror_project_to_workspace", {
-        root,
-        path: projectPath,
-        ...(targetPath ? { target_path: targetPath } : {}),
-        clean: true,
-      });
-      result = execution.rawResult as Record<string, unknown>;
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      return {
-        requestId,
-        reply: [
-          "Nao consegui criar o espelho do projeto.",
-          `- Root: ${root}`,
-          `- Caminho: ${projectPath}`,
-          `- Motivo: ${errorMessage}`,
-        ].join("\n"),
-        messages: buildBaseMessages(userPrompt, orchestration),
-        toolExecutions: [
-          {
-            toolName: "mirror_project_to_workspace",
-            resultPreview: JSON.stringify(
-              {
-                root,
-                projectPath,
-                error: errorMessage,
-              },
-              null,
-              2,
-            ),
-          },
-        ],
-      };
-    }
-
-    return {
+    return this.getKnowledgeProjectDirectService().tryRunProjectMirror({
+      userPrompt,
       requestId,
-      reply: [
-        "Espelho criado no workspace.",
-        `- Origem: ${String(result.source_absolute_path ?? result.source_path ?? "")}`,
-        `- Destino: ${String(result.target_absolute_path ?? result.target_path ?? "")}`,
-        "- Pastas pesadas ou geradas foram excluidas do espelho: .git, node_modules, dist, build, .next, .turbo, .wrangler, coverage.",
-      ].join("\n"),
-      messages: buildBaseMessages(userPrompt, orchestration),
-      toolExecutions: [
-        {
-          toolName: "mirror_project_to_workspace",
-          resultPreview: JSON.stringify(
-            {
-              root,
-              source_path: result.source_path,
-              target_path: result.target_path,
-            },
-            null,
-            2,
-          ),
-        },
-      ],
-    };
+      requestLogger,
+      orchestration,
+    });
   }
 
   private async tryRunDirectContentOverview(
@@ -14347,80 +14254,12 @@ export class AgentCore {
     requestLogger: Logger,
     orchestration: OrchestrationContext,
   ): Promise<AgentRunResult | null> {
-    const request = extractSafeExecRequest(userPrompt);
-    if (!request) {
-      return null;
-    }
-
-    if (!orchestration.policy.capabilities.canRunProjectTools) {
-      return {
-        requestId,
-        reply: "A politica atual do dominio nao permite execucao tecnica nesta solicitacao.",
-        messages: buildBaseMessages(userPrompt, orchestration),
-        toolExecutions: [],
-      };
-    }
-
-    requestLogger.info("Using direct safe exec route", {
-      argv: request.argv,
-      root: request.root,
-      path: request.path,
-    });
-
-    let result;
-    try {
-      result = await this.safeExec.execute(request);
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      return {
-        requestId,
-        reply: [
-          "Execucao bloqueada ou falhou.",
-          `- Comando: ${request.argv.join(" ")}`,
-          `- Root: ${request.root}`,
-          `- Caminho: ${request.path ?? "."}`,
-          `- Motivo: ${errorMessage}`,
-          "",
-          "Se este comando precisa escrever em disco, primeiro espelhe o projeto para o workspace e execute la.",
-        ].join("\n"),
-        messages: buildBaseMessages(userPrompt, orchestration),
-        toolExecutions: [
-          {
-            toolName: "safe_exec",
-            resultPreview: JSON.stringify(
-              {
-                argv: request.argv,
-                root: request.root,
-                path: request.path,
-                error: errorMessage,
-              },
-              null,
-              2,
-            ),
-          },
-        ],
-      };
-    }
-
-    return {
+    return this.getWorkspaceMacDirectService().tryRunSafeExec({
+      userPrompt,
       requestId,
-      reply: buildSafeExecReply(result),
-      messages: buildBaseMessages(userPrompt, orchestration),
-      toolExecutions: [
-        {
-          toolName: "safe_exec",
-          resultPreview: JSON.stringify(
-            {
-              argv: result.argv,
-              cwd: result.cwd,
-              exitCode: result.exitCode,
-            },
-            null,
-            2,
-          ),
-        },
-      ],
-    };
+      requestLogger,
+      orchestration,
+    });
   }
 
   private async tryRunDirectCaseNotes(
@@ -14507,26 +14346,12 @@ export class AgentCore {
     orchestration: OrchestrationContext,
     preferences: UserPreferences,
   ): Promise<AgentRunResult | null> {
-    if (!isPersonalOperationalProfileShowPrompt(userPrompt)) {
-      return null;
-    }
-
-    const execution = await this.executeToolDirect("get_personal_operational_profile", {});
-    const rawResult = execution.rawResult as {
-      profile?: PersonalOperationalProfile;
-    };
-
-    return {
+    return this.getOperationalContextDirectService().tryRunProfileShow({
+      userPrompt,
       requestId,
-      reply: buildPersonalOperationalProfileReply(rawResult.profile ?? this.personalMemory.getProfile()),
-      messages: buildBaseMessages(userPrompt, orchestration, preferences),
-      toolExecutions: [
-        {
-          toolName: "get_personal_operational_profile",
-          resultPreview: execution.content.slice(0, 240),
-        },
-      ],
-    };
+      orchestration,
+      preferences,
+    });
   }
 
   private async tryRunDirectOperationalStateShow(
@@ -14535,26 +14360,12 @@ export class AgentCore {
     orchestration: OrchestrationContext,
     preferences: UserPreferences,
   ): Promise<AgentRunResult | null> {
-    if (!isOperationalStateShowPrompt(userPrompt)) {
-      return null;
-    }
-
-    const execution = await this.executeToolDirect("get_operational_state", {});
-    const rawResult = execution.rawResult as {
-      state?: OperationalState;
-    };
-
-    return {
+    return this.getOperationalContextDirectService().tryRunOperationalStateShow({
+      userPrompt,
       requestId,
-      reply: buildOperationalStateReply(rawResult.state ?? this.personalMemory.getOperationalState()),
-      messages: buildBaseMessages(userPrompt, orchestration, preferences),
-      toolExecutions: [
-        {
-          toolName: "get_operational_state",
-          resultPreview: execution.content.slice(0, 240),
-        },
-      ],
-    };
+      orchestration,
+      preferences,
+    });
   }
 
   private async tryRunDirectLearnedPreferencesList(
@@ -14563,34 +14374,12 @@ export class AgentCore {
     orchestration: OrchestrationContext,
     preferences: UserPreferences,
   ): Promise<AgentRunResult | null> {
-    if (!isLearnedPreferencesListPrompt(userPrompt)) {
-      return null;
-    }
-
-    const filter = resolveLearnedPreferencesListFilter(userPrompt);
-    const execution = await this.executeToolDirect("list_learned_preferences", {
-      ...(filter.type ? { type: filter.type } : {}),
-      ...(filter.search ? { search: filter.search } : {}),
-      limit: 12,
-    });
-    const rawResult = execution.rawResult as { items?: LearnedPreference[] };
-    const items = filter.search === "agenda"
-      ? (rawResult.items ?? []).filter((item) =>
-          ["schedule_import_mode", "agenda_scope", "calendar_interpretation"].includes(item.type),
-        )
-      : (rawResult.items ?? []);
-
-    return {
+    return this.getOperationalContextDirectService().tryRunLearnedPreferencesList({
+      userPrompt,
       requestId,
-      reply: buildLearnedPreferencesReply(items),
-      messages: buildBaseMessages(userPrompt, orchestration, preferences),
-      toolExecutions: [
-        {
-          toolName: "list_learned_preferences",
-          resultPreview: execution.content.slice(0, 240),
-        },
-      ],
-    };
+      orchestration,
+      preferences,
+    });
   }
 
   private async tryRunDirectLearnedPreferencesDelete(
@@ -14599,69 +14388,12 @@ export class AgentCore {
     orchestration: OrchestrationContext,
     preferences: UserPreferences,
   ): Promise<AgentRunResult | null> {
-    if (!isLearnedPreferencesDeletePrompt(userPrompt)) {
-      return null;
-    }
-
-    let targetId = extractLearnedPreferenceId(userPrompt);
-    const query = extractLearnedPreferenceDeleteTarget(userPrompt);
-    if (!targetId && !query) {
-      return {
-        requestId,
-        reply: "Diga qual preferência aprendida devo desativar, por id ou por referência curta.",
-        messages: buildBaseMessages(userPrompt, orchestration, preferences),
-        toolExecutions: [],
-      };
-    }
-
-    if (!targetId && query) {
-      const matches = this.personalMemory.findLearnedPreferences(query, 5);
-      if (matches.length === 0) {
-        return {
-          requestId,
-          reply: `Não encontrei preferência aprendida para "${query}".`,
-          messages: buildBaseMessages(userPrompt, orchestration, preferences),
-          toolExecutions: [],
-        };
-      }
-      if (matches.length > 1) {
-        return {
-          requestId,
-          reply: buildLearnedPreferencesReply(matches),
-          messages: buildBaseMessages(userPrompt, orchestration, preferences),
-          toolExecutions: [],
-        };
-      }
-      targetId = matches[0]?.id;
-    }
-
-    if (!targetId) {
-      return null;
-    }
-
-    const execution = await this.executeToolDirect("deactivate_learned_preference", {
-      id: targetId,
-    });
-    const rawResult = execution.rawResult as {
-      item?: LearnedPreference;
-    };
-    const item = rawResult.item;
-
-    return {
+    return this.getOperationalContextDirectService().tryRunLearnedPreferencesDelete({
+      userPrompt,
       requestId,
-      reply: item
-        ? buildLearnedPreferenceDeactivatedReply(item)
-        : "Não consegui desativar essa preferência aprendida.",
-      messages: buildBaseMessages(userPrompt, orchestration, preferences),
-      toolExecutions: item
-        ? [
-            {
-              toolName: "deactivate_learned_preference",
-              resultPreview: execution.content.slice(0, 240),
-            },
-          ]
-        : [],
-    };
+      orchestration,
+      preferences,
+    });
   }
 
   private async tryRunDirectCapabilityInspection(
@@ -14670,81 +14402,12 @@ export class AgentCore {
     orchestration: OrchestrationContext,
     preferences: UserPreferences,
   ): Promise<AgentRunResult | null> {
-    if (!this.capabilityPlanner.isCapabilityInspectionPrompt(userPrompt)) {
-      return null;
-    }
-
-    const normalized = normalizeEmailAnalysisText(userPrompt);
-    const wantsWhy = includesAny(normalized, [
-      "por que voce nao conseguiu resolver isso",
-      "por que você não conseguiu resolver isso",
-    ]);
-    const wantsGaps = includesAny(normalized, [
-      "lacunas",
-      "gaps",
-      "melhorias sugeridas pelo uso",
-    ]);
-
-    if (wantsWhy) {
-      const latestGap = this.personalMemory.listProductGaps({ limit: 1 })[0];
-      return {
-        requestId,
-        reply: latestGap
-          ? buildProductGapDetailReply(latestGap)
-          : "Ainda não tenho um gap recente registrado para te explicar.",
-        messages: buildBaseMessages(userPrompt, orchestration, preferences),
-        toolExecutions: latestGap
-          ? [
-              {
-                toolName: "product_gap.inspect",
-                resultPreview: JSON.stringify({
-                  id: latestGap.id,
-                  objective: latestGap.inferredObjective,
-                  missingCapabilities: latestGap.missingCapabilities,
-                }),
-              },
-            ]
-          : [],
-      };
-    }
-
-    if (wantsGaps) {
-      const gaps = this.personalMemory.listProductGaps({ status: "open", limit: 12 });
-      return {
-        requestId,
-        reply: buildProductGapsReply(gaps),
-        messages: buildBaseMessages(userPrompt, orchestration, preferences),
-        toolExecutions: [
-          {
-            toolName: "product_gap.list",
-            resultPreview: JSON.stringify({
-              total: gaps.length,
-              ids: gaps.slice(0, 10).map((item) => item.id),
-            }),
-          },
-        ],
-      };
-    }
-
-    const availability = this.capabilityPlanner.listCapabilityAvailability();
-    const constrained = availability.filter((item) => item.availability !== "available");
-    return {
+    return this.getCapabilityInspectionService().tryRunInspection({
+      userPrompt,
       requestId,
-      reply: buildCapabilityAvailabilityReply(availability),
-      messages: buildBaseMessages(userPrompt, orchestration, preferences),
-      toolExecutions: [
-        {
-          toolName: "capability_registry.inspect",
-          resultPreview: JSON.stringify({
-            total: availability.length,
-            constrained: constrained.slice(0, 10).map((item) => ({
-              name: item.name,
-              availability: item.availability,
-            })),
-          }),
-        },
-      ],
-    };
+      orchestration,
+      preferences,
+    });
   }
 
   private async tryRunDirectCapabilityAwarePlanning(
@@ -14810,65 +14473,12 @@ export class AgentCore {
     orchestration: OrchestrationContext,
     preferences: UserPreferences,
   ): Promise<AgentRunResult | null> {
-    if (!isPersonalOperationalProfileUpdatePrompt(userPrompt)) {
-      return null;
-    }
-
-    const currentProfile = this.personalMemory.getProfile();
-    const extracted = extractPersonalOperationalProfileUpdate(userPrompt, currentProfile);
-    if (!extracted) {
-      return {
-        requestId,
-        reply: "Diga o ajuste de perfil que você quer. Exemplo: `defina meu estilo de resposta como direto e objetivo`.",
-        messages: buildBaseMessages(userPrompt, orchestration, preferences),
-        toolExecutions: [],
-      };
-    }
-
-    const execution = await this.executeToolDirect("update_personal_operational_profile", {
-      ...(extracted.profile.displayName ? { displayName: extracted.profile.displayName } : {}),
-      ...(extracted.profile.primaryRole ? { primaryRole: extracted.profile.primaryRole } : {}),
-      ...(extracted.profile.routineSummary ? { routineSummary: extracted.profile.routineSummary } : {}),
-      ...(extracted.profile.timezone ? { timezone: extracted.profile.timezone } : {}),
-      ...(extracted.profile.preferredChannels ? { preferredChannels: extracted.profile.preferredChannels } : {}),
-      ...(extracted.profile.preferredAlertChannel ? { preferredAlertChannel: extracted.profile.preferredAlertChannel } : {}),
-      ...(extracted.profile.priorityAreas ? { priorityAreas: extracted.profile.priorityAreas } : {}),
-      ...(extracted.profile.defaultAgendaScope ? { defaultAgendaScope: extracted.profile.defaultAgendaScope } : {}),
-      ...(extracted.profile.responseStyle ? { responseStyle: extracted.profile.responseStyle } : {}),
-      ...(extracted.profile.briefingPreference ? { briefingPreference: extracted.profile.briefingPreference } : {}),
-      ...(extracted.profile.detailLevel ? { detailLevel: extracted.profile.detailLevel } : {}),
-      ...(extracted.profile.tonePreference ? { tonePreference: extracted.profile.tonePreference } : {}),
-      ...(extracted.profile.defaultOperationalMode ? { defaultOperationalMode: extracted.profile.defaultOperationalMode } : {}),
-      ...(extracted.profile.mobilityPreferences ? { mobilityPreferences: extracted.profile.mobilityPreferences } : {}),
-      ...(extracted.profile.autonomyPreferences ? { autonomyPreferences: extracted.profile.autonomyPreferences } : {}),
-      ...(extracted.profile.savedFocus ? { savedFocus: extracted.profile.savedFocus } : {}),
-      ...(extracted.profile.routineAnchors ? { routineAnchors: extracted.profile.routineAnchors } : {}),
-      ...(extracted.profile.operationalRules ? { operationalRules: extracted.profile.operationalRules } : {}),
-      ...(extracted.profile.attire?.carryItems ? { carryItems: extracted.profile.attire.carryItems } : {}),
-      ...(typeof extracted.profile.fieldModeHours === "number" ? { fieldModeHours: extracted.profile.fieldModeHours } : {}),
-    });
-    if (extracted.preferenceUpdate) {
-      this.preferences.update(extracted.preferenceUpdate);
-    }
-
-    const rawResult = execution.rawResult as {
-      profile?: PersonalOperationalProfile;
-    };
-
-    return {
+    return this.getOperationalContextDirectService().tryRunProfileUpdate({
+      userPrompt,
       requestId,
-      reply: buildPersonalOperationalProfileUpdatedReply(
-        rawResult.profile ?? this.personalMemory.getProfile(),
-        extracted.changeLabels,
-      ),
-      messages: buildBaseMessages(userPrompt, orchestration, this.preferences.get()),
-      toolExecutions: [
-        {
-          toolName: "update_personal_operational_profile",
-          resultPreview: execution.content.slice(0, 240),
-        },
-      ],
-    };
+      orchestration,
+      preferences,
+    });
   }
 
   private async tryRunDirectPersonalOperationalProfileDelete(
@@ -14877,72 +14487,12 @@ export class AgentCore {
     orchestration: OrchestrationContext,
     preferences: UserPreferences,
   ): Promise<AgentRunResult | null> {
-    if (!isPersonalOperationalProfileDeletePrompt(userPrompt)) {
-      return null;
-    }
-
-    const currentProfile = this.personalMemory.getProfile();
-    const query = extractPersonalOperationalProfileRemoveQuery(userPrompt);
-    if (!query) {
-      return {
-        requestId,
-        reply: "Diga o que devo remover do seu perfil operacional.",
-        messages: buildBaseMessages(userPrompt, orchestration, preferences),
-        toolExecutions: [],
-      };
-    }
-
-    const removal = removeFromPersonalOperationalProfile(currentProfile, query);
-    if (!removal) {
-      return {
-        requestId,
-        reply: `Não encontrei ajuste de perfil compatível com "${query}".`,
-        messages: buildBaseMessages(userPrompt, orchestration, preferences),
-        toolExecutions: [],
-      };
-    }
-
-    const execution = await this.executeToolDirect("update_personal_operational_profile", {
-      ...(removal.profileUpdate.responseStyle ? { responseStyle: removal.profileUpdate.responseStyle } : {}),
-      ...(removal.profileUpdate.briefingPreference ? { briefingPreference: removal.profileUpdate.briefingPreference } : {}),
-      ...(removal.profileUpdate.detailLevel ? { detailLevel: removal.profileUpdate.detailLevel } : {}),
-      ...(removal.profileUpdate.tonePreference ? { tonePreference: removal.profileUpdate.tonePreference } : {}),
-      ...(removal.profileUpdate.defaultOperationalMode ? { defaultOperationalMode: removal.profileUpdate.defaultOperationalMode } : {}),
-      ...(removal.profileUpdate.mobilityPreferences ? { mobilityPreferences: removal.profileUpdate.mobilityPreferences } : {}),
-      ...(removal.profileUpdate.autonomyPreferences ? { autonomyPreferences: removal.profileUpdate.autonomyPreferences } : {}),
-      ...(removal.profileUpdate.routineAnchors ? { routineAnchors: removal.profileUpdate.routineAnchors } : {}),
-      ...(removal.profileUpdate.operationalRules ? { operationalRules: removal.profileUpdate.operationalRules } : {}),
-      ...(removal.profileUpdate.attire?.carryItems ? { carryItems: removal.profileUpdate.attire.carryItems } : {}),
-    });
-    const preferenceReset: import("../types/user-preferences.js").UpdateUserPreferencesInput = {};
-    if (removal.profileUpdate.responseStyle || removal.profileUpdate.tonePreference) {
-      preferenceReset.responseStyle = "executive";
-    }
-    if (removal.profileUpdate.briefingPreference || removal.profileUpdate.detailLevel) {
-      preferenceReset.responseLength = "short";
-    }
-    if (Object.keys(preferenceReset).length > 0) {
-      this.preferences.update(preferenceReset);
-    }
-
-    const rawResult = execution.rawResult as {
-      profile?: PersonalOperationalProfile;
-    };
-
-    return {
+    return this.getOperationalContextDirectService().tryRunProfileDelete({
+      userPrompt,
       requestId,
-      reply: buildPersonalOperationalProfileRemovedReply(
-        rawResult.profile ?? this.personalMemory.getProfile(),
-        removal.removedLabels,
-      ),
-      messages: buildBaseMessages(userPrompt, orchestration, preferences),
-      toolExecutions: [
-        {
-          toolName: "update_personal_operational_profile",
-          resultPreview: execution.content.slice(0, 240),
-        },
-      ],
-    };
+      orchestration,
+      preferences,
+    });
   }
 
   private async tryRunDirectPersonalMemoryList(
@@ -14951,32 +14501,12 @@ export class AgentCore {
     orchestration: OrchestrationContext,
     preferences: UserPreferences,
   ): Promise<AgentRunResult | null> {
-    if (!isPersonalMemoryListPrompt(userPrompt)) {
-      return null;
-    }
-
-    const execution = await this.executeToolDirect("list_personal_memory_items", {
-      limit: 12,
-    });
-    const rawResult = execution.rawResult as {
-      items?: PersonalOperationalMemoryItem[];
-      profile?: ReturnType<PersonalOperationalMemoryStore["getProfile"]>;
-    };
-
-    return {
+    return this.getOperationalContextDirectService().tryRunPersonalMemoryList({
+      userPrompt,
       requestId,
-      reply: buildPersonalMemoryListReply({
-        profile: rawResult.profile ?? this.personalMemory.getProfile(),
-        items: rawResult.items ?? [],
-      }),
-      messages: buildBaseMessages(userPrompt, orchestration, preferences),
-      toolExecutions: [
-        {
-          toolName: "list_personal_memory_items",
-          resultPreview: execution.content.slice(0, 240),
-        },
-      ],
-    };
+      orchestration,
+      preferences,
+    });
   }
 
   private async tryRunDirectPersonalMemorySave(
@@ -14985,48 +14515,12 @@ export class AgentCore {
     orchestration: OrchestrationContext,
     preferences: UserPreferences,
   ): Promise<AgentRunResult | null> {
-    if (!isPersonalMemorySavePrompt(userPrompt)) {
-      return null;
-    }
-
-    const statement = extractPersonalMemoryStatement(userPrompt);
-    if (!statement) {
-      return {
-        requestId,
-        reply: "Diga o que devo salvar na memória pessoal. Exemplo: `salve na minha memória pessoal que em dias de plantão quero respostas curtas`.",
-        messages: buildBaseMessages(userPrompt, orchestration, preferences),
-        toolExecutions: [],
-      };
-    }
-
-    const kind = inferPersonalMemoryKind(statement);
-    const execution = await this.executeToolDirect("save_personal_memory_item", {
-      kind,
-      title: buildPersonalMemoryTitle(statement, kind),
-      content: statement,
-    });
-    const rawResult = execution.rawResult as { item?: PersonalOperationalMemoryItem };
-    const item = rawResult.item;
-    if (!item) {
-      return {
-        requestId,
-        reply: "Não consegui salvar esse item na memória pessoal.",
-        messages: buildBaseMessages(userPrompt, orchestration, preferences),
-        toolExecutions: [],
-      };
-    }
-
-    return {
+    return this.getOperationalContextDirectService().tryRunPersonalMemorySave({
+      userPrompt,
       requestId,
-      reply: buildPersonalMemorySavedReply(item),
-      messages: buildBaseMessages(userPrompt, orchestration, preferences),
-      toolExecutions: [
-        {
-          toolName: "save_personal_memory_item",
-          resultPreview: execution.content.slice(0, 240),
-        },
-      ],
-    };
+      orchestration,
+      preferences,
+    });
   }
 
   private async tryRunDirectPersonalMemoryUpdate(
@@ -15035,86 +14529,12 @@ export class AgentCore {
     orchestration: OrchestrationContext,
     preferences: UserPreferences,
   ): Promise<AgentRunResult | null> {
-    if (!isPersonalMemoryUpdatePrompt(userPrompt)) {
-      return null;
-    }
-
-    const id = extractPersonalMemoryId(userPrompt);
-    const query = extractPersonalMemoryUpdateTarget(userPrompt);
-    const content = extractPersonalMemoryUpdateContent(userPrompt);
-    if (!id && !query) {
-      return {
-        requestId,
-        reply: "Diga qual item da memória pessoal devo atualizar, por id ou por referência curta. Exemplo: `atualize minha memória pessoal #3 para respostas muito curtas em plantão`.",
-        messages: buildBaseMessages(userPrompt, orchestration, preferences),
-        toolExecutions: [],
-      };
-    }
-
-    if (!content) {
-      return {
-        requestId,
-        reply: "Entendi o item alvo, mas faltou dizer o novo conteúdo. Exemplo: `atualize minha memória pessoal sobre rotina de plantão para respostas curtas e foco em deslocamento`.",
-        messages: buildBaseMessages(userPrompt, orchestration, preferences),
-        toolExecutions: [],
-      };
-    }
-
-    let targetId = id;
-    if (!targetId && query) {
-      const matches = this.personalMemory.findItems(query, 5);
-      if (matches.length === 0) {
-        return {
-          requestId,
-          reply: `Não encontrei item de memória pessoal para "${query}".`,
-          messages: buildBaseMessages(userPrompt, orchestration, preferences),
-          toolExecutions: [],
-        };
-      }
-      if (matches.length > 1) {
-        return {
-          requestId,
-          reply: buildPersonalMemoryAmbiguousReply(query, matches),
-          messages: buildBaseMessages(userPrompt, orchestration, preferences),
-          toolExecutions: [],
-        };
-      }
-      targetId = matches[0]?.id;
-    }
-
-    if (!targetId) {
-      return null;
-    }
-
-    const kind = inferPersonalMemoryKind(content);
-    const execution = await this.executeToolDirect("update_personal_memory_item", {
-      id: targetId,
-      kind,
-      title: buildPersonalMemoryTitle(content, kind),
-      content,
-    });
-    const rawResult = execution.rawResult as { item?: PersonalOperationalMemoryItem };
-    const item = rawResult.item;
-    if (!item) {
-      return {
-        requestId,
-        reply: "Não consegui atualizar esse item da memória pessoal.",
-        messages: buildBaseMessages(userPrompt, orchestration, preferences),
-        toolExecutions: [],
-      };
-    }
-
-    return {
+    return this.getOperationalContextDirectService().tryRunPersonalMemoryUpdate({
+      userPrompt,
       requestId,
-      reply: buildPersonalMemoryUpdatedReply(item),
-      messages: buildBaseMessages(userPrompt, orchestration, preferences),
-      toolExecutions: [
-        {
-          toolName: "update_personal_memory_item",
-          resultPreview: execution.content.slice(0, 240),
-        },
-      ],
-    };
+      orchestration,
+      preferences,
+    });
   }
 
   private async tryRunDirectPersonalMemoryDelete(
@@ -15123,72 +14543,12 @@ export class AgentCore {
     orchestration: OrchestrationContext,
     preferences: UserPreferences,
   ): Promise<AgentRunResult | null> {
-    if (!isPersonalMemoryDeletePrompt(userPrompt)) {
-      return null;
-    }
-
-    let targetId = extractPersonalMemoryId(userPrompt);
-    const query = extractPersonalMemoryDeleteTarget(userPrompt);
-
-    if (!targetId && !query) {
-      return {
-        requestId,
-        reply: "Diga qual item da memória pessoal devo remover, por id ou por referência curta. Exemplo: `remova da minha memória pessoal #4`.",
-        messages: buildBaseMessages(userPrompt, orchestration, preferences),
-        toolExecutions: [],
-      };
-    }
-
-    if (!targetId && query) {
-      const matches = this.personalMemory.findItems(query, 5);
-      if (matches.length === 0) {
-        return {
-          requestId,
-          reply: `Não encontrei item de memória pessoal para "${query}".`,
-          messages: buildBaseMessages(userPrompt, orchestration, preferences),
-          toolExecutions: [],
-        };
-      }
-      if (matches.length > 1) {
-        return {
-          requestId,
-          reply: buildPersonalMemoryAmbiguousReply(query, matches),
-          messages: buildBaseMessages(userPrompt, orchestration, preferences),
-          toolExecutions: [],
-        };
-      }
-      targetId = matches[0]?.id;
-    }
-
-    if (!targetId) {
-      return null;
-    }
-
-    const execution = await this.executeToolDirect("delete_personal_memory_item", {
-      id: targetId,
-    });
-    const rawResult = execution.rawResult as { item?: PersonalOperationalMemoryItem };
-    const item = rawResult.item;
-    if (!item) {
-      return {
-        requestId,
-        reply: "Não consegui remover esse item da memória pessoal.",
-        messages: buildBaseMessages(userPrompt, orchestration, preferences),
-        toolExecutions: [],
-      };
-    }
-
-    return {
+    return this.getOperationalContextDirectService().tryRunPersonalMemoryDelete({
+      userPrompt,
       requestId,
-      reply: buildPersonalMemoryDeletedReply(item),
-      messages: buildBaseMessages(userPrompt, orchestration, preferences),
-      toolExecutions: [
-        {
-          toolName: "delete_personal_memory_item",
-          resultPreview: execution.content.slice(0, 240),
-        },
-      ],
-    };
+      orchestration,
+      preferences,
+    });
   }
 
   private async tryRunDirectWorkflowPlanning(
@@ -15198,37 +14558,13 @@ export class AgentCore {
     orchestration: OrchestrationContext,
     preferences: UserPreferences,
   ): Promise<AgentRunResult | null> {
-    if (!isWorkflowPlanningPrompt(userPrompt) || isWorkflowShowPrompt(userPrompt)) {
-      return null;
-    }
-
-    requestLogger.info("Using direct workflow planning route", {
-      domain: orchestration.route.primaryDomain,
-      actionMode: orchestration.route.actionMode,
-    });
-
-    const plan = await this.planBuilder.createPlanFromPrompt(userPrompt, orchestration, requestLogger);
-    this.entityLinker.upsertWorkflowRun(plan, "Workflow planejado.");
-    return {
+    return this.getWorkflowDirectService().tryRunWorkflowPlanning({
+      userPrompt,
       requestId,
-      reply: buildWorkflowPlanReply(plan),
-      messages: buildBaseMessages(userPrompt, orchestration, preferences),
-      toolExecutions: [
-        {
-          toolName: "workflow_plan",
-          resultPreview: JSON.stringify(
-            {
-              id: plan.id,
-              title: plan.title,
-              steps: plan.steps.length,
-              primaryDomain: plan.primaryDomain,
-            },
-            null,
-            2,
-          ),
-        },
-      ],
-    };
+      requestLogger,
+      orchestration,
+      preferences,
+    });
   }
 
   private async tryRunDirectContactList(
@@ -15237,17 +14573,12 @@ export class AgentCore {
     orchestration: OrchestrationContext,
     preferences: UserPreferences,
   ): Promise<AgentRunResult | null> {
-    if (!isContactListPrompt(userPrompt)) {
-      return null;
-    }
-
-    const contacts = this.contacts.listContacts(20);
-    return {
+    return this.getMemoryContactDirectService().tryRunContactList({
+      userPrompt,
       requestId,
-      reply: buildContactListReply(contacts),
-      messages: buildBaseMessages(userPrompt, orchestration, preferences),
-      toolExecutions: [],
-    };
+      orchestration,
+      preferences,
+    });
   }
 
   private async tryRunDirectContactUpsert(
@@ -15256,28 +14587,12 @@ export class AgentCore {
     orchestration: OrchestrationContext,
     preferences: UserPreferences,
   ): Promise<AgentRunResult | null> {
-    if (!isContactUpsertPrompt(userPrompt)) {
-      return null;
-    }
-
-    const input = extractContactProfileInput(userPrompt);
-    if (!input) {
-      return {
-        requestId,
-        reply: "Para salvar um contato, eu preciso ao menos de um email, @username do Telegram ou número de telefone.",
-        messages: buildBaseMessages(userPrompt, orchestration, preferences),
-        toolExecutions: [],
-      };
-    }
-
-    const contact = this.contacts.upsertContact(input);
-    this.entityLinker.upsertContact(contact);
-    return {
+    return this.getMemoryContactDirectService().tryRunContactUpsert({
+      userPrompt,
       requestId,
-      reply: buildContactSaveReply(contact),
-      messages: buildBaseMessages(userPrompt, orchestration, preferences),
-      toolExecutions: [],
-    };
+      orchestration,
+      preferences,
+    });
   }
 
   private async tryRunDirectMemoryEntityList(
@@ -15286,18 +14601,12 @@ export class AgentCore {
     orchestration: OrchestrationContext,
     preferences: UserPreferences,
   ): Promise<AgentRunResult | null> {
-    if (!isMemoryEntityListPrompt(userPrompt)) {
-      return null;
-    }
-
-    const kind = extractMemoryEntityKindFromPrompt(userPrompt);
-    const entities = this.memoryEntities.list(12, kind);
-    return {
+    return this.getMemoryContactDirectService().tryRunMemoryEntityList({
+      userPrompt,
       requestId,
-      reply: buildMemoryEntityListReply(entities, { kind }),
-      messages: buildBaseMessages(userPrompt, orchestration, preferences),
-      toolExecutions: [],
-    };
+      orchestration,
+      preferences,
+    });
   }
 
   private async tryRunDirectMemoryEntitySearch(
@@ -15306,28 +14615,12 @@ export class AgentCore {
     orchestration: OrchestrationContext,
     preferences: UserPreferences,
   ): Promise<AgentRunResult | null> {
-    if (!isMemoryEntitySearchPrompt(userPrompt)) {
-      return null;
-    }
-
-    const query = extractMemoryEntitySearchQuery(userPrompt);
-    if (!query) {
-      return {
-        requestId,
-        reply: "Para buscar entidades, eu preciso de um termo ou frase entre aspas.",
-        messages: buildBaseMessages(userPrompt, orchestration, preferences),
-        toolExecutions: [],
-      };
-    }
-
-    const kind = extractMemoryEntityKindFromPrompt(userPrompt);
-    const entities = this.memoryEntities.search(query, 12, kind);
-    return {
+    return this.getMemoryContactDirectService().tryRunMemoryEntitySearch({
+      userPrompt,
       requestId,
-      reply: buildMemoryEntityListReply(entities, { kind, query }),
-      messages: buildBaseMessages(userPrompt, orchestration, preferences),
-      toolExecutions: [],
-    };
+      orchestration,
+      preferences,
+    });
   }
 
   private async tryRunDirectIntentResolve(
@@ -15413,17 +14706,12 @@ export class AgentCore {
     orchestration: OrchestrationContext,
     preferences: UserPreferences,
   ): Promise<AgentRunResult | null> {
-    if (!isWorkflowListPrompt(userPrompt)) {
-      return null;
-    }
-
-    const plans = this.workflows.listPlans(10);
-    return {
+    return this.getWorkflowDirectService().tryRunWorkflowList({
+      userPrompt,
       requestId,
-      reply: buildWorkflowListReply(plans),
-      messages: buildBaseMessages(userPrompt, orchestration, preferences),
-      toolExecutions: [],
-    };
+      orchestration,
+      preferences,
+    });
   }
 
   private async tryRunDirectWorkflowShow(
@@ -15432,31 +14720,12 @@ export class AgentCore {
     orchestration: OrchestrationContext,
     preferences: UserPreferences,
   ): Promise<AgentRunResult | null> {
-    if (!isWorkflowShowPrompt(userPrompt)) {
-      return null;
-    }
-
-    const planId = extractWorkflowPlanId(userPrompt);
-    if (!planId) {
-      return null;
-    }
-
-    const plan = this.workflows.getPlan(planId);
-    if (!plan) {
-      return {
-        requestId,
-        reply: `Não encontrei o workflow #${planId}.`,
-        messages: buildBaseMessages(userPrompt, orchestration, preferences),
-        toolExecutions: [],
-      };
-    }
-
-    return {
+    return this.getWorkflowDirectService().tryRunWorkflowShow({
+      userPrompt,
       requestId,
-      reply: buildWorkflowPlanReply(plan),
-      messages: buildBaseMessages(userPrompt, orchestration, preferences),
-      toolExecutions: [],
-    };
+      orchestration,
+      preferences,
+    });
   }
 
   private async tryRunDirectWorkflowArtifacts(
@@ -15465,38 +14734,12 @@ export class AgentCore {
     orchestration: OrchestrationContext,
     preferences: UserPreferences,
   ): Promise<AgentRunResult | null> {
-    if (!isWorkflowArtifactListPrompt(userPrompt)) {
-      return null;
-    }
-
-    const planId = extractWorkflowPlanId(userPrompt) ?? this.workflows.latestPlan()?.id;
-    if (!planId) {
-      return {
-        requestId,
-        reply: "Não encontrei workflow para listar artefatos.",
-        messages: buildBaseMessages(userPrompt, orchestration, preferences),
-        toolExecutions: [],
-      };
-    }
-
-    const plan = this.workflows.getPlan(planId);
-    if (!plan) {
-      return {
-        requestId,
-        reply: `Não encontrei o workflow #${planId}.`,
-        messages: buildBaseMessages(userPrompt, orchestration, preferences),
-        toolExecutions: [],
-      };
-    }
-
-    const stepNumber = extractWorkflowStepNumber(userPrompt);
-    const artifacts = this.workflows.listArtifacts(planId, stepNumber);
-    return {
+    return this.getWorkflowDirectService().tryRunWorkflowArtifacts({
+      userPrompt,
       requestId,
-      reply: buildWorkflowArtifactsReply(plan, artifacts, stepNumber),
-      messages: buildBaseMessages(userPrompt, orchestration, preferences),
-      toolExecutions: [],
-    };
+      orchestration,
+      preferences,
+    });
   }
 
   private async tryRunDirectWorkflowExecution(
@@ -15506,69 +14749,13 @@ export class AgentCore {
     orchestration: OrchestrationContext,
     preferences: UserPreferences,
   ): Promise<AgentRunResult | null> {
-    if (!isWorkflowExecutionPrompt(userPrompt)) {
-      return null;
-    }
-
-    const planId = extractWorkflowPlanId(userPrompt) ?? this.workflows.latestPlan()?.id;
-    if (!planId) {
-      return {
-        requestId,
-        reply: "Não encontrei workflow para iniciar ou retomar.",
-        messages: buildBaseMessages(userPrompt, orchestration, preferences),
-        toolExecutions: [],
-      };
-    }
-
-    const stepNumber = extractWorkflowStepNumber(userPrompt);
-    try {
-      const { plan, step } = this.workflowRuntime.startStep(planId, stepNumber);
-      const brief = await this.buildWorkflowExecutionBrief(plan, step, requestLogger);
-      const artifact = this.saveWorkflowExecutionArtifact(plan, step, brief);
-      const autoExecute = shouldAutoExecuteWorkflowDeliverable(userPrompt);
-      const deliverable = autoExecute
-        ? await this.generateWorkflowDomainDeliverable(plan, step, brief, requestLogger)
-        : null;
-      const refreshedPlan = this.workflows.getPlan(plan.id) ?? plan;
-      const refreshedStep = refreshedPlan.steps.find((item) => item.stepNumber === step.stepNumber) ?? step;
-
-      return {
-        requestId,
-        reply: buildWorkflowExecutionReply({
-          plan: refreshedPlan,
-          step: refreshedStep,
-          artifact,
-          deliverableArtifact: deliverable?.artifact,
-          deliverableSummary: deliverable?.summary,
-          brief,
-        }),
-        messages: buildBaseMessages(userPrompt, orchestration, preferences),
-        toolExecutions: [
-          {
-            toolName: "workflow_execution",
-            resultPreview: JSON.stringify(
-              {
-                planId: refreshedPlan.id,
-                stepNumber: refreshedStep.stepNumber,
-                artifactId: artifact.id,
-                artifactPath: artifact.filePath,
-                deliverableArtifactId: deliverable?.artifact.id,
-                deliverableArtifactPath: deliverable?.artifact.filePath,
-              },
-              null,
-              2,
-            ),
-          },
-        ],
-      };
-    } catch (error) {
-      return {
-        requestId,
-        reply: error instanceof Error ? error.message : String(error),
-        messages: buildBaseMessages(userPrompt, orchestration, preferences),
-        toolExecutions: [],
-      };
-    }
+    return this.getWorkflowDirectService().tryRunWorkflowExecution({
+      userPrompt,
+      requestId,
+      requestLogger,
+      orchestration,
+      preferences,
+    });
   }
 
   private async tryRunDirectWorkflowStepUpdate(
@@ -15577,61 +14764,12 @@ export class AgentCore {
     orchestration: OrchestrationContext,
     preferences: UserPreferences,
   ): Promise<AgentRunResult | null> {
-    if (!isWorkflowStepUpdatePrompt(userPrompt)) {
-      return null;
-    }
-
-    const planId = extractWorkflowPlanId(userPrompt) ?? this.workflows.latestPlan()?.id;
-    const stepNumber = extractWorkflowStepNumber(userPrompt);
-    const status = extractWorkflowStepStatus(userPrompt);
-    if (!planId || !stepNumber || !status) {
-      return null;
-    }
-
-    try {
-      const transition = status === "completed"
-        ? this.workflowRuntime.completeStep(planId, stepNumber)
-        : status === "blocked"
-          ? this.workflowRuntime.blockStep(planId, stepNumber, `Etapa ${stepNumber} marcada como bloqueada pelo operador.`)
-          : status === "failed"
-            ? this.workflowRuntime.failStep(planId, stepNumber, `Etapa ${stepNumber} marcada como falha pelo operador.`)
-            : status === "waiting_approval"
-              ? this.workflowRuntime.markWaitingApproval(planId, stepNumber, `Etapa ${stepNumber} aguardando aprovação.`)
-              : status === "pending"
-                ? this.workflowRuntime.resetStepToPending(planId, stepNumber, `Etapa ${stepNumber} voltou para pendente.`)
-                : this.workflowRuntime.resumeStep(planId, stepNumber, `Etapa ${stepNumber} retomada pelo operador.`);
-      const plan = transition.plan;
-      const step = plan.steps.find((item) => item.stepNumber === stepNumber);
-      if (step) {
-        this.workflows.saveArtifact({
-          planId,
-          stepNumber,
-          artifactType: "status_update",
-          title: `Atualização da etapa ${stepNumber}`,
-          summary: `Etapa ${stepNumber} alterada para ${status}.`,
-          content: [
-            `Workflow #${planId}`,
-            `Etapa ${stepNumber}: ${step.title}`,
-            `Novo status: ${status}`,
-            `Atualizado em: ${new Date().toISOString()}`,
-          ].join("\n"),
-        });
-      }
-
-      return {
-        requestId,
-        reply: buildWorkflowStepUpdateReply(plan, stepNumber),
-        messages: buildBaseMessages(userPrompt, orchestration, preferences),
-        toolExecutions: [],
-      };
-    } catch (error) {
-      return {
-        requestId,
-        reply: error instanceof Error ? error.message : String(error),
-        messages: buildBaseMessages(userPrompt, orchestration, preferences),
-        toolExecutions: [],
-      };
-    }
+    return this.getWorkflowDirectService().tryRunWorkflowStepUpdate({
+      userPrompt,
+      requestId,
+      orchestration,
+      preferences,
+    });
   }
 
   private async createWorkflowPlanFromPrompt(
@@ -16152,235 +15290,12 @@ export class AgentCore {
     requestLogger: Logger,
     orchestration: OrchestrationContext,
   ): Promise<AgentRunResult | null> {
-    if (!isSupportReviewPrompt(userPrompt)) {
-      return null;
-    }
-
-    requestLogger.info("Using direct support review route");
-
-    const emailStatus = await this.email.getStatus();
-    const emails = emailStatus.ready
-      ? await this.email.listRecentMessages({
-        limit: 12,
-        unreadOnly: false,
-        sinceHours: 168,
-      })
-      : [];
-
-    const supportEmailItems = emails
-      .map((email) => {
-        const summary = summarizeEmailForOperations({
-          subject: email.subject,
-          from: email.from,
-          text: email.preview,
-        });
-        const routing = this.communicationRouter.classify({
-          channel: "email",
-          identifier: extractEmailIdentifier(email.from),
-          displayName: email.from.join(", "),
-          subject: email.subject,
-          text: email.preview,
-        });
-        const normalized = normalizeEmailAnalysisText([email.subject, email.preview].join("\n"));
-        const supportSignal = includesAny(normalized, [
-          "suporte",
-          "ticket",
-          "erro",
-          "problema",
-          "duvida",
-          "dúvida",
-          "ajuda",
-          "atendimento",
-          "cliente",
-        ]);
-        return {
-          email,
-          summary,
-          routing,
-          urgent: isUrgentSupportSignal([email.subject, email.preview].join("\n")),
-          theme: extractSupportTheme([email.subject, email.preview].join("\n")),
-          keep: routing.relationship === "client" || routing.relationship === "lead" || supportSignal,
-        };
-      })
-      .filter((item) => item.keep)
-      .slice(0, 4);
-
-    const pendingReplyApprovals = this.approvals
-      .listPendingAll(12)
-      .filter((item) => item.actionKind === "whatsapp_reply")
-      .slice(0, 4);
-
-    const recentSupportMessages = this.whatsappMessages
-      .listRecent(20)
-      .map((message) => {
-        const routing = this.communicationRouter.classify({
-          channel: "whatsapp",
-          identifier: message.number ?? message.remoteJid,
-          displayName: message.pushName,
-          text: message.text,
-        });
-        const normalized = normalizeEmailAnalysisText(message.text);
-        const supportSignal = includesAny(normalized, [
-          "suporte",
-          "erro",
-          "problema",
-          "duvida",
-          "dúvida",
-          "ajuda",
-          "cliente",
-          "atendimento",
-        ]);
-        return {
-          message,
-          routing,
-          urgent: isUrgentSupportSignal(message.text),
-          theme: extractSupportTheme(message.text),
-          keep: message.direction === "inbound" && (routing.relationship === "client" || routing.relationship === "lead" || supportSignal),
-        };
-      })
-      .filter((item) => item.keep)
-      .slice(0, 4);
-
-    const contextPack = await this.contextPacks.buildForPrompt(userPrompt, {
-      rawPrompt: userPrompt,
-      activeUserPrompt: userPrompt,
-      historyUserTurns: [],
-      orchestration,
-      mentionedDomains: [orchestration.route.primaryDomain],
-      compoundIntent: /\s+e\s+|depois|em seguida|ao mesmo tempo|junto com/i.test(userPrompt),
-    });
-
-    if (supportEmailItems.length === 0 && pendingReplyApprovals.length === 0 && recentSupportMessages.length === 0) {
-      return {
-        requestId,
-        reply: this.responseOs.buildSupportQueueReply({
-          objective: "revisar a fila de suporte e atendimento",
-          currentSituation: [
-            emailStatus.ready
-              ? "não encontrei sinais fortes de fila de suporte nas fontes recentes"
-              : "email indisponível; análise feita só com sinais locais disponíveis",
-          ],
-          channelSummary: ["sem sinais suficientes por email ou WhatsApp para montar uma fila real agora"],
-          criticalCases: [],
-          pendingReplies: [],
-          recurringThemes: contextPack?.signals ?? ["validar se a fila de suporte está chegando por email, WhatsApp ou outro canal"],
-          recommendedNextStep: "Se quiser, eu posso revisar primeiro o inbox, o WhatsApp ou só as aprovações pendentes.",
-        }),
-        messages: buildBaseMessages(userPrompt, orchestration),
-        toolExecutions: [],
-      };
-    }
-
-    const currentSituation: string[] = [];
-    if (supportEmailItems.length > 0) {
-      currentSituation.push(`${supportEmailItems.length} email(s) com sinal de suporte ou cliente`);
-    }
-    if (pendingReplyApprovals.length > 0) {
-      currentSituation.push(`${pendingReplyApprovals.length} resposta(s) de WhatsApp aguardando aprovação`);
-    }
-    if (recentSupportMessages.length > 0) {
-      currentSituation.push(`${recentSupportMessages.length} mensagem(ns) inbound recente(s) com contexto de cliente`);
-    }
-    if (!emailStatus.ready) {
-      currentSituation.push(`email indisponível: ${emailStatus.message}`);
-    }
-
-    const channelSummary: string[] = [];
-    if (supportEmailItems.length > 0) {
-      channelSummary.push(`email: ${supportEmailItems.length} caso(s) com sinal de cliente ou suporte`);
-    }
-    if (recentSupportMessages.length > 0) {
-      channelSummary.push(`whatsapp: ${recentSupportMessages.length} mensagem(ns) inbound de cliente`);
-    }
-    if (pendingReplyApprovals.length > 0) {
-      channelSummary.push(`aprovações: ${pendingReplyApprovals.length} resposta(s) pronta(s) para decidir`);
-    }
-
-    const criticalCases = [
-      ...pendingReplyApprovals.slice(0, 2).map((item) => ({
-        label: item.subject,
-        channel: "approval" as const,
-        detail: "resposta pronta aguardando decisão",
-      })),
-      ...supportEmailItems.filter((item) => item.urgent).slice(0, 2).map((item) => ({
-        label: item.email.subject || "(sem assunto)",
-        channel: "email" as const,
-        detail: `${item.theme ?? "atendimento geral"} | ${item.summary.action}`,
-      })),
-      ...recentSupportMessages.filter((item) => item.urgent).slice(0, 2).map((item) => ({
-        label: item.message.pushName ?? item.message.number ?? item.message.remoteJid,
-        channel: "whatsapp" as const,
-        detail: `${item.theme ?? "atendimento geral"} | ${truncateBriefText(item.message.text, 88)}`,
-      })),
-    ].slice(0, 4);
-
-    const pendingReplies = [
-      ...pendingReplyApprovals.slice(0, 3).map((item) => ({
-        label: item.subject,
-        channel: "approval" as const,
-        detail: "revisar rascunho antes de enviar",
-      })),
-      ...recentSupportMessages.slice(0, 2).map((item) => ({
-        label: item.message.pushName ?? item.message.number ?? item.message.remoteJid,
-        channel: "whatsapp" as const,
-        detail: truncateBriefText(item.message.text, 88),
-      })),
-    ].slice(0, 4);
-
-    const themeCounts = new Map<string, number>();
-    for (const item of [...supportEmailItems, ...recentSupportMessages]) {
-      const theme = item.theme;
-      if (!theme) {
-        continue;
-      }
-      themeCounts.set(theme, (themeCounts.get(theme) ?? 0) + 1);
-    }
-    const recurringThemes = [...themeCounts.entries()]
-      .sort((left, right) => right[1] - left[1])
-      .slice(0, 3)
-      .map(([theme, count]) => `${theme}: ${count} ocorrência(s)`);
-
-    let recommendedNextStep = "Escolher o primeiro caso para resposta ou priorização.";
-    if (pendingReplyApprovals[0]) {
-      recommendedNextStep = `Abrir a aprovação mais urgente: ${truncateBriefText(pendingReplyApprovals[0].subject, 96)}.`;
-    } else if (criticalCases[0]) {
-      recommendedNextStep = `Atacar primeiro o caso crítico em ${criticalCases[0].channel}: ${truncateBriefText(criticalCases[0].label, 96)}.`;
-    } else if (recentSupportMessages[0]) {
-      recommendedNextStep = `Ler a última mensagem de ${truncateBriefText(recentSupportMessages[0].message.pushName ?? recentSupportMessages[0].message.number ?? recentSupportMessages[0].message.remoteJid, 48)} e decidir a resposta.`;
-    } else if (supportEmailItems[0]) {
-      recommendedNextStep = `Revisar o email de cliente mais relevante: ${truncateBriefText(supportEmailItems[0].email.subject || "(sem assunto)", 96)}.`;
-    }
-
-    return {
+    return this.getOperationalReviewDirectService().tryRunSupportReview({
+      userPrompt,
       requestId,
-      reply: this.responseOs.buildSupportQueueReply({
-        objective: "revisar a fila de suporte e atendimento",
-        currentSituation,
-        channelSummary,
-        criticalCases,
-        pendingReplies,
-        recurringThemes: recurringThemes.length > 0
-          ? recurringThemes
-          : (contextPack?.signals ?? []).slice(0, 3),
-        recommendedNextStep,
-      }),
-      messages: buildBaseMessages(userPrompt, orchestration),
-      toolExecutions: [
-        {
-          toolName: "support_review_context",
-          resultPreview: JSON.stringify(
-            {
-              supportEmails: supportEmailItems.length,
-              pendingReplyApprovals: pendingReplyApprovals.length,
-              recentSupportMessages: recentSupportMessages.length,
-              criticalCases: criticalCases.length,
-            },
-            null,
-            2,
-          ),
-        },
-      ],
-    };
+      requestLogger,
+      orchestration,
+    });
   }
 
   private async tryRunDirectInboxTriage(
@@ -16389,128 +15304,12 @@ export class AgentCore {
     requestLogger: Logger,
     orchestration: OrchestrationContext,
   ): Promise<AgentRunResult | null> {
-    if (!isInboxTriagePrompt(userPrompt)) {
-      return null;
-    }
-
-    const unreadOnly = !/todos|all/i.test(userPrompt);
-    const limitMatch = userPrompt.match(/\b(\d{1,2})\b/);
-    const limit = limitMatch ? Math.min(Math.max(Number.parseInt(limitMatch[1], 10), 1), 20) : 10;
-    const emailStatus = await this.email.getStatus();
-    if (!emailStatus.ready) {
-      return {
-        requestId,
-        reply: `A integração de email não está pronta para leitura. ${emailStatus.message}`,
-        messages: buildBaseMessages(userPrompt, orchestration),
-        toolExecutions: [],
-      };
-    }
-
-    requestLogger.info("Using direct inbox triage route", {
-      limit,
-      unreadOnly,
-    });
-
-    const emails = await this.email.listRecentMessages({
-      limit,
-      unreadOnly,
-      sinceHours: 168,
-    });
-    const priorityWeight = {
-      alta: 0,
-      media: 1,
-      baixa: 2,
-    } as const;
-
-    const items: InboxTriageItem[] = emails
-      .map((email) => {
-        const summary = summarizeEmailForOperations({
-          subject: email.subject,
-          from: email.from,
-          text: email.preview,
-        });
-        const routing = this.communicationRouter.classify({
-          channel: "email",
-          identifier: extractEmailIdentifier(email.from),
-          displayName: email.from.join(", "),
-          subject: email.subject,
-          text: email.preview,
-        });
-        return {
-          uid: email.uid,
-          date: email.date,
-          subject: email.subject,
-          from: email.from,
-          category: summary.category,
-          relationship: routing.relationship,
-          persona: routing.persona,
-          policy: routing.actionPolicy,
-          priority: summary.priority,
-          status: summary.status,
-          action: summary.action,
-        } satisfies InboxTriageItem;
-      })
-      .sort((left, right) => {
-        const priorityDelta = priorityWeight[left.priority] - priorityWeight[right.priority];
-        if (priorityDelta !== 0) {
-          return priorityDelta;
-        }
-        return (right.date ?? "").localeCompare(left.date ?? "");
-      });
-
-    const categoryCounts = new Map<string, number>();
-    const relationshipCounts = new Map<string, number>();
-    for (const item of items) {
-      categoryCounts.set(item.category, (categoryCounts.get(item.category) ?? 0) + 1);
-      relationshipCounts.set(item.relationship, (relationshipCounts.get(item.relationship) ?? 0) + 1);
-    }
-    const groupSummary = [
-      ...[...categoryCounts.entries()]
-        .sort((left, right) => right[1] - left[1])
-        .slice(0, 2)
-        .map(([category, count]) => `categoria ${category}: ${count} email(s)`),
-      ...[...relationshipCounts.entries()]
-        .sort((left, right) => right[1] - left[1])
-        .slice(0, 2)
-        .map(([relationship, count]) => `relação ${relationship}: ${count} email(s)`),
-    ];
-
-    return {
+    return this.getOperationalReviewDirectService().tryRunInboxTriage({
+      userPrompt,
       requestId,
-      reply: this.responseOs.buildInboxTriageReply({
-        scopeLabel: "email principal",
-        unreadOnly,
-        limit,
-        items: items.map((item) => ({
-          uid: item.uid,
-          subject: item.subject,
-          from: item.from,
-          relationship: item.relationship,
-          priority: item.priority,
-          category: item.category,
-          action: item.action,
-        })),
-        groupSummary,
-        recommendedNextStep: items[0]
-          ? `Executar a próxima ação do UID ${items[0].uid}: ${items[0].action}.`
-          : undefined,
-      }),
-      messages: buildBaseMessages(userPrompt, orchestration),
-      toolExecutions: [
-        {
-          toolName: "list_recent_emails",
-          resultPreview: JSON.stringify(
-            {
-              total: emails.length,
-              unreadOnly,
-              limit,
-            },
-            null,
-            2,
-          ),
-        },
-      ],
-    };
+      requestLogger,
+      orchestration,
+    });
   }
 
   private async tryRunDirectFollowUpReview(
@@ -16519,79 +15318,12 @@ export class AgentCore {
     requestLogger: Logger,
     orchestration: OrchestrationContext,
   ): Promise<AgentRunResult | null> {
-    if (!isFollowUpReviewPrompt(userPrompt)) {
-      return null;
-    }
-
-    requestLogger.info("Using direct follow-up review route");
-    const leads = this.growthOps.listLeads({ limit: 30 });
-    const openLeads = leads.filter((lead) => !["won", "lost"].includes(lead.status));
-    const overdueItems = openLeads
-      .filter((lead) => classifyFollowUpBucket(lead) === "overdue")
-      .slice(0, 4)
-      .map((lead) => ({
-        label: `${lead.name}${lead.company ? ` | ${lead.company}` : ""}`,
-        status: lead.status,
-        dueLabel: `vencido desde ${formatFollowUpDueLabel(lead.nextFollowUpAt)}`,
-      }));
-    const todayItems = openLeads
-      .filter((lead) => classifyFollowUpBucket(lead) === "today")
-      .slice(0, 4)
-      .map((lead) => ({
-        label: `${lead.name}${lead.company ? ` | ${lead.company}` : ""}`,
-        status: lead.status,
-        dueLabel: `hoje às ${formatFollowUpDueLabel(lead.nextFollowUpAt)}`,
-      }));
-    const unscheduledItems = openLeads
-      .filter((lead) => classifyFollowUpBucket(lead) === "unscheduled")
-      .slice(0, 3)
-      .map((lead) => ({
-        label: `${lead.name}${lead.company ? ` | ${lead.company}` : ""}`,
-        status: lead.status,
-        dueLabel: "sem data",
-      }));
-
-    const currentSituation = [
-      `${openLeads.length} lead(s) abertos no pipeline`,
-      `${overdueItems.length} follow-up(s) vencido(s)`,
-      `${todayItems.length} follow-up(s) para hoje ou próximas 24h`,
-    ];
-
-    const recommendedNextStep = overdueItems[0]
-      ? `Atacar primeiro o follow-up vencido de ${truncateBriefText(overdueItems[0].label, 96)}.`
-      : todayItems[0]
-        ? `Executar o follow-up de hoje: ${truncateBriefText(todayItems[0].label, 96)}.`
-        : unscheduledItems[0]
-          ? `Definir data para o lead sem follow-up: ${truncateBriefText(unscheduledItems[0].label, 96)}.`
-          : "Se quiser, eu posso abrir o pipeline e listar cada lead por estágio.";
-
-    return {
+    return this.getOperationalReviewDirectService().tryRunFollowUpReview({
+      userPrompt,
       requestId,
-      reply: this.responseOs.buildFollowUpReviewReply({
-        scopeLabel: "pipeline e leads ativos",
-        currentSituation,
-        overdueItems,
-        todayItems,
-        unscheduledItems,
-        recommendedNextStep,
-      }),
-      messages: buildBaseMessages(userPrompt, orchestration),
-      toolExecutions: [
-        {
-          toolName: "follow_up_review_context",
-          resultPreview: JSON.stringify(
-            {
-              openLeads: openLeads.length,
-              overdue: overdueItems.length,
-              today: todayItems.length,
-              unscheduled: unscheduledItems.length,
-            },
-            null,
-            2,
-          ),
-        },
-      ],
-    };
+      requestLogger,
+      orchestration,
+    });
   }
 
   private async tryRunDirectNextCommitmentPrep(
@@ -16600,90 +15332,12 @@ export class AgentCore {
     requestLogger: Logger,
     orchestration: OrchestrationContext,
   ): Promise<AgentRunResult | null> {
-    if (!isNextCommitmentPrepPrompt(userPrompt)) {
-      return null;
-    }
-
-    requestLogger.info("Using direct next commitment prep route");
-    const brief = await this.personalOs.getExecutiveMorningBrief();
-    const nextEvent = brief.events.find((event) => event.owner === "paulo") ?? brief.events[0];
-    if (!nextEvent?.start) {
-      return {
-        requestId,
-        reply: "Não encontrei um próximo compromisso para preparar agora.",
-        messages: buildBaseMessages(userPrompt, orchestration),
-        toolExecutions: [],
-      };
-    }
-
-    const eventDate = new Date(nextEvent.start);
-    const todayKey = eventDate.toDateString();
-    const nowKey = new Date().toDateString();
-    const weatherTip = todayKey === nowKey
-      ? brief.weather?.days[0]?.tip
-      : brief.weather?.days[1]?.tip ?? brief.weather?.days[0]?.tip;
-
-    const checklist: string[] = [];
-    if (nextEvent.context === "externo") {
-      checklist.push("confirmar endereço e rota antes de sair");
-    }
-    if (nextEvent.owner === "delegavel") {
-      checklist.push("validar quem será o responsável por tocar esse compromisso");
-    } else {
-      checklist.push(nextEvent.prepHint);
-    }
-    if (nextEvent.location) {
-      checklist.push(`levar o local salvo: ${summarizeCalendarLocation(nextEvent.location)}`);
-    }
-    if (weatherTip) {
-      checklist.push(weatherTip);
-    }
-    for (const mobilityAlert of brief.mobilityAlerts.filter((item) => item.startsWith("itens base:")).slice(0, 1)) {
-      checklist.push(mobilityAlert);
-    }
-
-    const alerts: string[] = [];
-    if (nextEvent.hasConflict) {
-      alerts.push("há conflito de agenda nesse horário");
-    }
-    if (nextEvent.context === "externo" && !nextEvent.location) {
-      alerts.push("compromisso externo sem local claro");
-    }
-
-    return {
+    return this.getOperationalReviewDirectService().tryRunNextCommitmentPrep({
+      userPrompt,
       requestId,
-      reply: this.responseOs.buildCommitmentPrepReply({
-        title: nextEvent.summary,
-        startLabel: formatBriefDateTime(nextEvent.start, brief.timezone),
-        account: nextEvent.account,
-        owner: nextEvent.owner,
-        context: nextEvent.context,
-        location: nextEvent.location,
-        weatherTip,
-        checklist,
-        alerts,
-        recommendedNextStep: alerts[0]
-          ? `Resolver primeiro este alerta: ${alerts[0]}.`
-          : `${nextEvent.prepHint[0]?.toUpperCase() ?? ""}${nextEvent.prepHint.slice(1)} para ${nextEvent.summary}.`,
-      }),
-      messages: buildBaseMessages(userPrompt, orchestration),
-      toolExecutions: [
-        {
-          toolName: "next_commitment_prep",
-          resultPreview: JSON.stringify(
-            {
-              summary: nextEvent.summary,
-              start: nextEvent.start,
-              owner: nextEvent.owner,
-              context: nextEvent.context,
-              hasConflict: nextEvent.hasConflict,
-            },
-            null,
-            2,
-          ),
-        },
-      ],
-    };
+      requestLogger,
+      orchestration,
+    });
   }
 
   private async tryRunDirectEmailDraft(
@@ -16692,147 +15346,12 @@ export class AgentCore {
     requestLogger: Logger,
     orchestration: OrchestrationContext,
   ): Promise<AgentRunResult | null> {
-    if (!isEmailDraftPrompt(userPrompt)) {
-      return null;
-    }
-
-    const emailStatus = await this.email.getStatus();
-    if (!emailStatus.ready) {
-      return {
-        requestId,
-        reply: `A integração de email não está pronta para leitura. ${emailStatus.message}`,
-        messages: buildBaseMessages(userPrompt, orchestration),
-        toolExecutions: [],
-      };
-    }
-
-    const explicitUid = extractEmailUidFromPrompt(userPrompt);
-    const resolvedReference = explicitUid
-      ? null
-      : await this.resolveEmailReferenceFromPrompt(userPrompt, requestLogger);
-    if (!explicitUid && !resolvedReference) {
-      return null;
-    }
-    if (!explicitUid && resolvedReference && !resolvedReference.message) {
-      return {
-        requestId,
-        reply: buildEmailLookupMissReply(resolvedReference.request),
-        messages: buildBaseMessages(userPrompt, orchestration),
-        toolExecutions: [],
-      };
-    }
-
-    const targetUid = explicitUid ?? resolvedReference?.message?.uid;
-    if (!targetUid) {
-      return null;
-    }
-
-    requestLogger.info("Using direct email drafting route", {
-      uid: targetUid,
-      resolvedLabel: resolvedReference?.label,
-    });
-
-    const emailMessage = await this.email.readMessage(targetUid);
-    const recipientName = extractDisplayName(emailMessage.from[0] ?? "");
-    const inferredContext = inferReplyContext(userPrompt, emailMessage.subject, emailMessage.text);
-    const tone = extractToneHint(userPrompt);
-    const exactReplyBody = extractExactReplyBody(userPrompt);
-    const deterministicDraft = exactReplyBody
-      ? exactReplyBody
-      : hasAffirmativeIntent(userPrompt)
-        ? buildAffirmativeReplyTemplate({
-            recipientName,
-            context: inferredContext,
-            tone,
-          })
-        : hasRejectionIntent(userPrompt)
-          ? buildRejectionReplyTemplate({
-              recipientName,
-              tone,
-            })
-          : undefined;
-    const draftingMessages: ConversationMessage[] = [
-      ...buildBaseMessages(userPrompt, orchestration).slice(0, 2),
-      {
-        role: "system",
-        content: [
-          "Você está redigindo uma resposta de email e não deve usar ferramentas nesta etapa.",
-          "Escreva em português, de forma elegante e prática, considerando o contexto pessoal ou profissional indicado pelo usuário.",
-          "Retorne somente o corpo final do email em texto puro.",
-          "Não inclua explicações, introduções, markdown, assunto, blocos de código ou placeholders genéricos como [seu nome].",
-          "Não invente atrasos, desculpas, contexto extra ou fatos que não estejam no email original ou no pedido do usuário.",
-          "Se o usuário estiver aceitando um contato ou oportunidade, responda com clareza, objetividade e próximos passos.",
-          "Se você não souber a assinatura nominal do usuário, finalize sem inventar nome próprio.",
-        ].join(" "),
-      },
-      {
-        role: "user",
-        content: [
-          "Pedido do usuário:",
-          userPrompt,
-          "",
-          "Email original:",
-          `UID: ${emailMessage.uid}`,
-          `Assunto: ${emailMessage.subject}`,
-          `De: ${emailMessage.from.join(", ") || "(desconhecido)"}`,
-          `Para: ${emailMessage.to.join(", ") || "(desconhecido)"}`,
-          `CC: ${emailMessage.cc.join(", ") || "(vazio)"}`,
-          "",
-          "Corpo do email original:",
-          emailMessage.text || "(sem conteúdo textual)",
-        ].join("\n"),
-      },
-    ];
-
-    const response = deterministicDraft
-      ? {
-          message: {
-            role: "assistant" as const,
-            content: deterministicDraft,
-          },
-        }
-      : await this.client.chat({
-          messages: draftingMessages,
-        });
-    const draftBody =
-      stripCodeFences(response.message.content ?? "").trim() ||
-      "Não foi possível redigir a resposta do email nesta tentativa.";
-    const targetLabel = explicitUid
-      ? `o email UID ${targetUid}`
-      : `o email mais recente para ${resolvedReference?.label ?? "o filtro informado"}`;
-    const reply = draftBody.startsWith("Não foi possível")
-      ? draftBody
-      : [
-          `Rascunho pronto para ${targetLabel}.`,
-          "",
-          draftBody,
-          "",
-          "EMAIL_REPLY_DRAFT",
-          `uid=${targetUid}`,
-          "body:",
-          draftBody,
-          "END_EMAIL_REPLY_DRAFT",
-        ].join("\n");
-
-    return {
+    return this.getOperationalReviewDirectService().tryRunEmailDraft({
+      userPrompt,
       requestId,
-      reply,
-      messages: [...draftingMessages, response.message],
-      toolExecutions: [
-        {
-          toolName: "read_email_message",
-          resultPreview: JSON.stringify(
-            {
-              uid: emailMessage.uid,
-              subject: emailMessage.subject,
-              from: emailMessage.from,
-            },
-            null,
-            2,
-          ).slice(0, 240),
-        },
-      ],
-    };
+      requestLogger,
+      orchestration,
+    });
   }
 
   private async tryRunDirectPing(
