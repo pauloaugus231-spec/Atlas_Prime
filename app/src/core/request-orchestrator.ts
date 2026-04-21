@@ -1,7 +1,6 @@
 import type { AgentCoreRequestRuntime, AgentRunOptions, AgentRunResult } from "./agent-core.js";
 import type { Logger } from "../types/logger.js";
 import type { CommitmentCandidate } from "../types/commitments.js";
-import type { MemoryCandidate } from "../types/memory-candidates.js";
 import {
   extractPendingActionDraft,
   sanitizeToolPayloadLeak,

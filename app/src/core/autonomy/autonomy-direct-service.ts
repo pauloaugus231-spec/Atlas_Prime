@@ -52,6 +52,19 @@ function isReviewListPrompt(prompt: string): boolean {
   ]);
 }
 
+function isWeeklyReviewPrompt(prompt: string): boolean {
+  const normalized = normalize(prompt);
+  return includesAny(normalized, [
+    "revisao da semana",
+    "revisão da semana",
+    "como foi minha semana",
+    "resumo da semana",
+    "o que ficou pendente nesta semana",
+    "o que ficou pendente essa semana",
+    "semana operacional",
+  ]);
+}
+
 function isExplainPrompt(prompt: string): boolean {
   const normalized = normalize(prompt);
   return includesAny(normalized, [
@@ -193,10 +206,10 @@ export interface AutonomyDirectServiceDependencies {
   actionService: Pick<AutonomyActionService, "approveSuggestion">;
   commitments?: Pick<CommitmentStore, "update">;
   memoryCandidates?: Pick<MemoryCandidateStore, "update">;
-  suggestions: Pick<SuggestionStore, "getById" | "listByStatus" | "updateStatus">;
+  suggestions: Pick<SuggestionStore, "getById" | "listByStatus" | "listRecent" | "updateStatus">;
   observations: Pick<ObservationStore, "getById">;
   audit: Pick<AutonomyAuditStore, "record">;
-  feedback: Pick<FeedbackStore, "record">;
+  feedback: Pick<FeedbackStore, "record" | "listRecent">;
   buildBaseMessages: (
     userPrompt: string,
     orchestration: OrchestrationContext,
@@ -216,6 +229,52 @@ export class AutonomyDirectService {
   private readonly renderer = new SuggestionRenderer();
 
   constructor(private readonly deps: AutonomyDirectServiceDependencies) {}
+
+  private buildWeeklyReview(nowIso: string): string {
+    const sinceTime = new Date(nowIso).getTime() - (7 * 24 * 60 * 60 * 1000);
+    const recentSuggestions = this.deps.suggestions
+      .listRecent(40)
+      .filter((item) => new Date(item.updatedAt).getTime() >= sinceTime);
+    const recentFeedback = this.deps.feedback
+      .listRecent(80)
+      .filter((item) => new Date(item.createdAt).getTime() >= sinceTime);
+    const activeQueue = this.buildRenderableSuggestions(nowIso).slice(0, 3);
+
+    if (recentSuggestions.length === 0 && recentFeedback.length === 0 && activeQueue.length === 0) {
+      return "Nesta última semana eu não acumulei nada relevante na fila de autonomia.";
+    }
+
+    const accepted = recentFeedback.filter((item) => item.feedbackKind === "accepted" || item.feedbackKind === "executed").length;
+    const dismissed = recentFeedback.filter((item) => item.feedbackKind === "dismissed").length;
+    const snoozed = recentFeedback.filter((item) => item.feedbackKind === "snoozed").length;
+    const repeatedDismissals = new Map<string, number>();
+    for (const item of recentFeedback.filter((entry) => entry.feedbackKind === "dismissed")) {
+      repeatedDismissals.set(item.suggestionId, (repeatedDismissals.get(item.suggestionId) ?? 0) + 1);
+    }
+    const noisySuggestionId = [...repeatedDismissals.entries()].find(([, count]) => count >= 2)?.[0];
+    const noisySuggestionTitle = noisySuggestionId ? this.deps.suggestions.getById(noisySuggestionId)?.title : undefined;
+
+    return [
+      "Fechamento da semana na fila de autonomia:",
+      `- sugestões vistas: ${recentSuggestions.length}`,
+      `- aprovadas ou executadas: ${accepted}`,
+      `- descartadas: ${dismissed}`,
+      `- adiadas: ${snoozed}`,
+      ...(activeQueue.length > 0
+        ? [
+            "",
+            "Ainda abertas:",
+            ...activeQueue.map((item, index) => `${index + 1}. ${item.suggestion.title}`),
+          ]
+        : []),
+      ...(noisySuggestionTitle
+        ? [
+            "",
+            `Padrão da semana: ${noisySuggestionTitle} foi descartada várias vezes. Vou reduzir a insistência nisso.`,
+          ]
+        : []),
+    ].join("\n");
+  }
 
   private syncLinkedCommitment(item: RenderableSuggestion | undefined, status: "dismissed" | "snoozed", snoozedUntil?: string): void {
     if (!item?.observation || item.observation.kind !== "commitment_detected" || !item.observation.sourceId || !this.deps.commitments) {
@@ -304,6 +363,16 @@ export class AutonomyDirectService {
           count: items.length,
           ids: items.map((item) => item.suggestion.id),
         },
+      );
+    }
+
+    if (isWeeklyReviewPrompt(normalized)) {
+      requestLogger.info("Using direct autonomy weekly review route");
+      return this.buildResult(
+        input,
+        this.buildWeeklyReview(nowIso),
+        "autonomy_review_weekly",
+        { weeklyReview: true },
       );
     }
 

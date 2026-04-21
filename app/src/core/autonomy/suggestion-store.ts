@@ -161,6 +161,16 @@ export class SuggestionStore {
     return rows.map(mapSuggestion);
   }
 
+  listRecent(limit = 50): AutonomySuggestion[] {
+    const safeLimit = Math.max(1, Math.min(500, Math.floor(limit)));
+    const rows = this.db.prepare(`
+      SELECT * FROM autonomy_suggestions
+      ORDER BY updated_at DESC
+      LIMIT ?
+    `).all(safeLimit) as Array<Record<string, unknown>>;
+    return rows.map(mapSuggestion);
+  }
+
   updateStatus(input: {
     id: string;
     status: AutonomySuggestion["status"];

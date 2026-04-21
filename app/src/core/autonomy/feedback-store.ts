@@ -76,4 +76,14 @@ export class FeedbackStore {
     `).all(suggestionId) as Array<Record<string, unknown>>;
     return rows.map(mapFeedback);
   }
+
+  listRecent(limit = 50): AutonomyFeedbackRecord[] {
+    const safeLimit = Math.max(1, Math.min(500, Math.floor(limit)));
+    const rows = this.db.prepare(`
+      SELECT * FROM autonomy_feedback
+      ORDER BY created_at DESC
+      LIMIT ?
+    `).all(safeLimit) as Array<Record<string, unknown>>;
+    return rows.map(mapFeedback);
+  }
 }

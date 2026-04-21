@@ -1,4 +1,4 @@
-import type { AutonomyAssessment, AutonomySuggestion } from "../../types/autonomy.js";
+import type { AutonomyAssessment, AutonomyFeedbackRecord, AutonomySuggestion } from "../../types/autonomy.js";
 
 export interface AutonomyPolicyConfig {
   minConfidence: number;
@@ -7,6 +7,10 @@ export interface AutonomyPolicyConfig {
   maxSuggestionsPerRun: number;
   dismissedCooldownHours: number;
   snoozedCooldownHours: number;
+  repeatedDismissalsBeforeMute: number;
+  repeatedDismissalWindowHours: number;
+  quietHoursStartHour: number;
+  quietHoursEndHour: number;
 }
 
 export interface AutonomyQueueDecision {
@@ -21,6 +25,10 @@ const DEFAULT_CONFIG: AutonomyPolicyConfig = {
   maxSuggestionsPerRun: 5,
   dismissedCooldownHours: 24,
   snoozedCooldownHours: 12,
+  repeatedDismissalsBeforeMute: 3,
+  repeatedDismissalWindowHours: 24 * 7,
+  quietHoursStartHour: 22,
+  quietHoursEndHour: 7,
 };
 
 function hoursBetween(leftIso: string, rightIso: string): number {
@@ -101,5 +109,41 @@ export class AutonomyPolicy {
 
   clampSuggestionCount<T>(items: T[]): T[] {
     return items.slice(0, this.config.maxSuggestionsPerRun);
+  }
+
+  shouldRequeueFromFeedback(feedback: AutonomyFeedbackRecord[], nowIso: string): AutonomyQueueDecision {
+    const dismissals = feedback.filter((item) =>
+      item.feedbackKind === "dismissed"
+      && hoursBetween(nowIso, item.createdAt) <= this.config.repeatedDismissalWindowHours);
+    if (dismissals.length >= this.config.repeatedDismissalsBeforeMute) {
+      return {
+        allow: false,
+        reason: `repeated_dismissals_${dismissals.length}`,
+      };
+    }
+    return {
+      allow: true,
+      reason: "feedback_allows_requeue",
+    };
+  }
+
+  adjustPriorityForFeedback(priority: number, feedback: AutonomyFeedbackRecord[]): number {
+    const snoozes = feedback.filter((item) => item.feedbackKind === "snoozed").length;
+    const dismissals = feedback.filter((item) => item.feedbackKind === "dismissed").length;
+    const accepts = feedback.filter((item) => item.feedbackKind === "accepted" || item.feedbackKind === "executed").length;
+    const adjusted = priority - (snoozes * 0.05) - (dismissals * 0.08) + (accepts * 0.03);
+    return Math.max(0, Math.min(1, adjusted));
+  }
+
+  isQuietHours(nowIso: string): boolean {
+    const date = new Date(nowIso);
+    if (!Number.isFinite(date.getTime())) {
+      return false;
+    }
+    const hour = date.getHours();
+    if (this.config.quietHoursStartHour > this.config.quietHoursEndHour) {
+      return hour >= this.config.quietHoursStartHour || hour < this.config.quietHoursEndHour;
+    }
+    return hour >= this.config.quietHoursStartHour && hour < this.config.quietHoursEndHour;
   }
 }

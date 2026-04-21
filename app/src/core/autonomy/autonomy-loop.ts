@@ -28,10 +28,11 @@ export interface AutonomyLoopDependencies {
 function buildSuggestion(input: {
   observation: AutonomyObservation;
   assessment: AutonomyAssessment;
+  priority?: number;
 }): Omit<AutonomySuggestion, "id" | "createdAt" | "updatedAt"> {
   const priority = Math.max(
     0,
-    Math.min(1, (input.assessment.importance * 0.45) + (input.assessment.urgency * 0.35) + (input.assessment.confidence * 0.2)),
+    Math.min(1, input.priority ?? ((input.assessment.importance * 0.45) + (input.assessment.urgency * 0.35) + (input.assessment.confidence * 0.2))),
   );
 
   return {
@@ -116,11 +117,35 @@ export class AutonomyLoop {
               });
               continue;
             }
+
+            if (this.feedback) {
+              const feedback = this.feedback.listBySuggestion(existingSuggestion.id);
+              const feedbackDecision = this.policy.shouldRequeueFromFeedback(feedback, now);
+              if (!feedbackDecision.allow) {
+                this.logger.debug("Autonomy suggestion skipped by feedback policy", {
+                  suggestionId: existingSuggestion.id,
+                  fingerprint: existingSuggestion.fingerprint,
+                  reason: feedbackDecision.reason,
+                });
+                continue;
+              }
+            }
           }
 
+          const feedback = existingSuggestion && this.feedback
+            ? this.feedback.listBySuggestion(existingSuggestion.id)
+            : [];
+          const adjustedPriority = this.policy.adjustPriorityForFeedback(
+            Math.max(
+              0,
+              Math.min(1, (assessment.importance * 0.45) + (assessment.urgency * 0.35) + (assessment.confidence * 0.2)),
+            ),
+            feedback,
+          );
           const storedSuggestion = this.suggestions.upsert(buildSuggestion({
             observation: storedObservation,
             assessment,
+            priority: adjustedPriority,
           }));
           queued.push(storedSuggestion);
           this.audit.record({
