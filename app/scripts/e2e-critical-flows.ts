@@ -9,6 +9,7 @@ import { ToolPluginRegistry } from "../src/core/plugin-registry.js";
 import { CapabilityRegistry } from "../src/core/capability-registry.js";
 import { createBuiltInCapabilities } from "../src/core/capabilities/index.js";
 import { createDeclaredCapabilityCatalog } from "../src/core/capabilities/catalog.js";
+import { ActivePlanningSessionService } from "../src/core/active-planning-session-service.js";
 import type { Logger } from "../src/types/logger.js";
 import type { ActiveGoal } from "../src/core/goal-store.js";
 import type {
@@ -596,16 +597,24 @@ function buildCoreHarness(input?: {
     fetchPageExcerpt: async () => "Resumo executivo da pesquisa.",
   });
 
-  const googleWorkspaceDirectService = (core as any).createGoogleWorkspaceDirectService();
-  const externalIntelligenceDirectService = (core as any).createExternalIntelligenceDirectService();
-  const capabilityActionService = (core as any).createCapabilityActionService();
-  const operationalContextDirectService = (core as any).createOperationalContextDirectService();
+  const googleWorkspaceDirectService = (core as any).getGoogleWorkspaceDirectService();
+  const externalIntelligenceDirectService = (core as any).getExternalIntelligenceDirectService();
+  const capabilityActionService = (core as any).getCapabilityActionService();
+  const operationalContextDirectService = (core as any).getOperationalContextDirectService();
+  const activePlanningSession = new ActivePlanningSessionService({
+    capabilityPlanner: planner,
+    personalMemory: (core as any).personalMemory,
+    getExternalIntelligenceDirectService: () => externalIntelligenceDirectService,
+    getCapabilityActionService: () => capabilityActionService,
+  });
 
   (core as any).getGoogleWorkspaceDirectService = () => googleWorkspaceDirectService;
   (core as any).getExternalIntelligenceDirectService = () => externalIntelligenceDirectService;
   (core as any).getCapabilityActionService = () => capabilityActionService;
   (core as any).getOperationalContextDirectService = () => operationalContextDirectService;
-  (core as any).tryRunPreLocalExternalReasoning = async () => null;
+  (core as any).externalReasoningRunner = {
+    tryRunPreLocal: async () => null,
+  };
   (core as any).tryRunDirectRoutes = async (routeInput: {
     activeUserPrompt: string;
     requestId: string;
@@ -615,38 +624,38 @@ function buildCoreHarness(input?: {
     options?: any;
   }) => {
     const prompt = routeInput.activeUserPrompt;
-    return await (core as any).tryRunDirectMorningBrief(
-      prompt,
-      routeInput.requestId,
-      routeInput.requestLogger,
-      routeInput.orchestration,
-    )
-      ?? await (core as any).tryRunDirectGoogleEventMove(
-        prompt,
-        routeInput.requestId,
-        routeInput.requestLogger,
-        routeInput.orchestration,
-      )
-      ?? await (core as any).tryRunDirectGoogleEventDelete(
-        prompt,
-        routeInput.requestId,
-        routeInput.requestLogger,
-        routeInput.orchestration,
-      )
-      ?? await (core as any).tryRunDirectGoogleEventDraft(
-        prompt,
-        routeInput.requestId,
-        routeInput.requestLogger,
-        routeInput.orchestration,
-      )
-      ?? await (core as any).tryRunDirectCapabilityAwarePlanning(
-        prompt,
-        routeInput.requestId,
-        routeInput.requestLogger,
-        routeInput.orchestration,
-        routeInput.preferences,
-        routeInput.options,
-      )
+    return await operationalContextDirectService.tryRunMorningBrief({
+      userPrompt: prompt,
+      requestId: routeInput.requestId,
+      requestLogger: routeInput.requestLogger,
+      orchestration: routeInput.orchestration,
+    })
+      ?? await googleWorkspaceDirectService.tryRunGoogleEventMove({
+        userPrompt: prompt,
+        requestId: routeInput.requestId,
+        requestLogger: routeInput.requestLogger,
+        orchestration: routeInput.orchestration,
+      })
+      ?? await googleWorkspaceDirectService.tryRunGoogleEventDelete({
+        userPrompt: prompt,
+        requestId: routeInput.requestId,
+        requestLogger: routeInput.requestLogger,
+        orchestration: routeInput.orchestration,
+      })
+      ?? await googleWorkspaceDirectService.tryRunGoogleEventDraft({
+        userPrompt: prompt,
+        requestId: routeInput.requestId,
+        requestLogger: routeInput.requestLogger,
+        orchestration: routeInput.orchestration,
+      })
+      ?? await activePlanningSession.tryRunCapabilityAwarePlanning({
+        userPrompt: prompt,
+        requestId: routeInput.requestId,
+        requestLogger: routeInput.requestLogger,
+        orchestration: routeInput.orchestration,
+        preferences: routeInput.preferences,
+        options: routeInput.options,
+      })
       ?? null;
   };
   (core as any).contextAssembler = {
