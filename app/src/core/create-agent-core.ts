@@ -56,6 +56,13 @@ import { DecisionsLoader } from "./decisions-loader.js";
 import { ReasoningEngine } from "./reasoning-engine.js";
 import { UserModelTracker } from "./user-model-tracker.js";
 import { setSystemPromptContextProvider } from "./system-prompt.js";
+import { AutonomyAssessor } from "./autonomy/autonomy-assessor.js";
+import { AutonomyAuditStore } from "./autonomy/autonomy-audit-store.js";
+import { FeedbackStore } from "./autonomy/feedback-store.js";
+import { ObservationStore } from "./autonomy/observation-store.js";
+import { AutonomyLoop } from "./autonomy/autonomy-loop.js";
+import { AutonomyPolicy } from "./autonomy/autonomy-policy.js";
+import { SuggestionStore } from "./autonomy/suggestion-store.js";
 
 function withLlmProviderConfig(config: AppConfig, providerConfig: LlmProviderConfig): AppConfig {
   return {
@@ -193,6 +200,34 @@ export async function createAgentCore() {
     config.paths.userBehaviorModelDbPath,
     logger.child({ scope: "user-model-tracker" }),
   );
+  const autonomyObservations = new ObservationStore(
+    config.paths.autonomyDbPath,
+    logger.child({ scope: "autonomy-observations" }),
+  );
+  const autonomySuggestions = new SuggestionStore(
+    config.paths.autonomyDbPath,
+    logger.child({ scope: "autonomy-suggestions" }),
+  );
+  const autonomyAudit = new AutonomyAuditStore(
+    config.paths.autonomyDbPath,
+    logger.child({ scope: "autonomy-audit" }),
+  );
+  const autonomyFeedback = new FeedbackStore(
+    config.paths.autonomyDbPath,
+    logger.child({ scope: "autonomy-feedback" }),
+  );
+  const autonomyAssessor = new AutonomyAssessor();
+  const autonomyPolicy = new AutonomyPolicy();
+  const autonomyLoop = new AutonomyLoop({
+    collectors: [],
+    assessor: autonomyAssessor,
+    policy: autonomyPolicy,
+    observations: autonomyObservations,
+    suggestions: autonomySuggestions,
+    audit: autonomyAudit,
+    feedback: autonomyFeedback,
+    logger: logger.child({ scope: "autonomy-loop" }),
+  });
   const contentOps = new ContentOpsStore(
     config.paths.contentDbPath,
     logger.child({ scope: "content-ops" }),
@@ -479,5 +514,12 @@ export async function createAgentCore() {
     safeExec,
     reasoningEngine,
     userModelTracker,
+    autonomyObservations,
+    autonomySuggestions,
+    autonomyAudit,
+    autonomyFeedback,
+    autonomyAssessor,
+    autonomyPolicy,
+    autonomyLoop,
   };
 }
