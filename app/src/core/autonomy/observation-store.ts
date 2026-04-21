@@ -113,6 +113,15 @@ export class ObservationStore {
     return row ? mapObservation(row) : undefined;
   }
 
+  getById(id: string): AutonomyObservation | undefined {
+    const row = this.db.prepare(`
+      SELECT * FROM autonomy_observations
+      WHERE id = ?
+      LIMIT 1
+    `).get(id.trim()) as Record<string, unknown> | undefined;
+    return row ? mapObservation(row) : undefined;
+  }
+
   listRecent(limit = 20): AutonomyObservation[] {
     const safeLimit = Math.max(1, Math.min(200, Math.floor(limit)));
     const rows = this.db.prepare(`

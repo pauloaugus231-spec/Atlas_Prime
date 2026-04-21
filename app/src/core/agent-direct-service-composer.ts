@@ -108,6 +108,12 @@ import { looksLikeLowFrictionReadPrompt } from "./clarification-rules.js";
 import { interpretConversationTurn } from "./conversation-interpreter.js";
 import { PersonalOperationalMemoryStore } from "./personal-operational-memory.js";
 import { GoalStore } from "./goal-store.js";
+import { ObservationStore } from "./autonomy/observation-store.js";
+import { SuggestionStore } from "./autonomy/suggestion-store.js";
+import { AutonomyAuditStore } from "./autonomy/autonomy-audit-store.js";
+import { FeedbackStore } from "./autonomy/feedback-store.js";
+import { AutonomyLoop } from "./autonomy/autonomy-loop.js";
+import { AutonomyDirectService } from "./autonomy/autonomy-direct-service.js";
 import {
   selectRelevantLearnedPreferences,
   summarizeIdentityProfileForReasoning,
@@ -594,6 +600,11 @@ export interface AgentDirectServiceComposerDependencies {
   logger: Logger;
   fileAccess: FileAccessPolicy;
   client: LlmClient;
+  autonomyObservations: ObservationStore;
+  autonomySuggestions: SuggestionStore;
+  autonomyAudit: AutonomyAuditStore;
+  autonomyFeedback: FeedbackStore;
+  autonomyLoop: AutonomyLoop;
   capabilityPlanner: CapabilityPlanner;
   memory: OperationalMemoryStore;
   goalStore: GoalStore;
@@ -656,6 +667,28 @@ export class AgentDirectServiceComposer {
   private directServiceRegistry?: AgentDirectServiceRegistry;
 
   constructor(private readonly deps: AgentDirectServiceComposerDependencies) {}
+
+  private createAutonomyDirectService(): AutonomyDirectService {
+      const fallbackLogger: Logger = {
+        debug: () => undefined,
+        info: () => undefined,
+        warn: () => undefined,
+        error: () => undefined,
+        child: () => fallbackLogger,
+      };
+      const baseLogger = this.deps.logger ?? fallbackLogger;
+
+      return new AutonomyDirectService({
+        logger: baseLogger.child({ scope: "autonomy-direct-service" }),
+        loop: this.deps.autonomyLoop,
+        suggestions: this.deps.autonomySuggestions,
+        observations: this.deps.autonomyObservations,
+        audit: this.deps.autonomyAudit,
+        feedback: this.deps.autonomyFeedback,
+        buildBaseMessages: (userPrompt, orchestration, preferences) =>
+          buildBaseMessages(userPrompt, orchestration, preferences),
+      });
+  }
 
   private createGoogleWorkspaceDirectService(): GoogleWorkspaceDirectService {
       const fallbackLogger: Logger = {
@@ -1790,6 +1823,7 @@ export class AgentDirectServiceComposer {
   private getDirectServiceRegistry(): AgentDirectServiceRegistry {
     if (!this.directServiceRegistry) {
       this.directServiceRegistry = new AgentDirectServiceRegistry({
+        autonomyDirectService: () => this.createAutonomyDirectService(),
         googleWorkspaceDirectService: () => this.createGoogleWorkspaceDirectService(),
         externalIntelligenceDirectService: () => this.createExternalIntelligenceDirectService(),
         capabilityActionService: () => this.createCapabilityActionService(),
@@ -1811,6 +1845,10 @@ export class AgentDirectServiceComposer {
 
   getGoogleWorkspaceDirectService(): GoogleWorkspaceDirectService {
     return this.getDirectServiceRegistry().getGoogleWorkspaceDirectService();
+  }
+
+  getAutonomyDirectService(): AutonomyDirectService {
+    return this.getDirectServiceRegistry().getAutonomyDirectService();
   }
 
   getExternalIntelligenceDirectService(): ExternalIntelligenceDirectService {

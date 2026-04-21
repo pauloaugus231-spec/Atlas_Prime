@@ -13,6 +13,7 @@ import type { WorkflowOrchestratorStore } from "./workflow-orchestrator.js";
 import { analyzeCalendarInsights } from "./calendar-insights.js";
 import type { Logger } from "../types/logger.js";
 import type { ApprovalInboxItemRecord } from "../types/approval-inbox.js";
+import type { AutonomySuggestion } from "../types/autonomy.js";
 import type { BriefingConfig } from "../types/config.js";
 import type { MemoryEntityKind } from "../types/memory-entities.js";
 import type { PersonalOperationalProfile } from "../types/personal-operational-memory.js";
@@ -64,6 +65,14 @@ export interface ExecutiveBriefWorkflow {
   nextAction: string | null;
 }
 
+export interface ExecutiveBriefAutonomySuggestion {
+  id: string;
+  title: string;
+  body: string;
+  priority: number;
+  requiresApproval: boolean;
+}
+
 export interface ExecutiveBriefFocusItem {
   title: string;
   nextAction: string;
@@ -88,6 +97,7 @@ export interface ExecutiveMorningBrief {
   events: ExecutiveBriefEvent[];
   taskBuckets: ExecutiveBriefTaskBuckets;
   emails: ExecutiveBriefEmail[];
+  autonomySuggestions?: ExecutiveBriefAutonomySuggestion[];
   approvals: ApprovalInboxItemRecord[];
   workflows: ExecutiveBriefWorkflow[];
   focus: ExecutiveBriefFocusItem[];
@@ -125,6 +135,13 @@ export interface ExecutiveMorningBrief {
       tip: string;
     }>;
   };
+}
+
+interface SuggestionStoreLike {
+  listByStatus(
+    statuses: AutonomySuggestion["status"][],
+    limit?: number,
+  ): AutonomySuggestion[];
 }
 
 const EXECUTIVE_BRIEF_CALENDAR_ALIASES = new Set(["primary", "abordagem"]);
@@ -755,6 +772,7 @@ export class PersonalOSService {
     private readonly contextMemory: ContextMemoryService,
     private readonly personalMemory: PersonalOperationalMemoryStore,
     private readonly goalStore: { list: () => ActiveGoal[]; summarize: () => string },
+    private readonly autonomySuggestions?: Pick<SuggestionStoreLike, "listByStatus">,
   ) {
     this.weather = new WeatherService(this.logger.child({ scope: "weather" }));
   }
@@ -952,6 +970,17 @@ export class PersonalOSService {
     const motivation = pickDailyMotivation(this.timezone);
     const operationalMemory = this.contextMemory.summarize("operational", 4);
     const currentOperationalState = this.personalMemory.getOperationalState();
+    const activeAutonomySuggestions = (this.autonomySuggestions?.listByStatus(["queued", "notified", "approved", "snoozed"], 8) ?? [])
+      .filter((item) => item.status !== "dismissed" && item.status !== "executed" && item.status !== "failed")
+      .filter((item) => !item.snoozedUntil || item.snoozedUntil <= new Date().toISOString())
+      .slice(0, 2)
+      .map((item) => ({
+        id: item.id,
+        title: item.title,
+        body: item.body,
+        priority: item.priority,
+        requiresApproval: item.requiresApproval,
+      }));
     const activeGoals = this.goalStore.list()
       .slice(0, 4)
       .map((goal) => ({
@@ -1033,6 +1062,7 @@ export class PersonalOSService {
             weeklyPriorities: personalFocus,
           }),
       pendingAlerts: Array.from(new Set([
+        ...activeAutonomySuggestions.map((item) => `Revisar: ${item.title}`),
         ...approvals.slice(0, 4).map((item) => item.subject),
         ...activeOperationalSignals.map((item) => `Institucional: ${item.summary}`),
         ...currentOperationalState.pendingAlerts,
@@ -1062,6 +1092,7 @@ export class PersonalOSService {
       },
       recentContext: [
         ...activeGoals.slice(0, 2).map((goal) => `Objetivo ativo: ${goal.title}`),
+        ...activeAutonomySuggestions.map((item) => `Sugestão ativa: ${item.title}`),
         ...activeOperationalSignals.map((item) => `Institucional: ${item.summary}`),
         ...(mobilityAlerts.slice(0, 2)),
         ...(dayRecommendation ? [dayRecommendation] : []),
@@ -1075,6 +1106,7 @@ export class PersonalOSService {
       events: annotatedEvents,
       taskBuckets,
       emails,
+      autonomySuggestions: activeAutonomySuggestions,
       approvals,
       workflows,
       focus,

@@ -340,6 +340,7 @@ export async function createAgentCore() {
     contextMemory,
     personalMemory,
     goalStore,
+    autonomySuggestions,
   );
   const email = emailAccounts.getReader("primary");
   const emailWriter = emailAccounts.getWriter("primary");
@@ -459,6 +460,11 @@ export async function createAgentCore() {
     safeExec,
     reasoningEngine,
     userModelTracker,
+    autonomyObservations,
+    autonomySuggestions,
+    autonomyAudit,
+    autonomyFeedback,
+    autonomyLoop,
   );
   const actionDispatcher = new AssistantActionDispatcher(
     core,

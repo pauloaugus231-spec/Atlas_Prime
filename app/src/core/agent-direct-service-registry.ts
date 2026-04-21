@@ -1,3 +1,4 @@
+import type { AutonomyDirectService } from "./autonomy/autonomy-direct-service.js";
 import type { CapabilityActionService } from "./capability-action-service.js";
 import type { CapabilityInspectionService } from "./capability-inspection-service.js";
 import type { ContentDirectService } from "./content-direct-service.js";
@@ -13,6 +14,7 @@ import type { WorkflowDirectService } from "./workflow-direct-service.js";
 import type { WorkspaceMacDirectService } from "./workspace-mac-direct-service.js";
 
 export interface AgentDirectServiceRegistryFactories {
+  autonomyDirectService: () => AutonomyDirectService;
   googleWorkspaceDirectService: () => GoogleWorkspaceDirectService;
   externalIntelligenceDirectService: () => ExternalIntelligenceDirectService;
   capabilityActionService: () => CapabilityActionService;
@@ -49,6 +51,10 @@ export class AgentDirectServiceRegistry {
 
   getGoogleWorkspaceDirectService(): GoogleWorkspaceDirectService {
     return this.resolve("googleWorkspaceDirectService");
+  }
+
+  getAutonomyDirectService(): AutonomyDirectService {
+    return this.resolve("autonomyDirectService");
   }
 
   getExternalIntelligenceDirectService(): ExternalIntelligenceDirectService {

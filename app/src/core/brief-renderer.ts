@@ -1,5 +1,12 @@
 import type { ApprovalInboxItemRecord } from "../types/approval-inbox.js";
-import type { ExecutiveBriefEmail, ExecutiveBriefEvent, ExecutiveBriefTask, ExecutiveBriefWorkflow, ExecutiveMorningBrief } from "./personal-os.js";
+import type {
+  ExecutiveBriefAutonomySuggestion,
+  ExecutiveBriefEmail,
+  ExecutiveBriefEvent,
+  ExecutiveBriefTask,
+  ExecutiveBriefWorkflow,
+  ExecutiveMorningBrief,
+} from "./personal-os.js";
 
 const INSTITUTIONAL_TERMS = ["cras", "creas", "caps", "domiciliados"];
 const HIGH_PRIORITIES = new Set(["alta", "urgent", "urgente"]);
@@ -148,6 +155,16 @@ function formatApprovalLine(item: ApprovalInboxItemRecord): string {
   return `- ${truncate(item.subject, 84)}`;
 }
 
+function formatAutonomySuggestionLine(item: ExecutiveBriefAutonomySuggestion): string {
+  const priorityLabel = item.priority >= 0.8
+    ? "Alta"
+    : item.priority >= 0.55
+      ? "Média"
+      : "Baixa";
+  const suffix = item.requiresApproval ? " — exige aprovação" : "";
+  return `- ${priorityLabel}: ${truncate(item.title, 68)}${suffix}`;
+}
+
 function formatWorkflowLine(item: ExecutiveBriefWorkflow): string {
   const nextAction = item.nextAction ? ` — ${truncate(item.nextAction, 48)}` : "";
   return `- ${truncate(item.title, 60)}${nextAction}`;
@@ -196,6 +213,7 @@ export class BriefRenderer {
 
     addSection(lines, "Foco do dia", brief.dayRecommendation ? [`- ${truncate(brief.dayRecommendation, 110)}`] : [], maxLines);
     addSection(lines, "Próxima ação", brief.nextAction ? [`- ${truncate(brief.nextAction, 110)}`] : [], maxLines);
+    addSection(lines, "Pontos para revisar", (brief.autonomySuggestions ?? []).slice(0, 2).map(formatAutonomySuggestionLine), maxLines);
     addSection(lines, "Objetivos ativos", formatGoalLines(brief.goalSummary, 2), maxLines);
 
     addSection(
@@ -245,6 +263,7 @@ export class BriefRenderer {
 
     addSection(lines, "Foco do dia", brief.dayRecommendation ? [`- ${truncate(brief.dayRecommendation, 92)}`] : [], maxLines);
     addSection(lines, "Próxima ação", brief.nextAction ? [`- ${truncate(brief.nextAction, 92)}`] : [], maxLines);
+    addSection(lines, "Pontos para revisar", (brief.autonomySuggestions ?? []).slice(0, 1).map(formatAutonomySuggestionLine), maxLines);
     addSection(lines, "Objetivos ativos", formatGoalLines(brief.goalSummary, 1), maxLines);
 
     addSection(

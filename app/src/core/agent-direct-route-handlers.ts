@@ -172,6 +172,7 @@ import { WorkflowDirectService } from "./workflow-direct-service.js";
 import { ContentDirectService } from "./content-direct-service.js";
 import { ContentGenerationDirectService } from "./content-generation-direct-service.js";
 import { EmailDirectService } from "./email-direct-service.js";
+import { AutonomyDirectService } from "./autonomy/autonomy-direct-service.js";
 import {
   AgentDirectRouteService,
   type AgentDirectRouteServiceDependencies,
@@ -613,6 +614,7 @@ export interface AgentDirectRouteHandlersDependencies {
   getCapabilityInspectionService: () => CapabilityInspectionService;
   getKnowledgeProjectDirectService: () => KnowledgeProjectDirectService;
   getOperationalContextDirectService: () => OperationalContextDirectService;
+  getAutonomyDirectService: () => AutonomyDirectService;
   getMemoryContactDirectService: () => MemoryContactDirectService;
   getWorkflowDirectService: () => WorkflowDirectService;
   getOperationalReviewDirectService: () => OperationalReviewDirectService;
@@ -871,6 +873,13 @@ export class AgentDirectRouteHandlers {
           input.activeUserPrompt,
           input.requestId,
           input.orchestration,
+        ),
+        autonomyReview: async (input) => this.tryRunDirectAutonomyReview(
+          input.activeUserPrompt,
+          input.requestId,
+          input.requestLogger,
+          input.orchestration,
+          input.preferences,
         ),
         supportReview: async (input) => this.tryRunDirectSupportReview(
           input.activeUserPrompt,
@@ -1541,6 +1550,22 @@ export class AgentDirectRouteHandlers {
       requestId,
       requestLogger,
       orchestration,
+    });
+  }
+
+  async tryRunDirectAutonomyReview(
+    userPrompt: string,
+    requestId: string,
+    requestLogger: Logger,
+    orchestration: OrchestrationContext,
+    preferences: UserPreferences,
+  ): Promise<AgentRunResult | null> {
+    return this.deps.getAutonomyDirectService().tryRunAutonomyReview({
+      userPrompt,
+      requestId,
+      requestLogger,
+      orchestration,
+      preferences,
     });
   }
 

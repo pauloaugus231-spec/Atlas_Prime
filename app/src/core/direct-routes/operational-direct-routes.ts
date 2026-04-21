@@ -28,6 +28,7 @@ export interface WorkflowDirectRouteDependencies {
 
 export interface ReviewDirectRouteDependencies {
   memoryUpdateGuard: DirectRouteHandler;
+  autonomyReview: DirectRouteHandler;
   supportReview: DirectRouteHandler;
   followUpReview: DirectRouteHandler;
   inboxTriage: DirectRouteHandler;
@@ -70,6 +71,7 @@ export function buildReviewDirectRoutes(
 ): DirectRouteDefinition[] {
   return [
     defineDirectRoute("memory_update_guard", "review", deps.memoryUpdateGuard),
+    defineDirectRoute("autonomy_review", "review", deps.autonomyReview),
     defineDirectRoute("support_review", "review", deps.supportReview),
     defineDirectRoute("follow_up_review", "review", deps.followUpReview),
     defineDirectRoute("inbox_triage", "review", deps.inboxTriage),

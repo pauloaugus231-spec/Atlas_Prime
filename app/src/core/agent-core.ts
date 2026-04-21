@@ -105,6 +105,12 @@ import { looksLikeLowFrictionReadPrompt } from "./clarification-rules.js";
 import { interpretConversationTurn } from "./conversation-interpreter.js";
 import { PersonalOperationalMemoryStore } from "./personal-operational-memory.js";
 import { GoalStore } from "./goal-store.js";
+import { ObservationStore } from "./autonomy/observation-store.js";
+import { SuggestionStore } from "./autonomy/suggestion-store.js";
+import { AutonomyAuditStore } from "./autonomy/autonomy-audit-store.js";
+import { FeedbackStore } from "./autonomy/feedback-store.js";
+import { AutonomyLoop } from "./autonomy/autonomy-loop.js";
+import { AutonomyDirectService } from "./autonomy/autonomy-direct-service.js";
 import {
   selectRelevantLearnedPreferences,
   summarizeIdentityProfileForReasoning,
@@ -654,6 +660,11 @@ export class AgentCore {
     private readonly safeExec: SafeExecService,
     private readonly reasoningEngine?: ReasoningEngine,
     private readonly userModelTracker?: UserModelTracker,
+    private readonly autonomyObservations?: ObservationStore,
+    private readonly autonomySuggestions?: SuggestionStore,
+    private readonly autonomyAudit?: AutonomyAuditStore,
+    private readonly autonomyFeedback?: FeedbackStore,
+    private readonly autonomyLoop?: AutonomyLoop,
   ) {
     this.createWebResearchService = (logger) => new WebResearchService(logger);
     this.capabilityPlanner = new CapabilityPlanner(
@@ -776,6 +787,11 @@ export class AgentCore {
       logger: this.logger,
       fileAccess: this.fileAccess,
       client: this.client,
+      autonomyObservations: this.autonomyObservations!,
+      autonomySuggestions: this.autonomySuggestions!,
+      autonomyAudit: this.autonomyAudit!,
+      autonomyFeedback: this.autonomyFeedback!,
+      autonomyLoop: this.autonomyLoop!,
       capabilityPlanner: this.capabilityPlanner,
       memory: this.memory,
       goalStore: this.goalStore,
@@ -845,6 +861,7 @@ export class AgentCore {
       getCapabilityInspectionService: () => this.getCapabilityInspectionService(),
       getKnowledgeProjectDirectService: () => this.getKnowledgeProjectDirectService(),
       getOperationalContextDirectService: () => this.getOperationalContextDirectService(),
+      getAutonomyDirectService: () => this.getAutonomyDirectService(),
       getMemoryContactDirectService: () => this.getMemoryContactDirectService(),
       getWorkflowDirectService: () => this.getWorkflowDirectService(),
       getOperationalReviewDirectService: () => this.getOperationalReviewDirectService(),
@@ -889,6 +906,11 @@ export class AgentCore {
         logger: this.logger,
         fileAccess: this.fileAccess,
         client: this.client,
+        autonomyObservations: this.autonomyObservations!,
+        autonomySuggestions: this.autonomySuggestions!,
+        autonomyAudit: this.autonomyAudit!,
+        autonomyFeedback: this.autonomyFeedback!,
+        autonomyLoop: this.autonomyLoop!,
         capabilityPlanner: this.capabilityPlanner,
         memory: this.memory,
         goalStore: this.goalStore,
@@ -963,6 +985,10 @@ export class AgentCore {
 
   private getOperationalContextDirectService(): OperationalContextDirectService {
     return this.getDirectServiceComposer().getOperationalContextDirectService();
+  }
+
+  private getAutonomyDirectService(): AutonomyDirectService {
+    return this.getDirectServiceComposer().getAutonomyDirectService();
   }
 
   private getMemoryContactDirectService(): MemoryContactDirectService {
