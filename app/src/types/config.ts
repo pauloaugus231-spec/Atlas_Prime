@@ -8,6 +8,7 @@ export interface AppPathsConfig {
   authorizedProjectsDir: string;
   builtInPluginsDir: string;
   memoryDbPath: string;
+  goalDbPath: string;
   preferencesDbPath: string;
   growthDbPath: string;
   contentDbPath: string;

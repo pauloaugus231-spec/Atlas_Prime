@@ -795,6 +795,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       authorizedProjectsDir,
       builtInPluginsDir,
       memoryDbPath: path.join(workspaceDir, ".agent-state", "operational-memory.sqlite"),
+      goalDbPath: path.join(workspaceDir, ".agent-state", "active-goals.sqlite"),
       preferencesDbPath: path.join(workspaceDir, ".agent-state", "user-preferences.sqlite"),
       growthDbPath: path.join(workspaceDir, ".agent-state", "growth-ops.sqlite"),
       contentDbPath: path.join(workspaceDir, ".agent-state", "content-ops.sqlite"),

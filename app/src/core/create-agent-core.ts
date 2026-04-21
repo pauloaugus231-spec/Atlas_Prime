@@ -1,3 +1,4 @@
+import path from "node:path";
 import { loadConfig } from "../config/load-config.js";
 import { EmailAccountsService } from "../integrations/email/email-accounts.js";
 import { ExternalReasoningClient } from "../integrations/external-reasoning/external-reasoning-client.js";
@@ -50,6 +51,9 @@ import { PersonalOperationalMemoryStore } from "./personal-operational-memory.js
 import { AssistantActionDispatcher } from "./action-dispatcher.js";
 import { DraftApprovalService } from "./draft-approval-service.js";
 import { RequestOrchestrator } from "./request-orchestrator.js";
+import { GoalStore } from "./goal-store.js";
+import { DecisionsLoader } from "./decisions-loader.js";
+import { setSystemPromptContextProvider } from "./system-prompt.js";
 
 function withLlmProviderConfig(config: AppConfig, providerConfig: LlmProviderConfig): AppConfig {
   return {
@@ -160,6 +164,10 @@ export async function createAgentCore() {
   const memory = new OperationalMemoryStore(
     config.paths.memoryDbPath,
     logger.child({ scope: "operational-memory" }),
+  );
+  const goalStore = new GoalStore(
+    config.paths.goalDbPath,
+    logger.child({ scope: "goal-store" }),
   );
   const growthOps = new GrowthOpsStore(
     config.paths.growthDbPath,
@@ -313,6 +321,23 @@ export async function createAgentCore() {
     createDeclaredCapabilityCatalog(),
     logger.child({ scope: "capability-registry" }),
   );
+  const decisionsLoader = new DecisionsLoader(
+    fileAccess,
+    logger.child({ scope: "decisions-loader" }),
+    path.resolve(config.paths.appHome, "..", "DECISIONS.md"),
+  );
+  const recentDecisionsSummary = await decisionsLoader.summarize();
+  setSystemPromptContextProvider(() => {
+    const goals = goalStore.list();
+    return {
+      goalSummary: goals.length > 0 ? goalStore.summarize() : undefined,
+      recentDecisions: recentDecisionsSummary,
+      availableCapabilities: capabilityRegistry
+        .listCapabilities()
+        .map((capability) => capability.name)
+        .sort((left, right) => left.localeCompare(right)),
+    };
+  });
   const client: LlmClient = createConfiguredLlmClient(config, logger);
   const intentRouter = new IntentRouter();
   const clarificationEngine = new ClarificationEngine(
@@ -390,6 +415,7 @@ export async function createAgentCore() {
     config,
     logger,
     memory,
+    goalStore,
     preferences,
     personalMemory,
     contentOps,

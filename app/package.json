@@ -32,6 +32,7 @@
     "eval:monitored-alert-continuity": "tsx scripts/eval-monitored-alert-continuity.ts",
     "eval:llm-fallback": "tsx scripts/eval-llm-fallback.ts",
     "eval:active-goals": "tsx scripts/eval-active-goal-context.ts",
+    "eval:system-prompt-upgrade": "npx tsx scripts/eval-system-prompt-upgrade.ts",
     "eval:morning-brief": "tsx scripts/eval-morning-brief-format.ts",
     "eval:telegram-typing": "tsx scripts/eval-telegram-typing-session.ts",
     "eval:telegram-phase2": "tsx scripts/eval-telegram-phase2.ts",
