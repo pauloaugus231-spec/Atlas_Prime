@@ -283,6 +283,7 @@ export async function createAgentCore() {
     memoryEntities,
     contextMemory,
     personalMemory,
+    goalStore,
   );
   const email = emailAccounts.getReader("primary");
   const emailWriter = emailAccounts.getWriter("primary");
@@ -326,12 +327,11 @@ export async function createAgentCore() {
     logger.child({ scope: "decisions-loader" }),
     path.resolve(config.paths.appHome, "..", "DECISIONS.md"),
   );
-  const recentDecisionsSummary = await decisionsLoader.summarize();
   setSystemPromptContextProvider(() => {
     const goals = goalStore.list();
     return {
       goalSummary: goals.length > 0 ? goalStore.summarize() : undefined,
-      recentDecisions: recentDecisionsSummary,
+      recentDecisions: decisionsLoader.summarizeSync(),
       availableCapabilities: capabilityRegistry
         .listCapabilities()
         .map((capability) => capability.name)
@@ -358,6 +358,10 @@ export async function createAgentCore() {
     client,
     workflows,
     logger.child({ scope: "plan-builder" }),
+    () => {
+      const goals = goalStore.list();
+      return goals.length > 0 ? goalStore.summarize() : undefined;
+    },
   );
   const core = new AgentCore(
     config,
@@ -367,6 +371,7 @@ export async function createAgentCore() {
     capabilityRegistry,
     registry,
     memory,
+    goalStore,
     preferences,
     personalMemory,
     growthOps,

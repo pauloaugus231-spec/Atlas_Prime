@@ -105,6 +105,7 @@ import { resolveActionAutonomyRule } from "./action-autonomy-policy.js";
 import { looksLikeLowFrictionReadPrompt } from "./clarification-rules.js";
 import { interpretConversationTurn } from "./conversation-interpreter.js";
 import { PersonalOperationalMemoryStore } from "./personal-operational-memory.js";
+import { GoalStore } from "./goal-store.js";
 import {
   selectRelevantLearnedPreferences,
   summarizeIdentityProfileForReasoning,
@@ -4662,6 +4663,7 @@ export function buildMorningBriefReply(
   const topOperationalSignal = input.operationalSignals?.[0];
   const pauloConflicts = input.events.filter((event) => event.owner === "paulo" && event.hasConflict);
   const focusLabel = truncateBriefText(options?.profile?.savedFocus[0] ?? input.personalFocus[0] ?? "", 110);
+  const topGoal = input.activeGoals?.[0];
   const groupedEvents = {
     manha: input.events.filter((event) => classifyBriefPeriod(event.start, input.timezone) === "manha"),
     tarde: input.events.filter((event) => classifyBriefPeriod(event.start, input.timezone) === "tarde"),
@@ -4718,6 +4720,13 @@ export function buildMorningBriefReply(
   if (focusLabel) {
     lines.push(`- Foco de base: ${focusLabel}`);
   }
+  if (topGoal) {
+    const goalMeta = [
+      topGoal.deadline ? `prazo ${topGoal.deadline}` : undefined,
+      topGoal.progress != null ? `${Math.round(topGoal.progress * 100)}%` : undefined,
+    ].filter(Boolean).join(" | ");
+    lines.push(`- Objetivo ativo puxando a semana: ${truncateBriefText(topGoal.title, 96)}${goalMeta ? ` | ${goalMeta}` : ""}`);
+  }
 
   lines.push("", "Atenção principal:");
   lines.push(`- ${mainAttention}`);
@@ -4732,6 +4741,9 @@ export function buildMorningBriefReply(
   }
   if (nextTask) {
     lines.push(`- Tarefa que pode te travar: ${truncateBriefText(nextTask.title)} — ${formatTaskDue(nextTask, input.timezone)}`);
+  }
+  if (!compact && input.activeGoals && input.activeGoals.length > 1) {
+    lines.push(`- Você está com ${input.activeGoals.length} objetivos ativos; vale proteger foco para não dispersar.`);
   }
   if (highestEmail) {
     lines.push(`- Email que merece triagem: ${truncateBriefText(highestEmail.subject || "(sem assunto)")} — ${summarizeEmailSender(highestEmail.from)}`);
@@ -4790,6 +4802,9 @@ export function buildMorningBriefReply(
   }
   if (input.nextAction) {
     lines.push(`- Próxima ação: ${truncateBriefText(input.nextAction, 110)}`);
+  }
+  if (!compact && input.goalSummary) {
+    lines.push(`- Meta de fundo: ${truncateBriefText(input.goalSummary.replace(/^Objetivos:\s*/i, ""), 140)}`);
   }
   if (compact && options?.profile?.attire.carryItems.length) {
     lines.push(`- Levar: ${options.profile.attire.carryItems.slice(0, 4).join(", ")}`);
@@ -5790,9 +5805,13 @@ function buildOperationalPlanContract(
   const topApproval = rankedApprovals[0];
   const topEmail = brief.emails[0];
   const topOverdueTask = brief.taskBuckets.overdue[0];
+  const topGoal = brief.activeGoals?.[0];
 
   if (brief.events.length > 0) {
     currentSituation.push(`${brief.events.length} compromisso(s) no dia`);
+  }
+  if (brief.goalSummary) {
+    currentSituation.push(`objetivos ativos: ${brief.goalSummary.replace(/^Objetivos:\s*/i, "")}`);
   }
   if (nextPauloEvent) {
     currentSituation.push(`seu próximo compromisso: ${nextPauloEvent.summary}`);
@@ -5828,6 +5847,9 @@ function buildOperationalPlanContract(
   if (conflictEvents[0]) {
     priorities.push(`resolver o conflito de agenda em ${conflictEvents[0].summary}`);
   }
+  if (topGoal) {
+    priorities.push(`proteger avanço do objetivo ativo: ${topGoal.title}`);
+  }
   if (nextPauloEvent) {
     priorities.push(`${nextPauloEvent.prepHint} para ${nextPauloEvent.summary}`);
   }
@@ -5849,6 +5871,9 @@ function buildOperationalPlanContract(
 
   if (conflictEvents.length > 0) {
     actionPlan.push("resolver primeiro os conflitos da sua agenda para não travar o restante do dia");
+  }
+  if (topGoal) {
+    actionPlan.push(`alinhar a execução de hoje ao objetivo ativo ${topGoal.title}`);
   }
   if (includesAny(normalized, ["aprovacoes", "aprovações", "approval"]) && topApproval) {
     actionPlan.push("revisar primeiro as aprovações que destravam hoje");
@@ -9540,6 +9565,7 @@ export class AgentCore {
     private readonly capabilityRegistry: CapabilityRegistry,
     private readonly pluginRegistry: ToolPluginRegistry,
     private readonly memory: OperationalMemoryStore,
+    private readonly goalStore: GoalStore,
     private readonly preferences: UserPreferencesStore,
     private readonly personalMemory: PersonalOperationalMemoryStore,
     private readonly growthOps: GrowthOpsStore,
@@ -10102,6 +10128,24 @@ export class AgentCore {
         findLearnedPreferences: () => [] as LearnedPreference[],
         findItems: () => [] as PersonalOperationalMemoryItem[],
       };
+      const fallbackGoalStore = {
+        list: () => [] as import("./goal-store.js").ActiveGoal[],
+        get: () => undefined as import("./goal-store.js").ActiveGoal | undefined,
+        upsert: (goal: Omit<import("./goal-store.js").ActiveGoal, "id" | "createdAt" | "updatedAt"> & { id?: string }) => ({
+          id: goal.id ?? "fallback-goal",
+          title: goal.title,
+          description: goal.description,
+          metric: goal.metric,
+          deadline: goal.deadline,
+          progress: goal.progress,
+          domain: goal.domain,
+          createdAt: new Date(0).toISOString(),
+          updatedAt: new Date(0).toISOString(),
+        }),
+        updateProgress: () => undefined as import("./goal-store.js").ActiveGoal | undefined,
+        remove: () => false,
+        summarize: () => "Objetivos: nenhum ativo.",
+      };
       const fallbackExecuteToolDirect = async () => ({
         requestId: "fallback-operational-context",
         content: "",
@@ -10115,6 +10159,7 @@ export class AgentCore {
         personalOs: this.personalOs ?? fallbackPersonalOs,
         preferences: this.preferences ?? fallbackPreferencesStore,
         personalMemory: this.personalMemory ?? fallbackPersonalMemory,
+        goalStore: this.goalStore ?? fallbackGoalStore,
         executeToolDirect: (toolName, rawArguments) =>
           this.executeToolDirect ? this.executeToolDirect(toolName, rawArguments) : fallbackExecuteToolDirect(),
         buildBaseMessages: (userPrompt, orchestration, preferences) =>
@@ -10983,6 +11028,30 @@ export class AgentCore {
           input.activeUserPrompt,
           input.requestId,
           input.orchestration,
+        ),
+        activeGoalsList: async (input) => this.tryRunDirectActiveGoalsList(
+          input.activeUserPrompt,
+          input.requestId,
+          input.orchestration,
+          input.preferences,
+        ),
+        activeGoalSave: async (input) => this.tryRunDirectActiveGoalSave(
+          input.activeUserPrompt,
+          input.requestId,
+          input.orchestration,
+          input.preferences,
+        ),
+        activeGoalProgressUpdate: async (input) => this.tryRunDirectActiveGoalProgressUpdate(
+          input.activeUserPrompt,
+          input.requestId,
+          input.orchestration,
+          input.preferences,
+        ),
+        activeGoalDelete: async (input) => this.tryRunDirectActiveGoalDelete(
+          input.activeUserPrompt,
+          input.requestId,
+          input.orchestration,
+          input.preferences,
         ),
         personalMemoryList: async (input) => this.tryRunDirectPersonalMemoryList(
           input.activeUserPrompt,
@@ -13393,6 +13462,62 @@ export class AgentCore {
     preferences: UserPreferences,
   ): Promise<AgentRunResult | null> {
     return this.getOperationalContextDirectService().tryRunProfileUpdate({
+      userPrompt,
+      requestId,
+      orchestration,
+      preferences,
+    });
+  }
+
+  private async tryRunDirectActiveGoalsList(
+    userPrompt: string,
+    requestId: string,
+    orchestration: OrchestrationContext,
+    preferences: UserPreferences,
+  ): Promise<AgentRunResult | null> {
+    return this.getOperationalContextDirectService().tryRunGoalList({
+      userPrompt,
+      requestId,
+      orchestration,
+      preferences,
+    });
+  }
+
+  private async tryRunDirectActiveGoalSave(
+    userPrompt: string,
+    requestId: string,
+    orchestration: OrchestrationContext,
+    preferences: UserPreferences,
+  ): Promise<AgentRunResult | null> {
+    return this.getOperationalContextDirectService().tryRunGoalSave({
+      userPrompt,
+      requestId,
+      orchestration,
+      preferences,
+    });
+  }
+
+  private async tryRunDirectActiveGoalProgressUpdate(
+    userPrompt: string,
+    requestId: string,
+    orchestration: OrchestrationContext,
+    preferences: UserPreferences,
+  ): Promise<AgentRunResult | null> {
+    return this.getOperationalContextDirectService().tryRunGoalProgressUpdate({
+      userPrompt,
+      requestId,
+      orchestration,
+      preferences,
+    });
+  }
+
+  private async tryRunDirectActiveGoalDelete(
+    userPrompt: string,
+    requestId: string,
+    orchestration: OrchestrationContext,
+    preferences: UserPreferences,
+  ): Promise<AgentRunResult | null> {
+    return this.getOperationalContextDirectService().tryRunGoalDelete({
       userPrompt,
       requestId,
       orchestration,

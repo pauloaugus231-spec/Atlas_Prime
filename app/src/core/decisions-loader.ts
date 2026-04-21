@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import type { Logger } from "../types/logger.js";
@@ -77,8 +77,47 @@ export class DecisionsLoader {
     }
   }
 
+  loadSync(): string | undefined {
+    const resolvedPath = this.resolveReadableDecisionsPath();
+    if (!resolvedPath) {
+      return undefined;
+    }
+
+    try {
+      const content = readFileSync(resolvedPath, "utf8");
+      return content.trim() || undefined;
+    } catch (error) {
+      if (isFileNotFoundError(error)) {
+        return undefined;
+      }
+
+      this.logger.warn("Unable to read decisions file synchronously", {
+        path: resolvedPath,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return undefined;
+    }
+  }
+
   async summarize(): Promise<string | undefined> {
     const content = await this.load();
+    if (!content) {
+      return undefined;
+    }
+
+    const entries = parseDecisionEntries(content);
+    if (entries.length === 0) {
+      return undefined;
+    }
+
+    return entries
+      .slice(-5)
+      .map((entry, index) => `(${index + 1}) ${entry.heading} — ${entry.body}`)
+      .join(" | ");
+  }
+
+  summarizeSync(): string | undefined {
+    const content = this.loadSync();
     if (!content) {
       return undefined;
     }

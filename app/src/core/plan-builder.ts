@@ -21,6 +21,7 @@ export class WorkflowPlanBuilderService {
     private readonly client: LlmClient,
     private readonly workflows: WorkflowOrchestratorStore,
     private readonly logger: Logger,
+    private readonly getGoalSummary?: () => string | undefined,
   ) {}
 
   async createPlanFromPrompt(
@@ -28,7 +29,8 @@ export class WorkflowPlanBuilderService {
     orchestration: OrchestrationContext,
     requestLogger?: Logger,
   ): Promise<WorkflowPlanRecord> {
-    const fallbackInput = this.buildFallbackWorkflowPlanInput(userPrompt, orchestration);
+    const goalSummary = this.getGoalSummary?.();
+    const fallbackInput = this.buildFallbackWorkflowPlanInput(userPrompt, orchestration, goalSummary);
 
     try {
       const response = await this.client.chat({
@@ -53,6 +55,7 @@ export class WorkflowPlanBuilderService {
               `Domínio principal atual: ${orchestration.route.primaryDomain}`,
               `Domínios secundários: ${orchestration.route.secondaryDomains.join(", ") || "nenhum"}`,
               `Modo de ação: ${orchestration.route.actionMode}`,
+              ...(goalSummary ? [`Objetivos ativos do usuário: ${goalSummary}`] : []),
             ].join("\n"),
           },
         ],
@@ -148,6 +151,7 @@ export class WorkflowPlanBuilderService {
   private buildFallbackWorkflowPlanInput(
     userPrompt: string,
     orchestration: OrchestrationContext,
+    goalSummary?: string,
   ): CreateWorkflowPlanInput {
     const primary = orchestration.route.primaryDomain === "orchestrator"
       ? "analista_negocios_growth"
@@ -158,7 +162,9 @@ export class WorkflowPlanBuilderService {
       title: `Workflow Atlas Prime: ${userPrompt.slice(0, 72).trim()}`,
       objective: userPrompt,
       executiveSummary:
-        "Plano orquestrado para decompor o objetivo em pesquisa, análise, execução, revisão e entrega com responsáveis claros.",
+        goalSummary
+          ? `Plano orquestrado para decompor o objetivo em pesquisa, análise, execução, revisão e entrega com responsáveis claros, alinhado aos objetivos ativos: ${goalSummary}.`
+          : "Plano orquestrado para decompor o objetivo em pesquisa, análise, execução, revisão e entrega com responsáveis claros.",
       status: "draft",
       primaryDomain: primary,
       secondaryDomains: secondary,
@@ -173,7 +179,9 @@ export class WorkflowPlanBuilderService {
           title: "Descoberta e contexto",
           ownerDomain: "analista_negocios_growth",
           taskType: "research",
-          objective: "Levantar contexto, restrições, público e sinais de valor.",
+          objective: goalSummary
+            ? `Levantar contexto, restrições, público e sinais de valor, conectando o plano aos objetivos ativos: ${goalSummary}.`
+            : "Levantar contexto, restrições, público e sinais de valor.",
           deliverable: "brief de contexto",
           successCriteria: "Contexto e metas organizados com lacunas identificadas.",
           suggestedTools: ["web_search", "list_memory_items", "list_recent_emails"],

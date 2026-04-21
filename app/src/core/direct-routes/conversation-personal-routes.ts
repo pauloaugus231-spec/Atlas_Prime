@@ -25,6 +25,10 @@ export interface MemoryAndPreferenceDirectRouteDependencies {
   personalProfileUpdate: DirectRouteHandler;
   personalProfileDelete: DirectRouteHandler;
   userPreferences: DirectRouteHandler;
+  activeGoalsList: DirectRouteHandler;
+  activeGoalSave: DirectRouteHandler;
+  activeGoalProgressUpdate: DirectRouteHandler;
+  activeGoalDelete: DirectRouteHandler;
   personalMemoryList: DirectRouteHandler;
   personalMemorySave: DirectRouteHandler;
   personalMemoryUpdate: DirectRouteHandler;
@@ -79,6 +83,14 @@ export function buildMemoryAndPreferenceDirectRoutes(
       deps.personalProfileDelete,
     ),
     defineDirectRoute("user_preferences", "memory-preferences", deps.userPreferences),
+    defineDirectRoute("active_goals_list", "memory-preferences", deps.activeGoalsList),
+    defineDirectRoute("active_goal_save", "memory-preferences", deps.activeGoalSave),
+    defineDirectRoute(
+      "active_goal_progress_update",
+      "memory-preferences",
+      deps.activeGoalProgressUpdate,
+    ),
+    defineDirectRoute("active_goal_delete", "memory-preferences", deps.activeGoalDelete),
     defineDirectRoute("personal_memory_list", "memory-preferences", deps.personalMemoryList),
     defineDirectRoute("personal_memory_save", "memory-preferences", deps.personalMemorySave),
     defineDirectRoute(

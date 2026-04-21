@@ -13,6 +13,7 @@ import type {
 } from "../types/personal-operational-memory.js";
 import type { OperationalState } from "../types/operational-state.js";
 import type { UpdateUserPreferencesInput, UserPreferences } from "../types/user-preferences.js";
+import type { ActiveGoal } from "./goal-store.js";
 
 interface GoogleWorkspaceStatusLike {
   ready: boolean;
@@ -46,6 +47,15 @@ interface PersonalMemoryLike {
   getOperationalState: () => OperationalState;
   findLearnedPreferences: (query: string, limit?: number) => LearnedPreference[];
   findItems: (query: string, limit?: number) => PersonalOperationalMemoryItem[];
+}
+
+interface GoalStoreLike {
+  list: () => ActiveGoal[];
+  get: (id: string) => ActiveGoal | undefined;
+  upsert: (goal: Omit<ActiveGoal, "id" | "createdAt" | "updatedAt"> & { id?: string }) => ActiveGoal;
+  updateProgress: (id: string, progress: number) => ActiveGoal | undefined;
+  remove: (id: string) => boolean;
+  summarize: () => string;
 }
 
 interface ToolExecutionResult {
@@ -145,6 +155,7 @@ export interface OperationalContextDirectServiceDependencies {
   personalOs: PersonalOsLike;
   preferences: PreferencesLike;
   personalMemory: PersonalMemoryLike;
+  goalStore: GoalStoreLike;
   executeToolDirect: (toolName: string, rawArguments: unknown) => Promise<ToolExecutionResult>;
   buildBaseMessages: (
     userPrompt: string,
@@ -160,6 +171,206 @@ interface OperationalContextDirectInput {
   orchestration: OrchestrationContext;
   preferences?: UserPreferences;
   requestLogger?: Logger;
+}
+
+function normalizePrompt(value: string): string {
+  return value
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function includesAny(value: string, tokens: string[]): boolean {
+  return tokens.some((token) => value.includes(token));
+}
+
+function isGoalListPrompt(prompt: string): boolean {
+  const normalized = normalizePrompt(prompt);
+  return includesAny(normalized, [
+    "mostre meus objetivos",
+    "mostrar meus objetivos",
+    "meus objetivos ativos",
+    "objetivos ativos",
+    "quais sao meus objetivos",
+    "quais sao minhas metas",
+    "liste meus objetivos",
+    "listar meus objetivos",
+    "liste minhas metas",
+    "minhas metas ativas",
+  ]);
+}
+
+function isGoalSavePrompt(prompt: string): boolean {
+  const normalized = normalizePrompt(prompt);
+  return includesAny(normalized, [
+    "salve meu objetivo",
+    "salvar meu objetivo",
+    "registre meu objetivo",
+    "registre minha meta",
+    "adicione meu objetivo",
+    "adicione uma meta",
+    "crie um objetivo",
+    "crie uma meta",
+    "defina meu objetivo",
+    "defina minha meta",
+    "meu objetivo agora e",
+    "meu objetivo e",
+    "minha meta agora e",
+    "minha meta e",
+  ]);
+}
+
+function isGoalProgressUpdatePrompt(prompt: string): boolean {
+  const normalized = normalizePrompt(prompt);
+  return /\b\d{1,3}%/.test(normalized) && includesAny(normalized, [
+    "objetivo",
+    "meta",
+    "progresso",
+  ]);
+}
+
+function isGoalDeletePrompt(prompt: string): boolean {
+  const normalized = normalizePrompt(prompt);
+  return includesAny(normalized, [
+    "remova meu objetivo",
+    "remover meu objetivo",
+    "apague meu objetivo",
+    "delete meu objetivo",
+    "exclua meu objetivo",
+    "remova minha meta",
+    "apague minha meta",
+    "delete minha meta",
+    "exclua minha meta",
+  ]);
+}
+
+function parseIsoDateCandidate(value: string): string | undefined {
+  const isoMatch = value.match(/\b(20\d{2}-\d{2}-\d{2})\b/);
+  if (isoMatch?.[1]) {
+    return isoMatch[1];
+  }
+
+  const brMatch = value.match(/\b(\d{1,2})\/(\d{1,2})(?:\/(20\d{2}))?\b/);
+  if (!brMatch) {
+    return undefined;
+  }
+
+  const day = Number.parseInt(brMatch[1] ?? "", 10);
+  const month = Number.parseInt(brMatch[2] ?? "", 10);
+  const year = Number.parseInt(brMatch[3] ?? String(new Date().getFullYear()), 10);
+  if (!Number.isFinite(day) || !Number.isFinite(month) || !Number.isFinite(year)) {
+    return undefined;
+  }
+
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (
+    date.getUTCFullYear() !== year
+    || date.getUTCMonth() !== month - 1
+    || date.getUTCDate() !== day
+  ) {
+    return undefined;
+  }
+
+  return `${year.toString().padStart(4, "0")}-${month.toString().padStart(2, "0")}-${day.toString().padStart(2, "0")}`;
+}
+
+function extractGoalProgress(prompt: string): number | undefined {
+  const match = prompt.match(/\b(\d{1,3})%/);
+  if (!match?.[1]) {
+    return undefined;
+  }
+  const value = Number.parseInt(match[1], 10);
+  if (!Number.isFinite(value)) {
+    return undefined;
+  }
+  return Math.max(0, Math.min(100, value)) / 100;
+}
+
+function inferGoalDomain(statement: string): ActiveGoal["domain"] {
+  const normalized = normalizePrompt(statement);
+  if (includesAny(normalized, ["receita", "cliente", "clientes", "mrr", "venda", "faturamento", "saas"])) {
+    return "revenue";
+  }
+  if (includesAny(normalized, ["produto", "mvp", "funcionalidade", "feature", "app", "plataforma"])) {
+    return "product";
+  }
+  if (includesAny(normalized, ["conteudo", "conteudo", "youtube", "instagram", "tiktok", "canal"])) {
+    return "content";
+  }
+  if (includesAny(normalized, ["rotina", "saude", "família", "familia", "pessoal", "estudo", "prova"])) {
+    return "personal";
+  }
+  if (includesAny(normalized, ["operacao", "operação", "processo", "equipe", "agenda", "monitoramento"])) {
+    return "ops";
+  }
+  return "other";
+}
+
+function extractGoalStatement(prompt: string): string | undefined {
+  const cleaned = prompt
+    .replace(/^\s*(?:salve|registre|adicione|crie|defina)\s+(?:um\s+|uma\s+|meu\s+|minha\s+)?(?:objetivo|meta)\s*(?:de|para|:)?\s*/i, "")
+    .replace(/^\s*minha\s+meta(?:\s+agora)?\s+[ée]\s*/i, "")
+    .replace(/^\s*meu\s+objetivo(?:\s+agora)?\s+[ée]\s*/i, "")
+    .replace(/[.]+$/g, "")
+    .trim();
+  return cleaned || undefined;
+}
+
+function extractGoalTitle(statement: string): string | undefined {
+  const stripped = statement
+    .replace(/\b(?:ate|até)\s+\d{1,2}\/\d{1,2}(?:\/20\d{2})?\b.*$/i, "")
+    .replace(/\b(?:ate|até)\s+20\d{2}-\d{2}-\d{2}\b.*$/i, "")
+    .replace(/\b(?:com|de)\s+\d{1,3}%\b.*$/i, "")
+    .replace(/\bprogresso\s+\d{1,3}%\b.*$/i, "")
+    .trim();
+  return stripped || undefined;
+}
+
+function extractGoalMetric(statement: string): string | undefined {
+  const metricMatch = statement.match(/\b(?:metrica|métrica|medida|indicador)\s*:\s*(.+)$/i);
+  return metricMatch?.[1]?.trim() || undefined;
+}
+
+function resolveGoalReference(prompt: string): string | undefined {
+  const hashMatch = prompt.match(/#([a-z0-9-]{4,36})/i);
+  if (hashMatch?.[1]) {
+    return hashMatch[1].trim();
+  }
+
+  const cleaned = prompt
+    .replace(/^\s*(?:remova|remover|apague|delete|exclua|atualize|marque|ajuste|defina)\s+(?:meu\s+|minha\s+)?(?:objetivo|meta)\s*/i, "")
+    .replace(/\b(?:para|com|em)\s+\d{1,3}%.*$/i, "")
+    .trim();
+  return cleaned || undefined;
+}
+
+function findGoalByReference(goals: ActiveGoal[], reference: string): ActiveGoal[] {
+  const normalized = normalizePrompt(reference);
+  return goals.filter((goal) =>
+    goal.id.toLowerCase() === normalized
+    || goal.id.toLowerCase().startsWith(normalized)
+    || normalizePrompt(goal.title).includes(normalized),
+  );
+}
+
+function formatGoalLine(goal: ActiveGoal, index?: number): string {
+  const shortId = goal.id.slice(0, 8);
+  const parts = [
+    `${index !== undefined ? `(${index + 1}) ` : ""}#${shortId} — ${goal.title}`,
+    goal.domain,
+  ];
+  if (goal.deadline) {
+    parts.push(`prazo ${goal.deadline}`);
+  }
+  if (goal.progress != null) {
+    parts.push(`${Math.round(goal.progress * 100)}%`);
+  }
+  if (goal.metric) {
+    parts.push(`métrica: ${goal.metric}`);
+  }
+  return parts.join(" | ");
 }
 
 function buildProfileUpdateToolArguments(profile: UpdatePersonalOperationalProfileInput): Record<string, unknown> {
@@ -280,6 +491,187 @@ export class OperationalContextDirectService {
           ),
         },
       ],
+    };
+  }
+
+  async tryRunGoalList(input: OperationalContextDirectInput): Promise<AgentRunResult | null> {
+    if (!isGoalListPrompt(input.userPrompt)) {
+      return null;
+    }
+
+    const goals = this.deps.goalStore.list();
+    const reply = goals.length === 0
+      ? "Você não tem objetivos ativos registrados no momento."
+      : [
+          "Objetivos ativos:",
+          ...goals.map((goal, index) => `- ${formatGoalLine(goal, index)}`),
+        ].join("\n");
+
+    return {
+      requestId: input.requestId,
+      reply,
+      messages: this.deps.buildBaseMessages(input.userPrompt, input.orchestration, input.preferences),
+      toolExecutions: [
+        {
+          toolName: "goal_store_list",
+          resultPreview: JSON.stringify({ count: goals.length }, null, 2),
+        },
+      ],
+    };
+  }
+
+  async tryRunGoalSave(input: OperationalContextDirectInput): Promise<AgentRunResult | null> {
+    if (!isGoalSavePrompt(input.userPrompt)) {
+      return null;
+    }
+
+    const statement = extractGoalStatement(input.userPrompt);
+    const title = statement ? extractGoalTitle(statement) : undefined;
+    if (!statement || !title) {
+      return {
+        requestId: input.requestId,
+        reply: "Diga o objetivo de forma direta. Exemplo: `salve meu objetivo de fechar 2 clientes SaaS até 2026-05-31`.",
+        messages: this.deps.buildBaseMessages(input.userPrompt, input.orchestration, input.preferences),
+        toolExecutions: [],
+      };
+    }
+
+    const saved = this.deps.goalStore.upsert({
+      title,
+      description: statement,
+      metric: extractGoalMetric(statement),
+      deadline: parseIsoDateCandidate(statement),
+      progress: extractGoalProgress(statement),
+      domain: inferGoalDomain(statement),
+    });
+
+    return {
+      requestId: input.requestId,
+      reply: `Objetivo ativo salvo.\n- ${formatGoalLine(saved)}${saved.description ? `\n- Contexto: ${saved.description}` : ""}`,
+      messages: this.deps.buildBaseMessages(input.userPrompt, input.orchestration, input.preferences),
+      toolExecutions: [
+        {
+          toolName: "goal_store_upsert",
+          resultPreview: JSON.stringify({ id: saved.id, title: saved.title }, null, 2),
+        },
+      ],
+    };
+  }
+
+  async tryRunGoalProgressUpdate(input: OperationalContextDirectInput): Promise<AgentRunResult | null> {
+    if (!isGoalProgressUpdatePrompt(input.userPrompt)) {
+      return null;
+    }
+
+    const progress = extractGoalProgress(input.userPrompt);
+    const reference = resolveGoalReference(input.userPrompt);
+    if (progress == null || !reference) {
+      return {
+        requestId: input.requestId,
+        reply: "Diga qual objetivo devo atualizar e o novo progresso. Exemplo: `atualize meu objetivo fechar 2 clientes para 40%`.",
+        messages: this.deps.buildBaseMessages(input.userPrompt, input.orchestration, input.preferences),
+        toolExecutions: [],
+      };
+    }
+
+    const matches = findGoalByReference(this.deps.goalStore.list(), reference);
+    if (matches.length === 0) {
+      return {
+        requestId: input.requestId,
+        reply: `Não encontrei objetivo ativo para "${reference}".`,
+        messages: this.deps.buildBaseMessages(input.userPrompt, input.orchestration, input.preferences),
+        toolExecutions: [],
+      };
+    }
+    if (matches.length > 1) {
+      return {
+        requestId: input.requestId,
+        reply: [
+          `Encontrei mais de um objetivo para "${reference}".`,
+          ...matches.map((goal, index) => `- ${formatGoalLine(goal, index)}`),
+          "Use o identificador curto com # para eu atualizar o certo.",
+        ].join("\n"),
+        messages: this.deps.buildBaseMessages(input.userPrompt, input.orchestration, input.preferences),
+        toolExecutions: [],
+      };
+    }
+
+    const updated = this.deps.goalStore.updateProgress(matches[0]!.id, progress);
+    if (!updated) {
+      return {
+        requestId: input.requestId,
+        reply: "Não consegui atualizar esse objetivo.",
+        messages: this.deps.buildBaseMessages(input.userPrompt, input.orchestration, input.preferences),
+        toolExecutions: [],
+      };
+    }
+
+    return {
+      requestId: input.requestId,
+      reply: `Progresso atualizado.\n- ${formatGoalLine(updated)}`,
+      messages: this.deps.buildBaseMessages(input.userPrompt, input.orchestration, input.preferences),
+      toolExecutions: [
+        {
+          toolName: "goal_store_update_progress",
+          resultPreview: JSON.stringify({ id: updated.id, progress: updated.progress }, null, 2),
+        },
+      ],
+    };
+  }
+
+  async tryRunGoalDelete(input: OperationalContextDirectInput): Promise<AgentRunResult | null> {
+    if (!isGoalDeletePrompt(input.userPrompt)) {
+      return null;
+    }
+
+    const reference = resolveGoalReference(input.userPrompt);
+    if (!reference) {
+      return {
+        requestId: input.requestId,
+        reply: "Diga qual objetivo devo remover. Exemplo: `remova meu objetivo fechar 2 clientes SaaS` ou `remova meu objetivo #abcd1234`.",
+        messages: this.deps.buildBaseMessages(input.userPrompt, input.orchestration, input.preferences),
+        toolExecutions: [],
+      };
+    }
+
+    const matches = findGoalByReference(this.deps.goalStore.list(), reference);
+    if (matches.length === 0) {
+      return {
+        requestId: input.requestId,
+        reply: `Não encontrei objetivo ativo para "${reference}".`,
+        messages: this.deps.buildBaseMessages(input.userPrompt, input.orchestration, input.preferences),
+        toolExecutions: [],
+      };
+    }
+    if (matches.length > 1) {
+      return {
+        requestId: input.requestId,
+        reply: [
+          `Encontrei mais de um objetivo para "${reference}".`,
+          ...matches.map((goal, index) => `- ${formatGoalLine(goal, index)}`),
+          "Use o identificador curto com # para remover o certo.",
+        ].join("\n"),
+        messages: this.deps.buildBaseMessages(input.userPrompt, input.orchestration, input.preferences),
+        toolExecutions: [],
+      };
+    }
+
+    const goal = matches[0]!;
+    const removed = this.deps.goalStore.remove(goal.id);
+    return {
+      requestId: input.requestId,
+      reply: removed
+        ? `Objetivo removido.\n- ${formatGoalLine(goal)}`
+        : "Não consegui remover esse objetivo.",
+      messages: this.deps.buildBaseMessages(input.userPrompt, input.orchestration, input.preferences),
+      toolExecutions: removed
+        ? [
+            {
+              toolName: "goal_store_remove",
+              resultPreview: JSON.stringify({ id: goal.id, title: goal.title }, null, 2),
+            },
+          ]
+        : [],
     };
   }
 

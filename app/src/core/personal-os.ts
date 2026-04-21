@@ -7,6 +7,7 @@ import type { ContextMemoryService, ScopedMemorySummary } from "./context-memory
 import type { MemoryEntityStore } from "./memory-entity-store.js";
 import type { OperationalMemoryStore } from "./operational-memory.js";
 import type { PersonalOperationalMemoryStore } from "./personal-operational-memory.js";
+import type { ActiveGoal } from "./goal-store.js";
 import { WeatherService, type WeatherForecastResult } from "./weather-service.js";
 import type { WorkflowOrchestratorStore } from "./workflow-orchestrator.js";
 import { analyzeCalendarInsights } from "./calendar-insights.js";
@@ -101,6 +102,8 @@ export interface ExecutiveMorningBrief {
   overloadLevel: "leve" | "moderado" | "pesado";
   mobilityAlerts: string[];
   operationalSignals: OperationalStateSignal[];
+  activeGoals?: Array<Pick<ActiveGoal, "id" | "title" | "domain" | "deadline" | "progress">>;
+  goalSummary?: string;
   conflictSummary: {
     overlaps: number;
     duplicates: number;
@@ -483,6 +486,7 @@ function chooseNextAction(input: {
   focus: ExecutiveBriefFocusItem[];
   memoryEntities: ExecutiveBriefEntitySummary;
   operationalMemory: ScopedMemorySummary;
+  activeGoals?: Array<Pick<ActiveGoal, "title" | "deadline" | "progress">>;
 }): string | undefined {
   const candidates: Array<{ score: number; text: string }> = [];
   const conflictEvent = input.events.find((event) => event.hasConflict);
@@ -547,6 +551,14 @@ function chooseNextAction(input: {
     candidates.push({
       score: 28,
       text: input.focus[0].nextAction,
+    });
+  }
+  if (input.activeGoals?.[0]) {
+    const goal = input.activeGoals[0];
+    const goalProgress = typeof goal.progress === "number" ? `${Math.round(goal.progress * 100)}%` : undefined;
+    candidates.push({
+      score: 62,
+      text: `Reservar bloco real para avançar ${goal.title}${goalProgress ? ` (${goalProgress})` : ""}${goal.deadline ? ` antes de ${goal.deadline}` : ""}.`,
     });
   }
 
@@ -742,6 +754,7 @@ export class PersonalOSService {
     private readonly memoryEntities: MemoryEntityStore,
     private readonly contextMemory: ContextMemoryService,
     private readonly personalMemory: PersonalOperationalMemoryStore,
+    private readonly goalStore: { list: () => ActiveGoal[]; summarize: () => string },
   ) {
     this.weather = new WeatherService(this.logger.child({ scope: "weather" }));
   }
@@ -939,6 +952,16 @@ export class PersonalOSService {
     const motivation = pickDailyMotivation(this.timezone);
     const operationalMemory = this.contextMemory.summarize("operational", 4);
     const currentOperationalState = this.personalMemory.getOperationalState();
+    const activeGoals = this.goalStore.list()
+      .slice(0, 4)
+      .map((goal) => ({
+        id: goal.id,
+        title: goal.title,
+        domain: goal.domain,
+        deadline: goal.deadline,
+        progress: goal.progress,
+      }));
+    const goalSummary = activeGoals.length > 0 ? this.goalStore.summarize() : undefined;
     const activeOperationalSignals = currentOperationalState
       .signals
       .filter((item) => item.active)
@@ -975,6 +998,7 @@ export class PersonalOSService {
       focus,
       memoryEntities,
       operationalMemory,
+      activeGoals,
     });
     const overloadLevel = classifyOverloadLevel({
       events: annotatedEvents,
@@ -998,7 +1022,16 @@ export class PersonalOSService {
 
     this.personalMemory.updateOperationalState({
       focus: personalFocus,
-      weeklyPriorities: personalFocus,
+      ...(activeGoals.length > 0
+        ? {
+            weeklyPriorities: Array.from(new Set([
+              ...activeGoals.map((goal) => goal.title),
+              ...personalFocus,
+            ])).slice(0, 6),
+          }
+        : {
+            weeklyPriorities: personalFocus,
+          }),
       pendingAlerts: Array.from(new Set([
         ...approvals.slice(0, 4).map((item) => item.subject),
         ...activeOperationalSignals.map((item) => `Institucional: ${item.summary}`),
@@ -1028,6 +1061,7 @@ export class PersonalOSService {
         overloadLevel,
       },
       recentContext: [
+        ...activeGoals.slice(0, 2).map((goal) => `Objetivo ativo: ${goal.title}`),
         ...activeOperationalSignals.map((item) => `Institucional: ${item.summary}`),
         ...(mobilityAlerts.slice(0, 2)),
         ...(dayRecommendation ? [dayRecommendation] : []),
@@ -1048,6 +1082,8 @@ export class PersonalOSService {
       motivation,
       founderSnapshot,
       weather,
+      activeGoals,
+      goalSummary,
       nextAction,
       personalFocus,
       overloadLevel,
