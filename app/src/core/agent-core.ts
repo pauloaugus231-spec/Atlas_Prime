@@ -115,21 +115,7 @@ import {
 } from "./turn-planner.js";
 import {
   DirectRouteRunner,
-  type DirectRouteDefinition,
 } from "./direct-route-runner.js";
-import {
-  buildCapabilityDirectRoutes,
-  buildContentDirectRoutes,
-  buildConversationDirectRoutes,
-  buildEmailDirectRoutes,
-  buildGoogleWorkspaceDirectRoutes,
-  buildKnowledgeAndProjectDirectRoutes,
-  buildMemoryAndPreferenceDirectRoutes,
-  buildMessagingDirectRoutes,
-  buildOperationalDirectRoutes,
-  buildReviewDirectRoutes,
-  buildWorkflowDirectRoutes,
-} from "./direct-routes/index.js";
 import type {
   PersonalOperationalMemoryItem,
   PersonalOperationalMemoryItemKind,
@@ -174,6 +160,14 @@ import { OperationalReviewDirectService } from "./operational-review-direct-serv
 import { OperationalContextDirectService } from "./operational-context-direct-service.js";
 import { WorkspaceMacDirectService } from "./workspace-mac-direct-service.js";
 import { WorkflowDirectService } from "./workflow-direct-service.js";
+import { ContentDirectService } from "./content-direct-service.js";
+import { ContentGenerationDirectService } from "./content-generation-direct-service.js";
+import { EmailDirectService } from "./email-direct-service.js";
+import {
+  AgentDirectRouteService,
+  type AgentDirectRouteServiceDependencies,
+} from "./agent-direct-route-service.js";
+import { AgentDirectServiceRegistry } from "./agent-direct-service-registry.js";
 
 function stripCodeFences(value: string): string {
   const trimmed = value.trim();
@@ -9532,18 +9526,9 @@ export class AgentCore {
   private readonly contextAssembler: ContextAssembler;
   private readonly responseSynthesizer: ResponseSynthesizer;
   private readonly turnPlanner: TurnPlanner;
-  private readonly directRouteRunner: DirectRouteRunner;
+  private readonly directRouteService: AgentDirectRouteService;
   private readonly messagingDirectService: MessagingDirectService;
-  private googleWorkspaceDirectService?: GoogleWorkspaceDirectService;
-  private externalIntelligenceDirectService?: ExternalIntelligenceDirectService;
-  private capabilityActionService?: CapabilityActionService;
-  private capabilityInspectionService?: CapabilityInspectionService;
-  private knowledgeProjectDirectService?: KnowledgeProjectDirectService;
-  private memoryContactDirectService?: MemoryContactDirectService;
-  private operationalContextDirectService?: OperationalContextDirectService;
-  private operationalReviewDirectService?: OperationalReviewDirectService;
-  private workspaceMacDirectService?: WorkspaceMacDirectService;
-  private workflowDirectService?: WorkflowDirectService;
+  private directServiceRegistry?: AgentDirectServiceRegistry;
   private readonly createWebResearchService: (logger: Logger) => Pick<WebResearchService, "search" | "fetchPageExcerpt">;
   private readonly activeGoals = new Map<string, ActivePlanningGoal>();
 
@@ -9628,9 +9613,6 @@ export class AgentCore {
         rewriteStructuredReply: false,
       },
     );
-    this.directRouteRunner = new DirectRouteRunner(
-      this.logger.child({ scope: "direct-route-runner" }),
-    );
     this.messagingDirectService = new MessagingDirectService({
       whatsappConfig: this.config.whatsapp,
       logger: this.logger.child({ scope: "messaging-direct-service" }),
@@ -9641,6 +9623,21 @@ export class AgentCore {
       buildMessageHistoryReply: (input) => this.responseOs.buildMessageHistoryReply(input),
       buildApprovalReviewReply: (input) => this.responseOs.buildApprovalReviewReply(input),
     });
+    this.directRouteService = new AgentDirectRouteService(
+      new DirectRouteRunner(
+        this.logger.child({ scope: "direct-route-runner" }),
+      ),
+      this.buildDirectRouteServiceDependencies(),
+      async (fallbackInput) => this.tryRunExternalReasoning(
+        fallbackInput.activeUserPrompt,
+        fallbackInput.requestId,
+        fallbackInput.requestLogger,
+        fallbackInput.intent,
+        fallbackInput.preferences,
+        fallbackInput.options,
+        "post_direct_routes",
+      ),
+    );
   }
 
   resolveIntent(userPrompt: string): IntentResolution {
@@ -9678,8 +9675,7 @@ export class AgentCore {
     this.activeGoals.delete(String(chatId));
   }
 
-  private getGoogleWorkspaceDirectService(): GoogleWorkspaceDirectService {
-    if (!this.googleWorkspaceDirectService) {
+  private createGoogleWorkspaceDirectService(): GoogleWorkspaceDirectService {
       const fallbackLogger: Logger = {
         debug: () => undefined,
         info: () => undefined,
@@ -9728,7 +9724,7 @@ export class AgentCore {
           namingCount: input.namingCount,
         }),
       };
-      this.googleWorkspaceDirectService = new GoogleWorkspaceDirectService({
+      return new GoogleWorkspaceDirectService({
         logger: baseLogger.child({ scope: "google-workspace-direct-service" }),
         defaultTimezone: this.config.google.defaultTimezone,
         googleWorkspaces: this.googleWorkspaces,
@@ -9812,13 +9808,9 @@ export class AgentCore {
           normalizeCalendarUpdateInstruction,
         },
       });
-    }
-
-    return this.googleWorkspaceDirectService;
   }
 
-  private getExternalIntelligenceDirectService(): ExternalIntelligenceDirectService {
-    if (!this.externalIntelligenceDirectService) {
+  private createExternalIntelligenceDirectService(): ExternalIntelligenceDirectService {
       const fallbackLogger: Logger = {
         debug: () => undefined,
         info: () => undefined,
@@ -9839,7 +9831,7 @@ export class AgentCore {
       const baseLogger = this.logger ?? fallbackLogger;
       const createWebResearchService = this.createWebResearchService ?? ((logger: Logger) => new WebResearchService(logger));
 
-      this.externalIntelligenceDirectService = new ExternalIntelligenceDirectService({
+      return new ExternalIntelligenceDirectService({
         logger: baseLogger.child({ scope: "external-intelligence-direct-service" }),
         client: this.client ?? fallbackClient,
         googleMaps: this.googleMaps,
@@ -9868,13 +9860,9 @@ export class AgentCore {
           buildPlaceDiscoveryReply,
         },
       });
-    }
-
-    return this.externalIntelligenceDirectService;
   }
 
-  private getCapabilityActionService(): CapabilityActionService {
-    if (!this.capabilityActionService) {
+  private createCapabilityActionService(): CapabilityActionService {
       const fallbackLogger: Logger = {
         debug: () => undefined,
         info: () => undefined,
@@ -9904,7 +9892,7 @@ export class AgentCore {
         }),
       };
 
-      this.capabilityActionService = new CapabilityActionService({
+      return new CapabilityActionService({
         logger: baseLogger.child({ scope: "capability-action-service" }),
         personalMemory: this.personalMemory ?? fallbackPersonalMemory,
         buildBaseMessages: (userPrompt, orchestration, preferences) =>
@@ -9916,13 +9904,9 @@ export class AgentCore {
           buildCapabilityGapSignature,
         },
       });
-    }
-
-    return this.capabilityActionService;
   }
 
-  private getCapabilityInspectionService(): CapabilityInspectionService {
-    if (!this.capabilityInspectionService) {
+  private createCapabilityInspectionService(): CapabilityInspectionService {
       const fallbackLogger: Logger = {
         debug: () => undefined,
         info: () => undefined,
@@ -9939,7 +9923,7 @@ export class AgentCore {
         listProductGaps: () => [] as ProductGapRecord[],
       };
 
-      this.capabilityInspectionService = new CapabilityInspectionService({
+      return new CapabilityInspectionService({
         logger: baseLogger.child({ scope: "capability-inspection-service" }),
         capabilityPlanner: this.capabilityPlanner ?? fallbackCapabilityPlanner,
         personalMemory: this.personalMemory ?? fallbackPersonalMemory,
@@ -9951,13 +9935,9 @@ export class AgentCore {
           buildProductGapDetailReply,
         },
       });
-    }
-
-    return this.capabilityInspectionService;
   }
 
-  private getKnowledgeProjectDirectService(): KnowledgeProjectDirectService {
-    if (!this.knowledgeProjectDirectService) {
+  private createKnowledgeProjectDirectService(): KnowledgeProjectDirectService {
       const fallbackLogger: Logger = {
         debug: () => undefined,
         info: () => undefined,
@@ -9976,7 +9956,7 @@ export class AgentCore {
         getGitStatus: async () => undefined as unknown as Record<string, unknown>,
       };
 
-      this.knowledgeProjectDirectService = new KnowledgeProjectDirectService({
+      return new KnowledgeProjectDirectService({
         logger: baseLogger.child({ scope: "knowledge-project-direct-service" }),
         fileAccess: this.fileAccess ?? fallbackFileAccess,
         projectOps: this.projectOps ?? fallbackProjectOps,
@@ -9996,13 +9976,9 @@ export class AgentCore {
           extractMirrorTargetPath,
         },
       });
-    }
-
-    return this.knowledgeProjectDirectService;
   }
 
-  private getOperationalContextDirectService(): OperationalContextDirectService {
-    if (!this.operationalContextDirectService) {
+  private createOperationalContextDirectService(): OperationalContextDirectService {
       const fallbackLogger: Logger = {
         debug: () => undefined,
         info: () => undefined,
@@ -10132,7 +10108,7 @@ export class AgentCore {
         rawResult: {},
       });
 
-      this.operationalContextDirectService = new OperationalContextDirectService({
+      return new OperationalContextDirectService({
         logger: baseLogger.child({ scope: "operational-context-direct-service" }),
         googleWorkspace: this.googleWorkspace ?? fallbackGoogleWorkspace,
         memory: this.memory ?? fallbackMemory,
@@ -10185,13 +10161,9 @@ export class AgentCore {
           buildPersonalMemoryDeletedReply,
         },
       });
-    }
-
-    return this.operationalContextDirectService;
   }
 
-  private getMemoryContactDirectService(): MemoryContactDirectService {
-    if (!this.memoryContactDirectService) {
+  private createMemoryContactDirectService(): MemoryContactDirectService {
       const fallbackLogger: Logger = {
         debug: () => undefined,
         info: () => undefined,
@@ -10227,7 +10199,7 @@ export class AgentCore {
         search: () => [] as MemoryEntityRecord[],
       };
 
-      this.memoryContactDirectService = new MemoryContactDirectService({
+      return new MemoryContactDirectService({
         logger: baseLogger.child({ scope: "memory-contact-direct-service" }),
         contacts: this.contacts ?? fallbackContacts,
         entityLinker: this.entityLinker ?? fallbackEntityLinker,
@@ -10247,13 +10219,9 @@ export class AgentCore {
           buildMemoryEntityListReply,
         },
       });
-    }
-
-    return this.memoryContactDirectService;
   }
 
-  private getWorkflowDirectService(): WorkflowDirectService {
-    if (!this.workflowDirectService) {
+  private createWorkflowDirectService(): WorkflowDirectService {
       const fallbackLogger: Logger = {
         debug: () => undefined,
         info: () => undefined,
@@ -10363,7 +10331,7 @@ export class AgentCore {
         }),
       };
 
-      this.workflowDirectService = new WorkflowDirectService({
+      return new WorkflowDirectService({
         logger: baseLogger.child({ scope: "workflow-direct-service" }),
         planBuilder: this.planBuilder ?? fallbackPlanBuilder,
         entityLinker: this.entityLinker ?? fallbackEntityLinker,
@@ -10393,13 +10361,9 @@ export class AgentCore {
           buildWorkflowStepUpdateReply,
         },
       });
-    }
-
-    return this.workflowDirectService;
   }
 
-  private getOperationalReviewDirectService(): OperationalReviewDirectService {
-    if (!this.operationalReviewDirectService) {
+  private createOperationalReviewDirectService(): OperationalReviewDirectService {
       const fallbackLogger: Logger = {
         debug: () => undefined,
         info: () => undefined,
@@ -10508,7 +10472,7 @@ export class AgentCore {
         buildForPrompt: async () => null,
       };
 
-      this.operationalReviewDirectService = new OperationalReviewDirectService({
+      return new OperationalReviewDirectService({
         logger: baseLogger.child({ scope: "operational-review-direct-service" }),
         client: this.client ?? fallbackClient,
         email: this.email ?? fallbackEmail,
@@ -10558,13 +10522,9 @@ export class AgentCore {
           stripCodeFences,
         },
       });
-    }
-
-    return this.operationalReviewDirectService;
   }
 
-  private getWorkspaceMacDirectService(): WorkspaceMacDirectService {
-    if (!this.workspaceMacDirectService) {
+  private createWorkspaceMacDirectService(): WorkspaceMacDirectService {
       const fallbackLogger: Logger = {
         debug: () => undefined,
         info: () => undefined,
@@ -10604,10 +10564,10 @@ export class AgentCore {
           id: "fallback",
           summary: "fallback",
           targetHost: "atlas_mac",
-        }),
+          }),
       };
 
-      this.workspaceMacDirectService = new WorkspaceMacDirectService({
+      return new WorkspaceMacDirectService({
         logger: baseLogger.child({ scope: "workspace-mac-direct-service" }),
         workspaceDir: this.config.paths.workspaceDir,
         authorizedProjectsDir: this.config.paths.authorizedProjectsDir,
@@ -10633,9 +10593,271 @@ export class AgentCore {
           extractMacProjectCommand,
         },
       });
+  }
+
+  private createEmailDirectService(): EmailDirectService {
+      const fallbackLogger: Logger = {
+        debug: () => undefined,
+        info: () => undefined,
+        warn: () => undefined,
+        error: () => undefined,
+        child: () => fallbackLogger,
+      };
+      const baseLogger = this.logger ?? fallbackLogger;
+      const fallbackEmail = {
+        getStatus: async () => ({
+          enabled: false,
+          configured: false,
+          ready: false,
+          mailbox: "INBOX",
+          message: "Email indisponível.",
+        }),
+        listRecentMessages: async () => [],
+        scanRecentMessages: async () => [],
+        readMessage: async (uid: string) => ({
+          uid,
+          threadId: null,
+          subject: "(sem assunto)",
+          from: [],
+          to: [],
+          cc: [],
+          replyTo: [],
+          date: null,
+          flags: [],
+          preview: "",
+          messageId: null,
+          text: "",
+          truncated: false,
+          references: [],
+        }),
+      };
+      const fallbackCommunicationRouter = {
+        classify: () => ({
+          relationship: "unknown",
+          persona: "operacional_neutro",
+          actionPolicy: "review_first",
+        }),
+      };
+
+      return new EmailDirectService({
+        logger: baseLogger.child({ scope: "email-direct-service" }),
+        email: this.email ?? fallbackEmail,
+        communicationRouter: this.communicationRouter ?? fallbackCommunicationRouter,
+        resolveEmailReferenceFromPrompt: (prompt, logger) => this.resolveEmailReferenceFromPrompt(prompt, logger),
+        buildBaseMessages: (userPrompt, orchestration) => buildBaseMessages(userPrompt, orchestration),
+        helpers: {
+          isEmailSummaryPrompt,
+          extractEmailUidFromPrompt,
+          summarizeEmailForOperations,
+          extractEmailIdentifier,
+          buildEmailSummaryReply,
+          extractEmailLookupRequest,
+          isEmailDraftPrompt,
+          isInboxTriagePrompt,
+          buildEmailLookupMissReply,
+          buildEmailLookupReply,
+        },
+      });
+  }
+
+  private createContentDirectService(): ContentDirectService {
+      const fallbackLogger: Logger = {
+        debug: () => undefined,
+        info: () => undefined,
+        warn: () => undefined,
+        error: () => undefined,
+        child: () => fallbackLogger,
+      };
+      const baseLogger = this.logger ?? fallbackLogger;
+      const fallbackContentOps = {
+        listItems: () => [],
+        listChannels: () => [],
+        listSeries: () => [],
+        listFormatTemplates: () => [],
+        listHookTemplates: () => [],
+      };
+      const fallbackSocialAssistant = {
+        listNotes: () => [],
+      };
+
+      return new ContentDirectService({
+        logger: baseLogger.child({ scope: "content-direct-service" }),
+        contentOps: this.contentOps ?? fallbackContentOps,
+        socialAssistant: this.socialAssistant ?? fallbackSocialAssistant,
+        defaultTimezone: this.config.google.defaultTimezone,
+        runDailyEditorialResearch: (input) => this.runDailyEditorialResearch(input),
+        buildBaseMessages: (userPrompt, orchestration) => buildBaseMessages(userPrompt, orchestration),
+        helpers: {
+          isContentOverviewPrompt,
+          isContentChannelsPrompt,
+          isContentSeriesPrompt,
+          isContentFormatLibraryPrompt,
+          isContentHookLibraryPrompt,
+          isDailyEditorialResearchPrompt,
+          isCaseNotesPrompt,
+          extractPromptLimit,
+          extractContentPlatform,
+          extractContentChannelKey,
+          inferDefaultContentChannelKey,
+          normalizeEmailAnalysisText,
+          buildContentOverviewReply,
+          buildContentChannelsReply,
+          buildContentSeriesReply,
+          buildContentFormatsReply,
+          buildContentHooksReply,
+          buildCaseNotesReply,
+        },
+      });
+  }
+
+  private createContentGenerationDirectService(): ContentGenerationDirectService {
+      const fallbackLogger: Logger = {
+        debug: () => undefined,
+        info: () => undefined,
+        warn: () => undefined,
+        error: () => undefined,
+        child: () => fallbackLogger,
+      };
+      const baseLogger = this.logger ?? fallbackLogger;
+      const fallbackContentOps = {
+        listItems: () => [],
+        listChannels: () => [],
+        listSeries: () => [],
+        listFormatTemplates: () => [],
+        listHookTemplates: () => [],
+        getItemById: () => null,
+        createItem: () => {
+          throw new Error("contentOps.createItem is not configured");
+        },
+        updateItem: () => {
+          throw new Error("contentOps.updateItem is not configured");
+        },
+      };
+      const fallbackPexelsMedia = {
+        isEnabled: () => false,
+        searchVideos: async () => [],
+      };
+
+      return new ContentGenerationDirectService({
+        logger: baseLogger.child({ scope: "content-generation-direct-service" }),
+        client: this.client,
+        contentOps: this.contentOps ?? fallbackContentOps,
+        pexelsMedia: this.pexelsMedia ?? fallbackPexelsMedia,
+        pexelsMaxScenesPerRequest: this.config.media.pexelsMaxScenesPerRequest,
+        buildBaseMessages: (userPrompt, orchestration) => buildBaseMessages(userPrompt, orchestration),
+        helpers: {
+          isContentIdeaGenerationPrompt,
+          isContentReviewPrompt,
+          isContentScriptGenerationPrompt,
+          isContentBatchPlanningPrompt,
+          isContentBatchGenerationPrompt,
+          isContentDistributionStrategyPrompt,
+          extractContentPlatform,
+          extractContentChannelKey,
+          inferDefaultContentChannelKey,
+          extractContentIdeaSeed,
+          extractPromptLimit,
+          buildFallbackEditorialIdeas,
+          stripCodeFences,
+          buildContentIdeaGenerationReply,
+          extractContentItemId,
+          extractContentQueueOrdinal,
+          normalizeEmailAnalysisText,
+          extractContentReviewReason,
+          classifyContentReviewFeedback,
+          buildContentReviewNotFoundReply,
+          buildContentReviewReply,
+          buildManualShortFormPackage,
+          buildShortFormFallbackPackage,
+          normalizeShortStyleMode,
+          clampShortTargetDuration,
+          normalizeScenePlan,
+          validateShortFormPackage,
+          resolveSceneAssets,
+          buildShortProductionPack,
+          buildDistributionPlan,
+          buildContentScriptReply,
+          hasSavedShortPackage,
+          buildContentBatchReply,
+          buildContentBatchGenerationReply,
+          isRiquezaContentItemEligible,
+          buildContentDistributionStrategyReply,
+        },
+      });
+  }
+
+  private getDirectServiceRegistry(): AgentDirectServiceRegistry {
+    if (!this.directServiceRegistry) {
+      this.directServiceRegistry = new AgentDirectServiceRegistry({
+        googleWorkspaceDirectService: () => this.createGoogleWorkspaceDirectService(),
+        externalIntelligenceDirectService: () => this.createExternalIntelligenceDirectService(),
+        capabilityActionService: () => this.createCapabilityActionService(),
+        capabilityInspectionService: () => this.createCapabilityInspectionService(),
+        knowledgeProjectDirectService: () => this.createKnowledgeProjectDirectService(),
+        operationalContextDirectService: () => this.createOperationalContextDirectService(),
+        memoryContactDirectService: () => this.createMemoryContactDirectService(),
+        workflowDirectService: () => this.createWorkflowDirectService(),
+        operationalReviewDirectService: () => this.createOperationalReviewDirectService(),
+        workspaceMacDirectService: () => this.createWorkspaceMacDirectService(),
+        emailDirectService: () => this.createEmailDirectService(),
+        contentDirectService: () => this.createContentDirectService(),
+        contentGenerationDirectService: () => this.createContentGenerationDirectService(),
+      });
     }
 
-    return this.workspaceMacDirectService;
+    return this.directServiceRegistry;
+  }
+
+  private getGoogleWorkspaceDirectService(): GoogleWorkspaceDirectService {
+    return this.getDirectServiceRegistry().getGoogleWorkspaceDirectService();
+  }
+
+  private getExternalIntelligenceDirectService(): ExternalIntelligenceDirectService {
+    return this.getDirectServiceRegistry().getExternalIntelligenceDirectService();
+  }
+
+  private getCapabilityActionService(): CapabilityActionService {
+    return this.getDirectServiceRegistry().getCapabilityActionService();
+  }
+
+  private getCapabilityInspectionService(): CapabilityInspectionService {
+    return this.getDirectServiceRegistry().getCapabilityInspectionService();
+  }
+
+  private getKnowledgeProjectDirectService(): KnowledgeProjectDirectService {
+    return this.getDirectServiceRegistry().getKnowledgeProjectDirectService();
+  }
+
+  private getOperationalContextDirectService(): OperationalContextDirectService {
+    return this.getDirectServiceRegistry().getOperationalContextDirectService();
+  }
+
+  private getMemoryContactDirectService(): MemoryContactDirectService {
+    return this.getDirectServiceRegistry().getMemoryContactDirectService();
+  }
+
+  private getWorkflowDirectService(): WorkflowDirectService {
+    return this.getDirectServiceRegistry().getWorkflowDirectService();
+  }
+
+  private getOperationalReviewDirectService(): OperationalReviewDirectService {
+    return this.getDirectServiceRegistry().getOperationalReviewDirectService();
+  }
+
+  private getWorkspaceMacDirectService(): WorkspaceMacDirectService {
+    return this.getDirectServiceRegistry().getWorkspaceMacDirectService();
+  }
+
+  private getEmailDirectService(): EmailDirectService {
+    return this.getDirectServiceRegistry().getEmailDirectService();
+  }
+
+  private getContentDirectService(): ContentDirectService {
+    return this.getDirectServiceRegistry().getContentDirectService();
+  }
+
+  private getContentGenerationDirectService(): ContentGenerationDirectService {
+    return this.getDirectServiceRegistry().getContentGenerationDirectService();
   }
 
   private async tryRunPreLocalExternalReasoning(
@@ -10670,9 +10892,9 @@ export class AgentCore {
     );
   }
 
-  private buildDirectRouteDefinitions(): DirectRouteDefinition[] {
-    return [
-      ...buildConversationDirectRoutes({
+  private buildDirectRouteServiceDependencies(): AgentDirectRouteServiceDependencies {
+    return {
+      conversation: {
         ping: async (input) => this.tryRunDirectPing(
           input.activeUserPrompt,
           input.requestId,
@@ -10695,8 +10917,8 @@ export class AgentCore {
           input.requestId,
           input.orchestration,
         ),
-      }),
-      ...buildCapabilityDirectRoutes({
+      },
+      capability: {
         personalProfileShow: async (input) => this.tryRunDirectPersonalOperationalProfileShow(
           input.activeUserPrompt,
           input.requestId,
@@ -10743,8 +10965,8 @@ export class AgentCore {
           input.preferences,
           input.options,
         ),
-      }),
-      ...buildMemoryAndPreferenceDirectRoutes({
+      },
+      memoryAndPreference: {
         personalProfileUpdate: async (input) => this.tryRunDirectPersonalOperationalProfileUpdate(
           input.activeUserPrompt,
           input.requestId,
@@ -10786,8 +11008,8 @@ export class AgentCore {
           input.orchestration,
           input.preferences,
         ),
-      }),
-      ...buildOperationalDirectRoutes({
+      },
+      operational: {
         morningBrief: async (input) => this.tryRunDirectMorningBrief(
           input.activeUserPrompt,
           input.requestId,
@@ -10846,8 +11068,8 @@ export class AgentCore {
           input.orchestration,
           input.preferences,
         ),
-      }),
-      ...buildWorkflowDirectRoutes({
+      },
+      workflow: {
         workflowList: async (input) => this.tryRunDirectWorkflowList(
           input.activeUserPrompt,
           input.requestId,
@@ -10886,8 +11108,8 @@ export class AgentCore {
           input.orchestration,
           input.preferences,
         ),
-      }),
-      ...buildReviewDirectRoutes({
+      },
+      review: {
         memoryUpdateGuard: async (input) => this.tryRunDirectMemoryUpdateGuard(
           input.activeUserPrompt,
           input.requestId,
@@ -10923,8 +11145,8 @@ export class AgentCore {
           input.requestLogger,
           input.orchestration,
         ),
-      }),
-      ...buildGoogleWorkspaceDirectRoutes({
+      },
+      googleWorkspace: {
         calendarLookup: async (input) => this.tryRunDirectCalendarLookup(
           input.activeUserPrompt,
           input.requestId,
@@ -10991,8 +11213,8 @@ export class AgentCore {
           input.requestLogger,
           input.orchestration,
         ),
-      }),
-      ...buildMessagingDirectRoutes({
+      },
+      messaging: {
         whatsappSend: async (input) => this.messagingDirectService.tryRunWhatsAppSend({
           activeUserPrompt: input.activeUserPrompt,
           fullPrompt: input.userPrompt,
@@ -11010,8 +11232,8 @@ export class AgentCore {
           requestId: input.requestId,
           orchestration: input.orchestration,
         }),
-      }),
-      ...buildKnowledgeAndProjectDirectRoutes({
+      },
+      knowledgeAndProject: {
         weather: async (input) => this.tryRunDirectWeather(
           input.activeUserPrompt,
           input.requestId,
@@ -11059,8 +11281,8 @@ export class AgentCore {
           input.requestLogger,
           input.orchestration,
         ),
-      }),
-      ...buildContentDirectRoutes({
+      },
+      content: {
         dailyEditorialResearch: async (input) => this.tryRunDirectDailyEditorialResearch(
           input.activeUserPrompt,
           input.requestId,
@@ -11097,13 +11319,12 @@ export class AgentCore {
           input.requestLogger,
           input.orchestration,
         ),
-        contentDistributionStrategy: async (input) =>
-          this.tryRunDirectContentDistributionStrategy(
-            input.activeUserPrompt,
-            input.requestId,
-            input.requestLogger,
-            input.orchestration,
-          ),
+        contentDistributionStrategy: async (input) => this.tryRunDirectContentDistributionStrategy(
+          input.activeUserPrompt,
+          input.requestId,
+          input.requestLogger,
+          input.orchestration,
+        ),
         contentChannels: async (input) => this.tryRunDirectContentChannels(
           input.activeUserPrompt,
           input.requestId,
@@ -11140,8 +11361,8 @@ export class AgentCore {
           input.requestLogger,
           input.orchestration,
         ),
-      }),
-      ...buildEmailDirectRoutes({
+      },
+      email: {
         emailDraft: async (input) => this.tryRunDirectEmailDraft(
           input.activeUserPrompt,
           input.requestId,
@@ -11160,8 +11381,8 @@ export class AgentCore {
           input.requestLogger,
           input.orchestration,
         ),
-      }),
-    ];
+      },
+    };
   }
 
   private async tryRunDirectRoutes(input: {
@@ -11174,19 +11395,7 @@ export class AgentCore {
     preferences: UserPreferences;
     options?: AgentRunOptions;
   }): Promise<AgentRunResult | null> {
-    return this.directRouteRunner.run(
-      input,
-      this.buildDirectRouteDefinitions(),
-      async (fallbackInput) => this.tryRunExternalReasoning(
-        fallbackInput.activeUserPrompt,
-        fallbackInput.requestId,
-        fallbackInput.requestLogger,
-        fallbackInput.intent,
-        fallbackInput.preferences,
-        fallbackInput.options,
-        "post_direct_routes",
-      ),
-    );
+    return this.directRouteService.run(input);
   }
 
   async runDailyEditorialResearch(input?: {
@@ -12418,72 +12627,12 @@ export class AgentCore {
     requestLogger: Logger,
     orchestration: OrchestrationContext,
   ): Promise<AgentRunResult | null> {
-    if (!isEmailSummaryPrompt(userPrompt)) {
-      return null;
-    }
-
-    const uid = extractEmailUidFromPrompt(userPrompt);
-    if (!uid) {
-      return null;
-    }
-
-    const emailStatus = await this.email.getStatus();
-    if (!emailStatus.ready) {
-      return {
-        requestId,
-        reply: `A integração de email não está pronta para leitura. ${emailStatus.message}`,
-        messages: buildBaseMessages(userPrompt, orchestration),
-        toolExecutions: [],
-      };
-    }
-
-    requestLogger.info("Using direct email summary route", {
-      uid,
-    });
-
-    const emailMessage = await this.email.readMessage(uid);
-    const summary = summarizeEmailForOperations({
-      subject: emailMessage.subject,
-      from: emailMessage.from,
-      text: emailMessage.text,
-    });
-    const routing = this.communicationRouter.classify({
-      channel: "email",
-      identifier: extractEmailIdentifier(emailMessage.from),
-      displayName: emailMessage.from.join(", "),
-      subject: emailMessage.subject,
-      text: emailMessage.text,
-    });
-
-    return {
+    return this.getEmailDirectService().tryRunEmailSummary({
+      userPrompt,
       requestId,
-      reply: buildEmailSummaryReply({
-        uid: emailMessage.uid,
-        subject: emailMessage.subject,
-        from: emailMessage.from,
-        summary,
-        routing: {
-          relationship: routing.relationship,
-          persona: routing.persona,
-          policy: routing.actionPolicy,
-        },
-      }),
-      messages: buildBaseMessages(userPrompt, orchestration),
-      toolExecutions: [
-        {
-          toolName: "read_email_message",
-          resultPreview: JSON.stringify(
-            {
-              uid: emailMessage.uid,
-              subject: emailMessage.subject,
-              from: emailMessage.from,
-            },
-            null,
-            2,
-          ).slice(0, 240),
-        },
-      ],
-    };
+      requestLogger,
+      orchestration,
+    });
   }
 
   private async tryRunDirectEmailLookup(
@@ -12492,87 +12641,12 @@ export class AgentCore {
     requestLogger: Logger,
     orchestration: OrchestrationContext,
   ): Promise<AgentRunResult | null> {
-    const lookupRequest = extractEmailLookupRequest(userPrompt);
-    if (!lookupRequest || isEmailDraftPrompt(userPrompt) || isInboxTriagePrompt(userPrompt)) {
-      return null;
-    }
-
-    const emailStatus = await this.email.getStatus();
-    if (!emailStatus.ready) {
-      return {
-        requestId,
-        reply: `A integração de email não está pronta para leitura. ${emailStatus.message}`,
-        messages: buildBaseMessages(userPrompt, orchestration),
-        toolExecutions: [],
-      };
-    }
-
-    requestLogger.info("Using direct email lookup route", {
-      senderQuery: lookupRequest.senderQuery,
-      category: lookupRequest.category,
-      unreadOnly: lookupRequest.unreadOnly,
-      sinceHours: lookupRequest.sinceHours,
-    });
-
-    const resolved = await this.resolveEmailReferenceFromPrompt(userPrompt, requestLogger);
-    if (!resolved) {
-      return null;
-    }
-
-    if (!resolved.message) {
-      return {
-        requestId,
-        reply: buildEmailLookupMissReply(resolved.request),
-        messages: buildBaseMessages(userPrompt, orchestration),
-        toolExecutions: [
-          {
-            toolName: "list_recent_emails",
-            resultPreview: JSON.stringify(
-              {
-                totalMatches: 0,
-                label: resolved.label,
-                sinceHours: resolved.request.sinceHours,
-              },
-              null,
-              2,
-            ),
-          },
-        ],
-      };
-    }
-
-    const summary = summarizeEmailForOperations({
-      subject: resolved.message.subject,
-      from: resolved.message.from,
-      text: resolved.message.preview,
-    });
-
-    return {
+    return this.getEmailDirectService().tryRunEmailLookup({
+      userPrompt,
       requestId,
-      reply: buildEmailLookupReply({
-        resolved: resolved as ResolvedEmailReference & { message: EmailMessageSummary },
-        summary,
-      }),
-      messages: buildBaseMessages(userPrompt, orchestration),
-      toolExecutions: [
-        {
-          toolName: "list_recent_emails",
-          resultPreview: JSON.stringify(
-            {
-              totalMatches: resolved.totalMatches,
-              label: resolved.label,
-              match: {
-                uid: resolved.message.uid,
-                subject: resolved.message.subject,
-                from: resolved.message.from,
-              },
-            },
-            null,
-            2,
-          ).slice(0, 240),
-        },
-      ],
-    };
+      requestLogger,
+      orchestration,
+    });
   }
 
   private async tryRunDirectOperationalBrief(
@@ -12968,55 +13042,12 @@ export class AgentCore {
     requestLogger: Logger,
     orchestration: OrchestrationContext,
   ): Promise<AgentRunResult | null> {
-    if (!isContentOverviewPrompt(userPrompt)) {
-      return null;
-    }
-
-    const limit = extractPromptLimit(userPrompt, 10, 30);
-    const platform = extractContentPlatform(userPrompt) as
-      | "instagram"
-      | "tiktok"
-      | "youtube"
-      | "shorts"
-      | "reels"
-      | "linkedin"
-      | "blog"
-      | "email"
-      | "telegram"
-      | undefined;
-    const channelKey = extractContentChannelKey(userPrompt);
-    requestLogger.info("Using direct content overview route", {
-      limit,
-      platform,
-      channelKey,
-    });
-
-    const items = this.contentOps.listItems({
-      platform,
-      channelKey,
-      limit,
-    });
-
-    return {
+    return this.getContentDirectService().tryRunContentOverview({
+      userPrompt,
       requestId,
-      reply: buildContentOverviewReply(items),
-      messages: buildBaseMessages(userPrompt, orchestration),
-      toolExecutions: [
-        {
-          toolName: "list_content_items",
-          resultPreview: JSON.stringify(
-            {
-              total: items.length,
-              platform,
-              channelKey,
-              limit,
-            },
-            null,
-            2,
-          ),
-        },
-      ],
-    };
+      requestLogger,
+      orchestration,
+    });
   }
 
   private async tryRunDirectContentChannels(
@@ -13025,41 +13056,12 @@ export class AgentCore {
     requestLogger: Logger,
     orchestration: OrchestrationContext,
   ): Promise<AgentRunResult | null> {
-    if (!isContentChannelsPrompt(userPrompt)) {
-      return null;
-    }
-
-    const limit = extractPromptLimit(userPrompt, 10, 30);
-    const platform = extractContentPlatform(userPrompt);
-    requestLogger.info("Using direct content channels route", {
-      limit,
-      platform,
-    });
-
-    const channels = this.contentOps.listChannels({
-      platform,
-      limit,
-    });
-
-    return {
+    return this.getContentDirectService().tryRunContentChannels({
+      userPrompt,
       requestId,
-      reply: buildContentChannelsReply(channels),
-      messages: buildBaseMessages(userPrompt, orchestration),
-      toolExecutions: [
-        {
-          toolName: "list_content_channels",
-          resultPreview: JSON.stringify(
-            {
-              total: channels.length,
-              platform,
-              limit,
-            },
-            null,
-            2,
-          ),
-        },
-      ],
-    };
+      requestLogger,
+      orchestration,
+    });
   }
 
   private async tryRunDirectContentIdeaGeneration(
@@ -13068,163 +13070,12 @@ export class AgentCore {
     requestLogger: Logger,
     orchestration: OrchestrationContext,
   ): Promise<AgentRunResult | null> {
-    if (!isContentIdeaGenerationPrompt(userPrompt)) {
-      return null;
-    }
-
-    const channelKey = inferDefaultContentChannelKey(userPrompt);
-    const requestedPlatform = extractContentPlatform(userPrompt);
-    const seed = extractContentIdeaSeed(userPrompt);
-    const limit = extractPromptLimit(userPrompt, 8, 20);
-    const channels = this.contentOps.listChannels({ limit: 20 });
-    const channel = channels.find((item) => item.key === channelKey)
-      ?? channels.find((item) => item.platform === requestedPlatform)
-      ?? channels[0];
-
-    if (!channel) {
-      return {
-        requestId,
-        reply: "Nao encontrei nenhum canal editorial configurado para gerar pautas.",
-        messages: buildBaseMessages(userPrompt, orchestration),
-        toolExecutions: [],
-      };
-    }
-
-    const formats = this.contentOps.listFormatTemplates({ activeOnly: true, limit: 20 });
-    const hooks = this.contentOps.listHookTemplates({ limit: 20 });
-    const series = this.contentOps.listSeries({ channelKey: channel.key, limit: 20 });
-
-    requestLogger.info("Using direct content idea generation route", {
-      channelKey: channel.key,
-      platform: channel.platform,
-      limit,
-      seed,
-    });
-
-    const fallbackIdeas = buildFallbackEditorialIdeas({
-      channelName: channel.name,
-      seed,
-      formatKeys: formats.map((item) => item.key),
-      seriesKeys: series.map((item) => item.key),
-      limit,
-    }).map((idea) => ({
-      ...idea,
-      audience: channel.persona ?? idea.audience,
-    }));
-
-    type GeneratedIdea = {
-      title: string;
-      hook?: string;
-      pillar?: string;
-      audience?: string;
-      formatTemplateKey?: string;
-      seriesKey?: string | null;
-      notes?: string;
-    };
-
-    let generatedIdeas: GeneratedIdea[] = fallbackIdeas;
-    try {
-      const response = await this.client.chat({
-        messages: [
-          {
-            role: "system",
-            content: [
-              "Você é o editor-chefe do Atlas para short-form content.",
-              "Responda somente JSON válido.",
-              "Formato: um array chamado ideas.",
-              "Cada item deve ter: title, hook, pillar, audience, formatTemplateKey, seriesKey, notes.",
-              "Não repita ideias.",
-              "Faça ideias com potencial de retenção e série.",
-              "Se não houver série adequada, use null em seriesKey.",
-              "Use somente formatTemplateKey e seriesKey existentes no contexto.",
-            ].join(" "),
-          },
-          {
-            role: "user",
-            content: [
-              `Canal: ${channel.name}`,
-              `Channel key: ${channel.key}`,
-              `Plataforma: ${channel.platform}`,
-              `Nicho: ${channel.niche ?? ""}`,
-              `Persona: ${channel.persona ?? ""}`,
-              `Objetivo: ${channel.primaryGoal ?? ""}`,
-              `Estilo: ${channel.styleNotes ?? ""}`,
-              `Idioma: ${channel.language ?? "pt-BR"}`,
-              `Quantidade: ${limit}`,
-              `Seed opcional: ${seed ?? "nenhuma"}`,
-              "",
-              "Formatos disponíveis:",
-              ...formats.map((item) => `- ${item.key}: ${item.label} | ${item.structure}`),
-              "",
-              "Séries disponíveis:",
-              ...(series.length > 0
-                ? series.map((item) => `- ${item.key}: ${item.title} | ${item.premise ?? ""}`)
-                : ["- nenhuma série específica"]),
-              "",
-              "Hooks de referência:",
-              ...hooks.slice(0, 8).map((item) => `- ${item.label}: ${item.template}`),
-            ].join("\n"),
-          },
-        ],
-      });
-
-      const parsed = JSON.parse(stripCodeFences(response.message.content ?? "")) as
-        | { ideas?: GeneratedIdea[]; items?: GeneratedIdea[] }
-        | GeneratedIdea[];
-      const rawIdeas = Array.isArray(parsed)
-        ? parsed
-        : Array.isArray(parsed.ideas)
-          ? parsed.ideas
-          : Array.isArray(parsed.items)
-            ? parsed.items
-            : [];
-      if (rawIdeas.length > 0) {
-        generatedIdeas = rawIdeas
-          .filter((item) => item && typeof item.title === "string" && item.title.trim().length > 0)
-          .slice(0, limit);
-      }
-    } catch (error) {
-      requestLogger.warn("Content idea generation fell back to deterministic ideas", {
-        channelKey: channel.key,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-
-    const savedItems = generatedIdeas.map((idea) =>
-      this.contentOps.createItem({
-        title: idea.title,
-        platform: channel.platform === "youtube" ? "youtube" : channel.platform,
-        format: "short_video",
-        status: "idea",
-        pillar: idea.pillar,
-        audience: idea.audience,
-        hook: idea.hook,
-        notes: idea.notes,
-        channelKey: channel.key,
-        seriesKey: idea.seriesKey ?? undefined,
-        formatTemplateKey: idea.formatTemplateKey ?? undefined,
-      })
-    );
-
-    return {
+    return this.getContentGenerationDirectService().tryRunContentIdeaGeneration({
+      userPrompt,
       requestId,
-      reply: buildContentIdeaGenerationReply(savedItems),
-      messages: buildBaseMessages(userPrompt, orchestration),
-      toolExecutions: [
-        {
-          toolName: "save_content_item",
-          resultPreview: JSON.stringify(
-            {
-              total: savedItems.length,
-              channelKey: channel.key,
-              platform: channel.platform,
-            },
-            null,
-            2,
-          ),
-        },
-      ],
-    };
+      requestLogger,
+      orchestration,
+    });
   }
 
   private async tryRunDirectDailyEditorialResearch(
@@ -13233,42 +13084,12 @@ export class AgentCore {
     requestLogger: Logger,
     orchestration: OrchestrationContext,
   ): Promise<AgentRunResult | null> {
-    if (!isDailyEditorialResearchPrompt(userPrompt)) {
-      return null;
-    }
-
-    const channelKey = inferDefaultContentChannelKey(userPrompt);
-    requestLogger.info("Using direct daily editorial research route", {
-      channelKey,
-    });
-
-    const result = await this.runDailyEditorialResearch({
-      channelKey,
-      timezone: this.config.google.defaultTimezone,
-      trendsLimit: 10,
-      ideasLimit: 5,
-    });
-
-    return {
+    return this.getContentDirectService().tryRunDailyEditorialResearch({
+      userPrompt,
       requestId,
-      reply: result.reply,
-      messages: buildBaseMessages(userPrompt, orchestration),
-      toolExecutions: [
-        {
-          toolName: "daily_editorial_research",
-          resultPreview: JSON.stringify(
-            {
-              channelKey,
-              runDate: result.runDate,
-              createdItemIds: result.createdItemIds,
-              skipped: result.skipped,
-            },
-            null,
-            2,
-          ),
-        },
-      ],
-    };
+      requestLogger,
+      orchestration,
+    });
   }
 
   private async tryRunDirectContentReview(
@@ -13277,101 +13098,12 @@ export class AgentCore {
     requestLogger: Logger,
     orchestration: OrchestrationContext,
   ): Promise<AgentRunResult | null> {
-    if (!isContentReviewPrompt(userPrompt)) {
-      return null;
-    }
-
-    const requestedItemId = extractContentItemId(userPrompt);
-    const requestedOrdinal = extractContentQueueOrdinal(userPrompt);
-    if (!requestedItemId && !requestedOrdinal) {
-      return {
-        requestId,
-        reply: "Diga qual item editorial devo revisar, por exemplo: `aprove o item #12` ou `aprove o primeiro item`.",
-        messages: buildBaseMessages(userPrompt, orchestration),
-        toolExecutions: [],
-      };
-    }
-
-    const normalized = normalizeEmailAnalysisText(userPrompt);
-    const action: "approved" | "rejected" = includesAny(normalized, ["reprovar", "reprove"]) ? "rejected" : "approved";
-    const reason = extractContentReviewReason(userPrompt);
-    const now = new Date().toISOString();
-    const channelKey = extractContentChannelKey(userPrompt) ?? inferDefaultContentChannelKey(userPrompt);
-    const queueItems = this.contentOps.listItems({
-      channelKey,
-      limit: 20,
-    });
-    let resolvedItemId = requestedItemId;
-    if (requestedOrdinal && requestedOrdinal >= 1 && requestedOrdinal <= queueItems.length) {
-      resolvedItemId = queueItems[requestedOrdinal - 1]?.id;
-    }
-    const directItem = requestedItemId ? this.contentOps.getItemById(requestedItemId) : null;
-    if (!directItem && !resolvedItemId) {
-      return {
-        requestId,
-        reply: buildContentReviewNotFoundReply({
-          requestedId: requestedItemId ?? requestedOrdinal ?? 0,
-          channelKey,
-          queue: queueItems.map((item) => ({ id: item.id, title: item.title })),
-        }),
-        messages: buildBaseMessages(userPrompt, orchestration),
-        toolExecutions: [],
-      };
-    }
-    if (directItem) {
-      resolvedItemId = directItem.id;
-    }
-
-    if (!resolvedItemId) {
-      return {
-        requestId,
-        reply: buildContentReviewNotFoundReply({
-          requestedId: requestedItemId ?? requestedOrdinal ?? 0,
-          channelKey,
-          queue: queueItems.map((item) => ({ id: item.id, title: item.title })),
-        }),
-        messages: buildBaseMessages(userPrompt, orchestration),
-        toolExecutions: [],
-      };
-    }
-
-    requestLogger.info("Using direct content review route", {
-      requestedItemId,
-      resolvedItemId,
-      requestedOrdinal,
-      action,
-    });
-
-    const item = this.contentOps.updateItem({
-      id: resolvedItemId,
-      status: action === "approved" ? "draft" : "archived",
-      reviewFeedbackCategory: action === "rejected" ? classifyContentReviewFeedback(reason) ?? "reprovado_manual" : null,
-      reviewFeedbackReason: action === "rejected" ? reason ?? "reprovado sem motivo detalhado" : null,
-      lastReviewedAt: now,
-    });
-
-    return {
+    return this.getContentGenerationDirectService().tryRunContentReview({
+      userPrompt,
       requestId,
-      reply: buildContentReviewReply({
-        action,
-        item,
-      }),
-      messages: buildBaseMessages(userPrompt, orchestration),
-      toolExecutions: [
-        {
-          toolName: "update_content_item",
-          resultPreview: JSON.stringify(
-            {
-              id: item.id,
-              status: item.status,
-              reviewFeedbackCategory: item.reviewFeedbackCategory,
-            },
-            null,
-            2,
-          ),
-        },
-      ],
-    };
+      requestLogger,
+      orchestration,
+    });
   }
 
   private async tryRunDirectContentScriptGeneration(
@@ -13380,304 +13112,12 @@ export class AgentCore {
     requestLogger: Logger,
     orchestration: OrchestrationContext,
   ): Promise<AgentRunResult | null> {
-    if (!isContentScriptGenerationPrompt(userPrompt)) {
-      return null;
-    }
-
-    const requestedItemId = extractContentItemId(userPrompt);
-    const requestedOrdinal = extractContentQueueOrdinal(userPrompt);
-    const channelKey = extractContentChannelKey(userPrompt) ?? inferDefaultContentChannelKey(userPrompt);
-    const queueItems = this.contentOps.listItems({
-      channelKey,
-      limit: 20,
-    });
-
-    let item = requestedItemId ? this.contentOps.getItemById(requestedItemId) : null;
-    if (!item && requestedOrdinal && requestedOrdinal >= 1 && requestedOrdinal <= queueItems.length) {
-      item = queueItems[requestedOrdinal - 1] ?? null;
-    }
-
-    if (!item) {
-      return {
-        requestId,
-        reply: buildContentReviewNotFoundReply({
-          requestedId: requestedItemId ?? requestedOrdinal ?? 0,
-          channelKey,
-          queue: queueItems.map((entry) => ({ id: entry.id, title: entry.title })),
-        }),
-        messages: buildBaseMessages(userPrompt, orchestration),
-        toolExecutions: [],
-      };
-    }
-
-    requestLogger.info("Using direct content script generation route", {
-      itemId: item.id,
-      channelKey: item.channelKey,
-    });
-
-    const formatTemplates = this.contentOps.listFormatTemplates({ activeOnly: true, limit: 20 });
-    const formatTemplate = formatTemplates.find((entry) => entry.key === item.formatTemplateKey);
-    const series = item.seriesKey
-      ? this.contentOps.listSeries({ channelKey: item.channelKey ?? undefined, limit: 20 }).find((entry) => entry.key === item.seriesKey)
-      : undefined;
-
-    const manualPayload = buildManualShortFormPackage({
-      item,
-      platform: item.platform,
-    });
-    const fallbackPayload = manualPayload ?? buildShortFormFallbackPackage({
-      item,
-      platform: item.platform,
-    });
-
-    let payload = { ...fallbackPayload };
-
-    if (!manualPayload) {
-      try {
-        const response = await this.client.chat({
-          messages: [
-            {
-              role: "system",
-              content: [
-                "Você é roteirista de short-form content para o canal Riqueza Despertada.",
-                "Sua tarefa é gerar um short com retenção forte para YouTube Shorts e TikTok.",
-                "O Atlas não cria vídeos; o Atlas cria retenção.",
-                "Responda somente JSON válido.",
-                "Formato: styleMode, mode, targetDurationSeconds, hook, script, cta, description, titleOptions, scenes, platformVariants.",
-                "styleMode deve ser um destes: operator, motivational, emotional, contrarian.",
-                "mode deve ser viral_short.",
-                "targetDurationSeconds entre 22 e 32.",
-                "titleOptions deve ser array com 3 títulos curtos.",
-                "Crie cenas curtas com os campos order, durationSeconds, voiceover, overlay, visualDirection, assetSearchQuery.",
-                "assetSearchQuery deve ser uma busca curta em inglês, de 2 a 5 palavras, boa para achar b-roll em banco de vídeo.",
-                "O canal é dark/faceless: assetSearchQuery deve priorizar dashboard, laptop, hands, UI, app interface, small business, money desk e phone UI.",
-                "Nunca use termos como presenter, speaker, host, selfie, portrait, face, webcam, person talking, business meeting, corporate office, whiteboard, presentation, generic laptop typing ou stock office smiling.",
-                "Cada vídeo deve ter UMA ideia central. Sem lista longa, sem densidade excessiva, sem jargão demais.",
-                "O hook precisa abrir tensão real em até 2 segundos.",
-                "Overlay principal com no máximo 4 palavras. Texto punch, não frase corporativa.",
-                "Cenas genéricas ou intercambiáveis com qualquer canal financeiro devem ser rejeitadas.",
-                "O CTA deve ser curto. Não invente link, checklist ou oferta que ainda não existem.",
-                "Mantenha tom pragmático, sem promessa milagrosa.",
-              ].join(" "),
-            },
-            {
-              role: "user",
-              content: [
-                `Título atual: ${item.title}`,
-                `Plataforma: ${item.platform}`,
-                `Pilar: ${item.pillar ?? ""}`,
-                `Audience: ${item.audience ?? ""}`,
-                `Hook atual: ${item.hook ?? ""}`,
-                `Notas: ${item.notes ?? ""}`,
-                `Formato editorial: ${formatTemplate ? `${formatTemplate.label} | ${formatTemplate.structure}` : item.formatTemplateKey ?? ""}`,
-                `Série: ${series ? `${series.title} | ${series.premise ?? ""}` : item.seriesKey ?? ""}`,
-                `Plataforma principal: ${item.platform}`,
-                "Objetivo: retenção forte, clareza, 1 mecanismo central, alto potencial de replay e comentário.",
-              ].join("\n"),
-            },
-          ],
-        });
-
-        const parsed = JSON.parse(stripCodeFences(response.message.content ?? "")) as {
-          styleMode?: ShortStyleMode;
-          mode?: string;
-          targetDurationSeconds?: number;
-          hook?: string;
-          script?: string;
-          cta?: string;
-          description?: string;
-          titleOptions?: string[];
-          scenes?: ShortScenePlan[];
-          platformVariants?: Partial<ShortPlatformVariants>;
-        };
-
-        payload = {
-          styleMode: normalizeShortStyleMode(parsed.styleMode, payload.styleMode),
-          mode: parsed.mode === "viral_short" ? parsed.mode : payload.mode,
-          targetDurationSeconds: clampShortTargetDuration(parsed.targetDurationSeconds, payload.targetDurationSeconds),
-          hook: typeof parsed.hook === "string" && parsed.hook.trim() ? parsed.hook.trim() : payload.hook,
-          script: typeof parsed.script === "string" && parsed.script.trim() ? parsed.script.trim() : payload.script,
-          cta: typeof parsed.cta === "string" && parsed.cta.trim() ? parsed.cta.trim() : payload.cta,
-          description:
-            typeof parsed.description === "string" && parsed.description.trim()
-              ? parsed.description.trim()
-              : payload.description,
-          titleOptions: Array.isArray(parsed.titleOptions) && parsed.titleOptions.length > 0
-            ? parsed.titleOptions.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0).slice(0, 3)
-            : payload.titleOptions,
-          scenes: normalizeScenePlan(parsed.scenes, payload.scenes),
-          platformVariants: {
-            youtubeShort: {
-              title:
-                typeof parsed.platformVariants?.youtubeShort?.title === "string" && parsed.platformVariants.youtubeShort.title.trim()
-                  ? parsed.platformVariants.youtubeShort.title.trim()
-                  : payload.platformVariants.youtubeShort.title,
-              caption:
-                typeof parsed.platformVariants?.youtubeShort?.caption === "string" && parsed.platformVariants.youtubeShort.caption.trim()
-                  ? parsed.platformVariants.youtubeShort.caption.trim()
-                  : payload.platformVariants.youtubeShort.caption,
-              coverText:
-                typeof parsed.platformVariants?.youtubeShort?.coverText === "string" && parsed.platformVariants.youtubeShort.coverText.trim()
-                  ? parsed.platformVariants.youtubeShort.coverText.trim()
-                  : payload.platformVariants.youtubeShort.coverText,
-            },
-            tiktok: {
-              hook:
-                typeof parsed.platformVariants?.tiktok?.hook === "string" && parsed.platformVariants.tiktok.hook.trim()
-                  ? parsed.platformVariants.tiktok.hook.trim()
-                  : payload.platformVariants.tiktok.hook,
-              caption:
-                typeof parsed.platformVariants?.tiktok?.caption === "string" && parsed.platformVariants.tiktok.caption.trim()
-                  ? parsed.platformVariants.tiktok.caption.trim()
-                  : payload.platformVariants.tiktok.caption,
-              coverText:
-                typeof parsed.platformVariants?.tiktok?.coverText === "string" && parsed.platformVariants.tiktok.coverText.trim()
-                  ? parsed.platformVariants.tiktok.coverText.trim()
-                  : payload.platformVariants.tiktok.coverText,
-            },
-          },
-        };
-      } catch (error) {
-        requestLogger.warn("Content script generation fell back to deterministic package", {
-          itemId: item.id,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-    } else {
-      requestLogger.info("Using manual short script package", {
-        itemId: item.id,
-        scenes: manualPayload.scenes.length,
-      });
-    }
-
-    payload = validateShortFormPackage(payload, fallbackPayload, {
-      title: item.title,
-      pillar: item.pillar,
-      hook: item.hook,
-      formatTemplateKey: item.formatTemplateKey,
-      seriesKey: item.seriesKey,
-      notes: item.notes,
-    });
-
-    const sceneAssets = await resolveSceneAssets(
-      this.pexelsMedia,
-      payload.scenes,
-      this.config.media.pexelsMaxScenesPerRequest,
-    );
-    const productionPack = buildShortProductionPack(payload.styleMode, payload.scenes, sceneAssets);
-    const distributionPlan = buildDistributionPlan({
-      item,
-      channelKey: item.channelKey ?? channelKey,
-      orderOffset: 0,
-    });
-
-    const scriptPackage = [
-      "SHORT_PACKAGE_V3",
-      `style_mode: ${payload.styleMode}`,
-      `mode: ${payload.mode}`,
-      `target_duration_seconds: ${payload.targetDurationSeconds}`,
-      `hook: ${payload.hook}`,
-      `cta: ${payload.cta}`,
-      "",
-      "title_options:",
-      ...payload.titleOptions.map((title, index) => `${index + 1}. ${title}`),
-      "",
-      "scene_plan:",
-      ...payload.scenes.map((scene) =>
-        `${scene.order}. ${scene.durationSeconds}s | VO=${scene.voiceover} | overlay=${scene.overlay} | visual=${scene.visualDirection} | search=${scene.assetSearchQuery}`,
-      ),
-      "",
-      "scene_meta:",
-      ...payload.scenes.map((scene) =>
-        `scene_${scene.order}.meta: narrative=${scene.narrativeFunction ?? "mechanism"} | purpose=${scene.scenePurpose ?? "mostrar ação ou prova"} | highlights=${(scene.overlayHighlightWords ?? []).join(", ")} | emotional=${scene.emotionalTrigger ?? "curiosity"} | proof=${scene.proofType ?? "none"} | env=${scene.visualEnvironment ?? "workspace"} | action=${scene.visualAction ?? "mostrar contexto real"} | camera=${scene.visualCamera ?? "over_shoulder"} | pacing=${scene.visualPacing ?? "steady"} | provider=${scene.assetProviderHint ?? "pexels"} | fallback_search=${scene.assetFallbackQuery ?? scene.assetSearchQuery} | forbidden=${(scene.forbiddenVisuals ?? []).join(", ")} | retention=${scene.retentionDriver ?? "specific_mechanism"}`,
-      ),
-      "",
-      "scene_assets:",
-      ...(sceneAssets.length > 0
-        ? sceneAssets.flatMap((scene) => [
-            `scene_${scene.order}.query: ${scene.searchQuery}`,
-            ...scene.suggestions.slice(0, 2).map((asset, index) => `scene_${scene.order}.asset_${index + 1}: ${asset.videoUrl ?? asset.pageUrl}`),
-          ])
-        : ["scene_assets: no_api_results"]),
-      "",
-      "production_pack:",
-      `voice_style: ${productionPack.voiceStyle}`,
-      `edit_rhythm: ${productionPack.editRhythm}`,
-      `subtitle_style: ${productionPack.subtitleStyle}`,
-      ...productionPack.scenes.map((scene) =>
-        `scene_${scene.order}.edit: subtitle=${scene.subtitleLine} | emphasis=${scene.emphasisWords.join(", ")} | instruction=${scene.editInstruction}${scene.selectedAsset ? ` | selected_asset=${scene.selectedAsset}` : ""}`,
-      ),
-      "",
-      "distribution_plan:",
-      `primary_platform: ${distributionPlan.primaryPlatform}`,
-      `secondary_platform: ${distributionPlan.secondaryPlatform}`,
-      `recommended_window: ${distributionPlan.recommendedWindow}`,
-      `secondary_window: ${distributionPlan.secondaryWindow}`,
-      `hypothesis: ${distributionPlan.hypothesis}`,
-      `rationale: ${distributionPlan.rationale}`,
-      "",
-      "platform_variants:",
-      `youtube_short.title: ${payload.platformVariants.youtubeShort.title}`,
-      `youtube_short.cover_text: ${payload.platformVariants.youtubeShort.coverText}`,
-      `youtube_short.caption: ${payload.platformVariants.youtubeShort.caption}`,
-      `tiktok.hook: ${payload.platformVariants.tiktok.hook}`,
-      `tiktok.cover_text: ${payload.platformVariants.tiktok.coverText}`,
-      `tiktok.caption: ${payload.platformVariants.tiktok.caption}`,
-      "",
-      "script:",
-      payload.script,
-      "",
-      "description:",
-      payload.description,
-      "",
-      "quality_gate:",
-      `score: ${payload.qualityAssessment?.score ?? 0}`,
-      `passed: ${payload.qualityAssessment?.passed === true ? "true" : "false"}`,
-      `reasons: ${(payload.qualityAssessment?.reasons ?? []).join(" | ")}`,
-      "END_SHORT_PACKAGE_V3",
-    ].join("\n");
-
-    const updated = this.contentOps.updateItem({
-      id: item.id,
-      hook: payload.hook,
-      callToAction: payload.cta,
-      notes: item.notes ? `${item.notes}\n\n${scriptPackage}` : scriptPackage,
-      status: "draft",
-    });
-
-    return {
+    return this.getContentGenerationDirectService().tryRunContentScriptGeneration({
+      userPrompt,
       requestId,
-      reply: buildContentScriptReply({
-        item: updated,
-        styleMode: payload.styleMode,
-        mode: payload.mode,
-        targetDurationSeconds: payload.targetDurationSeconds,
-        headlineOptions: payload.titleOptions,
-        script: payload.script,
-        description: payload.description,
-        scenes: payload.scenes,
-        platformVariants: payload.platformVariants,
-        sceneAssets,
-        productionPack,
-        distributionPlan,
-        qualityAssessment: payload.qualityAssessment,
-      }),
-      messages: buildBaseMessages(userPrompt, orchestration),
-      toolExecutions: [
-        {
-          toolName: "update_content_item",
-          resultPreview: JSON.stringify(
-            {
-              id: updated.id,
-              status: updated.status,
-              hasScriptPackage: true,
-            },
-            null,
-            2,
-          ),
-        },
-      ],
-    };
+      requestLogger,
+      orchestration,
+    });
   }
 
   private async tryRunDirectContentBatchPlanning(
@@ -13686,69 +13126,12 @@ export class AgentCore {
     requestLogger: Logger,
     orchestration: OrchestrationContext,
   ): Promise<AgentRunResult | null> {
-    if (!isContentBatchPlanningPrompt(userPrompt)) {
-      return null;
-    }
-
-    const channelKey = extractContentChannelKey(userPrompt) ?? inferDefaultContentChannelKey(userPrompt);
-    const limit = Math.min(10, extractPromptLimit(userPrompt, 5, 10));
-    const items = this.contentOps
-      .listItems({ channelKey, limit: 20 })
-      .filter((item) => isRiquezaContentItemEligible(item))
-      .filter((item) => item.status !== "archived" && item.status !== "published")
-      .sort((left, right) => {
-        const statusWeight = (value: string) => value === "draft" ? 0 : value === "idea" ? 1 : value === "scheduled" ? 2 : 3;
-        return statusWeight(left.status) - statusWeight(right.status)
-          || (right.queuePriority ?? right.ideaScore ?? 0) - (left.queuePriority ?? left.ideaScore ?? 0)
-          || left.id - right.id;
-      })
-      .slice(0, limit);
-
-    requestLogger.info("Using direct content batch planning route", {
-      channelKey,
-      limit,
-      selected: items.length,
-    });
-
-    const batchItems = items.map((item, index) => {
-      const distributionPlan = buildDistributionPlan({
-        item,
-        channelKey: item.channelKey ?? channelKey,
-        orderOffset: index,
-      });
-      return {
-        id: item.id,
-        title: item.title,
-        status: item.status,
-        queuePriority: item.queuePriority,
-        ideaScore: item.ideaScore,
-        hasScriptPackage: hasSavedShortPackage(item.notes),
-        recommendedWindow: distributionPlan.recommendedWindow,
-        hypothesis: distributionPlan.hypothesis,
-      };
-    });
-
-    return {
+    return this.getContentGenerationDirectService().tryRunContentBatchPlanning({
+      userPrompt,
       requestId,
-      reply: buildContentBatchReply({
-        channelKey,
-        items: batchItems,
-      }),
-      messages: buildBaseMessages(userPrompt, orchestration),
-      toolExecutions: [
-        {
-          toolName: "list_content_items",
-          resultPreview: JSON.stringify(
-            {
-              channelKey,
-              selected: batchItems.length,
-            },
-            null,
-            2,
-          ),
-        },
-      ],
-    };
+      requestLogger,
+      orchestration,
+    });
   }
 
   private async tryRunDirectContentBatchGeneration(
@@ -13757,308 +13140,12 @@ export class AgentCore {
     requestLogger: Logger,
     orchestration: OrchestrationContext,
   ): Promise<AgentRunResult | null> {
-    if (!isContentBatchGenerationPrompt(userPrompt)) {
-      return null;
-    }
-
-    const channelKey = extractContentChannelKey(userPrompt) ?? inferDefaultContentChannelKey(userPrompt);
-    const limit = Math.min(10, extractPromptLimit(userPrompt, 5, 10));
-    const items = this.contentOps
-      .listItems({ channelKey, limit: 20 })
-      .filter((item) => isRiquezaContentItemEligible(item))
-      .filter((item) => item.status !== "archived" && item.status !== "published")
-      .sort((left, right) => {
-        const statusWeight = (value: string) => value === "draft" ? 0 : value === "idea" ? 1 : value === "scheduled" ? 2 : 3;
-        return statusWeight(left.status) - statusWeight(right.status)
-          || (right.queuePriority ?? right.ideaScore ?? 0) - (left.queuePriority ?? left.ideaScore ?? 0)
-          || left.id - right.id;
-      })
-      .slice(0, limit);
-
-    requestLogger.info("Using direct content batch generation route", {
-      channelKey,
-      limit,
-      selected: items.length,
-    });
-
-    if (items.length === 0) {
-      return {
-        requestId,
-        reply: buildContentBatchGenerationReply({ channelKey, generated: [] }),
-        messages: buildBaseMessages(userPrompt, orchestration),
-        toolExecutions: [],
-      };
-    }
-
-    const generated: Array<{
-      id: number;
-      title: string;
-      status: string;
-      recommendedWindow: string;
-      hasAssets: boolean;
-    }> = [];
-
-    for (const [index, sourceItem] of items.entries()) {
-      const item = this.contentOps.getItemById(sourceItem.id) ?? sourceItem;
-      const formatTemplates = this.contentOps.listFormatTemplates({ activeOnly: true, limit: 20 });
-      const formatTemplate = formatTemplates.find((entry) => entry.key === item.formatTemplateKey);
-      const series = item.seriesKey
-        ? this.contentOps.listSeries({ channelKey: item.channelKey ?? undefined, limit: 20 }).find((entry) => entry.key === item.seriesKey)
-        : undefined;
-
-      const manualPayload = buildManualShortFormPackage({
-        item,
-        platform: item.platform,
-      });
-      const fallbackPayload = manualPayload ?? buildShortFormFallbackPackage({
-        item,
-        platform: item.platform,
-      });
-
-      let payload = { ...fallbackPayload };
-
-      if (!manualPayload) {
-        try {
-        const response = await this.client.chat({
-          messages: [
-            {
-              role: "system",
-              content: [
-                "Você é roteirista de short-form content para o canal Riqueza Despertada.",
-                "Sua tarefa é gerar um short com retenção forte para YouTube Shorts e TikTok.",
-                "O Atlas não cria vídeos; o Atlas cria retenção.",
-                "Responda somente JSON válido.",
-                "Formato: styleMode, mode, targetDurationSeconds, hook, script, cta, description, titleOptions, scenes, platformVariants.",
-                "styleMode deve ser um destes: operator, motivational, emotional, contrarian.",
-                "mode deve ser viral_short.",
-                "targetDurationSeconds entre 22 e 32.",
-                "titleOptions deve ser array com 3 títulos curtos.",
-                "Crie cenas curtas com os campos order, durationSeconds, voiceover, overlay, visualDirection, assetSearchQuery.",
-                "assetSearchQuery deve ser uma busca curta em inglês, de 2 a 5 palavras, boa para achar b-roll em banco de vídeo.",
-                "O canal é dark/faceless: assetSearchQuery deve priorizar dashboard, laptop, hands, UI, app interface, small business, money desk e phone UI.",
-                "Nunca use termos como presenter, speaker, host, selfie, portrait, face, webcam, person talking, business meeting, corporate office, whiteboard, presentation, generic laptop typing ou stock office smiling.",
-                "Cada vídeo deve ter UMA ideia central. Sem lista longa, sem densidade excessiva, sem jargão demais.",
-                "O hook precisa abrir tensão real em até 2 segundos.",
-                "Overlay principal com no máximo 4 palavras. Texto punch, não frase corporativa.",
-                "Cenas genéricas ou intercambiáveis com qualquer canal financeiro devem ser rejeitadas.",
-                "O CTA deve ser curto. Não invente link, checklist ou oferta que ainda não existem.",
-                "Mantenha tom pragmático, sem promessa milagrosa.",
-              ].join(" "),
-            },
-            {
-              role: "user",
-              content: [
-                `Título atual: ${item.title}`,
-                `Plataforma: ${item.platform}`,
-                `Pilar: ${item.pillar ?? ""}`,
-                `Audience: ${item.audience ?? ""}`,
-                `Hook atual: ${item.hook ?? ""}`,
-                `Notas: ${item.notes ?? ""}`,
-                `Formato editorial: ${formatTemplate ? `${formatTemplate.label} | ${formatTemplate.structure}` : item.formatTemplateKey ?? ""}`,
-                `Série: ${series ? `${series.title} | ${series.premise ?? ""}` : item.seriesKey ?? ""}`,
-                `Plataforma principal: ${item.platform}`,
-                "Objetivo: retenção forte, clareza, 1 mecanismo central, alto potencial de replay e comentário.",
-              ].join("\n"),
-            },
-          ],
-        });
-
-        const parsed = JSON.parse(stripCodeFences(response.message.content ?? "")) as {
-          styleMode?: ShortStyleMode;
-          mode?: string;
-          targetDurationSeconds?: number;
-          hook?: string;
-          script?: string;
-          cta?: string;
-          description?: string;
-          titleOptions?: string[];
-          scenes?: ShortScenePlan[];
-          platformVariants?: Partial<ShortPlatformVariants>;
-        };
-
-        payload = {
-          styleMode: normalizeShortStyleMode(parsed.styleMode, payload.styleMode),
-          mode: parsed.mode === "viral_short" ? parsed.mode : payload.mode,
-          targetDurationSeconds: clampShortTargetDuration(parsed.targetDurationSeconds, payload.targetDurationSeconds),
-          hook: typeof parsed.hook === "string" && parsed.hook.trim() ? parsed.hook.trim() : payload.hook,
-          script: typeof parsed.script === "string" && parsed.script.trim() ? parsed.script.trim() : payload.script,
-          cta: typeof parsed.cta === "string" && parsed.cta.trim() ? parsed.cta.trim() : payload.cta,
-          description:
-            typeof parsed.description === "string" && parsed.description.trim()
-              ? parsed.description.trim()
-              : payload.description,
-          titleOptions: Array.isArray(parsed.titleOptions) && parsed.titleOptions.length > 0
-            ? parsed.titleOptions.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0).slice(0, 3)
-            : payload.titleOptions,
-          scenes: normalizeScenePlan(parsed.scenes, payload.scenes),
-          platformVariants: {
-            youtubeShort: {
-              title:
-                typeof parsed.platformVariants?.youtubeShort?.title === "string" && parsed.platformVariants.youtubeShort.title.trim()
-                  ? parsed.platformVariants.youtubeShort.title.trim()
-                  : payload.platformVariants.youtubeShort.title,
-              caption:
-                typeof parsed.platformVariants?.youtubeShort?.caption === "string" && parsed.platformVariants.youtubeShort.caption.trim()
-                  ? parsed.platformVariants.youtubeShort.caption.trim()
-                  : payload.platformVariants.youtubeShort.caption,
-              coverText:
-                typeof parsed.platformVariants?.youtubeShort?.coverText === "string" && parsed.platformVariants.youtubeShort.coverText.trim()
-                  ? parsed.platformVariants.youtubeShort.coverText.trim()
-                  : payload.platformVariants.youtubeShort.coverText,
-            },
-            tiktok: {
-              hook:
-                typeof parsed.platformVariants?.tiktok?.hook === "string" && parsed.platformVariants.tiktok.hook.trim()
-                  ? parsed.platformVariants.tiktok.hook.trim()
-                  : payload.platformVariants.tiktok.hook,
-              caption:
-                typeof parsed.platformVariants?.tiktok?.caption === "string" && parsed.platformVariants.tiktok.caption.trim()
-                  ? parsed.platformVariants.tiktok.caption.trim()
-                  : payload.platformVariants.tiktok.caption,
-              coverText:
-                typeof parsed.platformVariants?.tiktok?.coverText === "string" && parsed.platformVariants.tiktok.coverText.trim()
-                  ? parsed.platformVariants.tiktok.coverText.trim()
-                  : payload.platformVariants.tiktok.coverText,
-            },
-          },
-        };
-        } catch (error) {
-          requestLogger.warn("Content batch generation fell back to deterministic package", {
-            itemId: item.id,
-            error: error instanceof Error ? error.message : String(error),
-          });
-        }
-      } else {
-        requestLogger.info("Using manual short script package for batch generation", {
-          itemId: item.id,
-          scenes: manualPayload.scenes.length,
-        });
-      }
-
-      payload = validateShortFormPackage(payload, fallbackPayload, {
-        title: item.title,
-        pillar: item.pillar,
-        hook: item.hook,
-        formatTemplateKey: item.formatTemplateKey,
-        seriesKey: item.seriesKey,
-        notes: item.notes,
-      });
-      const sceneAssets = await resolveSceneAssets(
-        this.pexelsMedia,
-        payload.scenes,
-        this.config.media.pexelsMaxScenesPerRequest,
-      );
-      const productionPack = buildShortProductionPack(payload.styleMode, payload.scenes, sceneAssets);
-      const distributionPlan = buildDistributionPlan({
-        item,
-        channelKey: item.channelKey ?? channelKey,
-        orderOffset: index,
-      });
-
-      const scriptPackage = [
-        "SHORT_PACKAGE_V3",
-        `style_mode: ${payload.styleMode}`,
-        `mode: ${payload.mode}`,
-        `target_duration_seconds: ${payload.targetDurationSeconds}`,
-        `hook: ${payload.hook}`,
-        `cta: ${payload.cta}`,
-        "",
-        "title_options:",
-        ...payload.titleOptions.map((title, titleIndex) => `${titleIndex + 1}. ${title}`),
-        "",
-        "scene_plan:",
-        ...payload.scenes.map((scene) =>
-          `${scene.order}. ${scene.durationSeconds}s | VO=${scene.voiceover} | overlay=${scene.overlay} | visual=${scene.visualDirection} | search=${scene.assetSearchQuery}`,
-        ),
-        "",
-        "scene_meta:",
-        ...payload.scenes.map((scene) =>
-          `scene_${scene.order}.meta: narrative=${scene.narrativeFunction ?? "mechanism"} | purpose=${scene.scenePurpose ?? "mostrar ação ou prova"} | highlights=${(scene.overlayHighlightWords ?? []).join(", ")} | emotional=${scene.emotionalTrigger ?? "curiosity"} | proof=${scene.proofType ?? "none"} | env=${scene.visualEnvironment ?? "workspace"} | action=${scene.visualAction ?? "mostrar contexto real"} | camera=${scene.visualCamera ?? "over_shoulder"} | pacing=${scene.visualPacing ?? "steady"} | provider=${scene.assetProviderHint ?? "pexels"} | fallback_search=${scene.assetFallbackQuery ?? scene.assetSearchQuery} | forbidden=${(scene.forbiddenVisuals ?? []).join(", ")} | retention=${scene.retentionDriver ?? "specific_mechanism"}`,
-        ),
-        "",
-        "scene_assets:",
-        ...(sceneAssets.length > 0
-          ? sceneAssets.flatMap((scene) => [
-              `scene_${scene.order}.query: ${scene.searchQuery}`,
-              ...scene.suggestions.slice(0, 2).map((asset, assetIndex) => `scene_${scene.order}.asset_${assetIndex + 1}: ${asset.videoUrl ?? asset.pageUrl}`),
-            ])
-          : ["scene_assets: no_api_results"]),
-        "",
-        "production_pack:",
-        `voice_style: ${productionPack.voiceStyle}`,
-        `edit_rhythm: ${productionPack.editRhythm}`,
-        `subtitle_style: ${productionPack.subtitleStyle}`,
-        ...productionPack.scenes.map((scene) =>
-          `scene_${scene.order}.edit: subtitle=${scene.subtitleLine} | emphasis=${scene.emphasisWords.join(", ")} | instruction=${scene.editInstruction}${scene.selectedAsset ? ` | selected_asset=${scene.selectedAsset}` : ""}`,
-        ),
-        "",
-        "distribution_plan:",
-        `primary_platform: ${distributionPlan.primaryPlatform}`,
-        `secondary_platform: ${distributionPlan.secondaryPlatform}`,
-        `recommended_window: ${distributionPlan.recommendedWindow}`,
-        `secondary_window: ${distributionPlan.secondaryWindow}`,
-        `hypothesis: ${distributionPlan.hypothesis}`,
-        `rationale: ${distributionPlan.rationale}`,
-        "",
-        "platform_variants:",
-        `youtube_short.title: ${payload.platformVariants.youtubeShort.title}`,
-        `youtube_short.cover_text: ${payload.platformVariants.youtubeShort.coverText}`,
-        `youtube_short.caption: ${payload.platformVariants.youtubeShort.caption}`,
-        `tiktok.hook: ${payload.platformVariants.tiktok.hook}`,
-        `tiktok.cover_text: ${payload.platformVariants.tiktok.coverText}`,
-        `tiktok.caption: ${payload.platformVariants.tiktok.caption}`,
-        "",
-        "script:",
-        payload.script,
-        "",
-        "description:",
-        payload.description,
-        "",
-        "quality_gate:",
-        `score: ${payload.qualityAssessment?.score ?? 0}`,
-        `passed: ${payload.qualityAssessment?.passed === true ? "true" : "false"}`,
-        `reasons: ${(payload.qualityAssessment?.reasons ?? []).join(" | ")}`,
-        "END_SHORT_PACKAGE_V3",
-      ].join("\n");
-
-      const updated = this.contentOps.updateItem({
-        id: item.id,
-        hook: payload.hook,
-        callToAction: payload.cta,
-        notes: item.notes ? `${item.notes}\n\n${scriptPackage}` : scriptPackage,
-        status: "draft",
-      });
-
-      generated.push({
-        id: updated.id,
-        title: updated.title,
-        status: updated.status,
-        recommendedWindow: distributionPlan.recommendedWindow,
-        hasAssets: sceneAssets.some((scene) => scene.suggestions.length > 0),
-      });
-    }
-
-    return {
+    return this.getContentGenerationDirectService().tryRunContentBatchGeneration({
+      userPrompt,
       requestId,
-      reply: buildContentBatchGenerationReply({
-        channelKey,
-        generated,
-      }),
-      messages: buildBaseMessages(userPrompt, orchestration),
-      toolExecutions: [
-        {
-          toolName: "update_content_item",
-          resultPreview: JSON.stringify(
-            {
-              channelKey,
-              generated: generated.length,
-            },
-            null,
-            2,
-          ),
-        },
-      ],
-    };
+      requestLogger,
+      orchestration,
+    });
   }
 
   private async tryRunDirectContentDistributionStrategy(
@@ -14067,63 +13154,12 @@ export class AgentCore {
     requestLogger: Logger,
     orchestration: OrchestrationContext,
   ): Promise<AgentRunResult | null> {
-    if (!isContentDistributionStrategyPrompt(userPrompt)) {
-      return null;
-    }
-
-    const channelKey = extractContentChannelKey(userPrompt) ?? inferDefaultContentChannelKey(userPrompt);
-    const limit = Math.min(10, extractPromptLimit(userPrompt, 5, 10));
-    const items = this.contentOps
-      .listItems({ channelKey, limit: 20 })
-      .filter((item) => isRiquezaContentItemEligible(item))
-      .filter((item) => item.status !== "archived" && item.status !== "published")
-      .sort((left, right) =>
-        (right.queuePriority ?? right.ideaScore ?? 0) - (left.queuePriority ?? left.ideaScore ?? 0)
-        || left.id - right.id,
-      )
-      .slice(0, limit);
-
-    requestLogger.info("Using direct content distribution strategy route", {
-      channelKey,
-      limit,
-      selected: items.length,
-    });
-
-    return {
+    return this.getContentGenerationDirectService().tryRunContentDistributionStrategy({
+      userPrompt,
       requestId,
-      reply: buildContentDistributionStrategyReply({
-        channelKey,
-        items: items.map((item, index) => {
-          const plan = buildDistributionPlan({
-            item,
-            channelKey: item.channelKey ?? channelKey,
-            orderOffset: index,
-          });
-          return {
-            id: item.id,
-            title: item.title,
-            recommendedWindow: plan.recommendedWindow,
-            secondaryWindow: plan.secondaryWindow,
-            hypothesis: plan.hypothesis,
-            rationale: plan.rationale,
-          };
-        }),
-      }),
-      messages: buildBaseMessages(userPrompt, orchestration),
-      toolExecutions: [
-        {
-          toolName: "list_content_items",
-          resultPreview: JSON.stringify(
-            {
-              channelKey,
-              selected: items.length,
-            },
-            null,
-            2,
-          ),
-        },
-      ],
-    };
+      requestLogger,
+      orchestration,
+    });
   }
 
   private async tryRunDirectContentSeries(
@@ -14132,41 +13168,12 @@ export class AgentCore {
     requestLogger: Logger,
     orchestration: OrchestrationContext,
   ): Promise<AgentRunResult | null> {
-    if (!isContentSeriesPrompt(userPrompt)) {
-      return null;
-    }
-
-    const limit = extractPromptLimit(userPrompt, 10, 30);
-    const channelKey = extractContentChannelKey(userPrompt);
-    requestLogger.info("Using direct content series route", {
-      limit,
-      channelKey,
-    });
-
-    const series = this.contentOps.listSeries({
-      channelKey,
-      limit,
-    });
-
-    return {
+    return this.getContentDirectService().tryRunContentSeries({
+      userPrompt,
       requestId,
-      reply: buildContentSeriesReply(series),
-      messages: buildBaseMessages(userPrompt, orchestration),
-      toolExecutions: [
-        {
-          toolName: "list_content_series",
-          resultPreview: JSON.stringify(
-            {
-              total: series.length,
-              channelKey,
-              limit,
-            },
-            null,
-            2,
-          ),
-        },
-      ],
-    };
+      requestLogger,
+      orchestration,
+    });
   }
 
   private async tryRunDirectContentFormatLibrary(
@@ -14175,38 +13182,12 @@ export class AgentCore {
     requestLogger: Logger,
     orchestration: OrchestrationContext,
   ): Promise<AgentRunResult | null> {
-    if (!isContentFormatLibraryPrompt(userPrompt)) {
-      return null;
-    }
-
-    const limit = extractPromptLimit(userPrompt, 10, 30);
-    requestLogger.info("Using direct content format library route", {
-      limit,
-    });
-
-    const templates = this.contentOps.listFormatTemplates({
-      activeOnly: true,
-      limit,
-    });
-
-    return {
+    return this.getContentDirectService().tryRunContentFormatLibrary({
+      userPrompt,
       requestId,
-      reply: buildContentFormatsReply(templates),
-      messages: buildBaseMessages(userPrompt, orchestration),
-      toolExecutions: [
-        {
-          toolName: "list_content_format_templates",
-          resultPreview: JSON.stringify(
-            {
-              total: templates.length,
-              limit,
-            },
-            null,
-            2,
-          ),
-        },
-      ],
-    };
+      requestLogger,
+      orchestration,
+    });
   }
 
   private async tryRunDirectContentHookLibrary(
@@ -14215,37 +13196,12 @@ export class AgentCore {
     requestLogger: Logger,
     orchestration: OrchestrationContext,
   ): Promise<AgentRunResult | null> {
-    if (!isContentHookLibraryPrompt(userPrompt)) {
-      return null;
-    }
-
-    const limit = extractPromptLimit(userPrompt, 10, 30);
-    requestLogger.info("Using direct content hook library route", {
-      limit,
-    });
-
-    const hooks = this.contentOps.listHookTemplates({
-      limit,
-    });
-
-    return {
+    return this.getContentDirectService().tryRunContentHookLibrary({
+      userPrompt,
       requestId,
-      reply: buildContentHooksReply(hooks),
-      messages: buildBaseMessages(userPrompt, orchestration),
-      toolExecutions: [
-        {
-          toolName: "list_content_hook_templates",
-          resultPreview: JSON.stringify(
-            {
-              total: hooks.length,
-              limit,
-            },
-            null,
-            2,
-          ),
-        },
-      ],
-    };
+      requestLogger,
+      orchestration,
+    });
   }
 
   private async tryRunDirectSafeExec(
@@ -14268,49 +13224,12 @@ export class AgentCore {
     requestLogger: Logger,
     orchestration: OrchestrationContext,
   ): Promise<AgentRunResult | null> {
-    if (!isCaseNotesPrompt(userPrompt)) {
-      return null;
-    }
-
-    const limit = extractPromptLimit(userPrompt, 10, 30);
-    const normalized = normalizeEmailAnalysisText(userPrompt);
-    const sensitivity =
-      normalized.includes("critical")
-        ? "critical"
-        : normalized.includes("high") || normalized.includes("alta")
-          ? "high"
-          : normalized.includes("restricted") || normalized.includes("restrita")
-            ? "restricted"
-            : undefined;
-    requestLogger.info("Using direct case notes route", {
-      limit,
-      sensitivity,
-    });
-
-    const notes = this.socialAssistant.listNotes({
-      sensitivity,
-      limit,
-    });
-
-    return {
+    return this.getContentDirectService().tryRunCaseNotes({
+      userPrompt,
       requestId,
-      reply: buildCaseNotesReply(notes),
-      messages: buildBaseMessages(userPrompt, orchestration),
-      toolExecutions: [
-        {
-          toolName: "list_case_notes",
-          resultPreview: JSON.stringify(
-            {
-              total: notes.length,
-              sensitivity,
-              limit,
-            },
-            null,
-            2,
-          ),
-        },
-      ],
-    };
+      requestLogger,
+      orchestration,
+    });
   }
 
   private async tryRunDirectUserPreferences(
