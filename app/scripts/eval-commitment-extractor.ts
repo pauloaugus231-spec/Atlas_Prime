@@ -12,6 +12,7 @@ import { SuggestionStore } from "../src/core/autonomy/suggestion-store.js";
 import { AutonomyAuditStore } from "../src/core/autonomy/autonomy-audit-store.js";
 import { FeedbackStore } from "../src/core/autonomy/feedback-store.js";
 import { AutonomyActionService } from "../src/core/autonomy/autonomy-action-service.js";
+import { AutonomyDirectService } from "../src/core/autonomy/autonomy-direct-service.js";
 import { WhatsAppMonitorService } from "../src/integrations/whatsapp/whatsapp-monitor-service.js";
 import { PersonalOperationalMemoryStore } from "../src/core/personal-operational-memory.js";
 import type { Logger } from "../src/types/logger.js";
@@ -200,7 +201,53 @@ async function main(): Promise<void> {
     assert.equal(outcome.kind, "approved_only");
     assert.equal(commitments.getById(monitoredCandidate!.id)?.status, "confirmed");
 
-    console.log("eval-commitment-extractor: 5/5 passed");
+    const autonomyService = new AutonomyDirectService({
+      logger,
+      loop: { runOnce: async () => ({ observations: [], assessments: [], suggestions: [] }) },
+      actionService: {
+        approveSuggestion: async () => ({ kind: "approved_only" as const, reply: "ok" }),
+      },
+      commitments,
+      suggestions: suggestionStore,
+      observations: observationStore,
+      audit: auditStore,
+      feedback: feedbackStore,
+      buildBaseMessages: () => [],
+    });
+    const commitmentsReply = await autonomyService.tryRunAutonomyReview({
+      userPrompt: "o que eu prometi?",
+      requestId: "req-commitments-list",
+      orchestration: {
+        route: {
+          primaryDomain: "secretario_operacional",
+          secondaryDomains: [],
+          confidence: 0.9,
+          actionMode: "communicate",
+          reasons: [],
+        },
+        policy: {
+          riskLevel: "low",
+          autonomyLevel: "draft_with_confirmation",
+          guardrails: [],
+          requiresApprovalFor: [],
+          capabilities: {
+            canReadSensitiveChannels: true,
+            canDraftExternalReplies: true,
+            canSendExternalReplies: false,
+            canWriteWorkspace: true,
+            canPersistMemory: true,
+            canRunProjectTools: false,
+            canModifyCalendar: false,
+            canPublishContent: false,
+          },
+        },
+      },
+    });
+    assert.ok(commitmentsReply);
+    assert.match(commitmentsReply!.reply, /compromisso\(s\).*em aberto|compromisso\(s\) teu\(s\)/i);
+    assert.match(commitmentsReply!.reply, /Verificar isso/i);
+
+    console.log("eval-commitment-extractor: 6/6 passed");
   } finally {
     rmSync(workspace, { recursive: true, force: true });
   }

@@ -65,6 +65,52 @@ function isWeeklyReviewPrompt(prompt: string): boolean {
   ]);
 }
 
+function isCommitmentListPrompt(prompt: string): boolean {
+  const normalized = normalize(prompt);
+  return includesAny(normalized, [
+    "o que eu prometi",
+    "o que eu disse que faria",
+    "quais compromissos voce detectou",
+    "quais compromissos você detectou",
+    "tem algo que eu prometi",
+    "tem algum compromisso meu pendente",
+    "o que ficou combinado por mim",
+    "o que eu me comprometi a fazer",
+  ]);
+}
+
+function isStalledItemsPrompt(prompt: string): boolean {
+  const normalized = normalize(prompt);
+  return includesAny(normalized, [
+    "o que ficou parado",
+    "o que esta parado",
+    "o que está parado",
+    "o que esta sem andamento",
+    "o que está sem andamento",
+    "o que esta sem avanço",
+    "o que está sem avanço",
+    "o que esta travado",
+    "o que está travado",
+    "o que ficou travado",
+  ]);
+}
+
+function isPendingLearningPrompt(prompt: string): boolean {
+  const normalized = normalize(prompt);
+  return includesAny(normalized, [
+    "tem algo em revisao sobre mim",
+    "tem algo em revisão sobre mim",
+    "o que voce esta considerando aprender sobre mim",
+    "o que você está considerando aprender sobre mim",
+    "o que esta em revisao sobre mim",
+    "o que está em revisão sobre mim",
+    "tem algum aprendizado em revisao",
+    "tem algum aprendizado em revisão",
+    "o que voce ainda esta observando sobre mim",
+    "o que você ainda está observando sobre mim",
+  ]);
+}
+
 function isExplainPrompt(prompt: string): boolean {
   const normalized = normalize(prompt);
   return includesAny(normalized, [
@@ -204,8 +250,8 @@ export interface AutonomyDirectServiceDependencies {
   logger: Logger;
   loop: Pick<AutonomyLoop, "runOnce">;
   actionService: Pick<AutonomyActionService, "approveSuggestion">;
-  commitments?: Pick<CommitmentStore, "update">;
-  memoryCandidates?: Pick<MemoryCandidateStore, "update">;
+  commitments?: Pick<CommitmentStore, "update" | "listByStatus">;
+  memoryCandidates?: Pick<MemoryCandidateStore, "update" | "listByStatus">;
   suggestions: Pick<SuggestionStore, "getById" | "listByStatus" | "listRecent" | "updateStatus">;
   observations: Pick<ObservationStore, "getById">;
   audit: Pick<AutonomyAuditStore, "record">;
@@ -227,6 +273,12 @@ interface AutonomyDirectInput {
 
 export class AutonomyDirectService {
   private readonly renderer = new SuggestionRenderer();
+  private readonly stalledKinds = new Set([
+    "overdue_task",
+    "stale_lead",
+    "pending_reply",
+    "goal_at_risk",
+  ]);
 
   constructor(private readonly deps: AutonomyDirectServiceDependencies) {}
 
@@ -312,6 +364,12 @@ export class AutonomyDirectService {
     }));
   }
 
+  private buildStalledSuggestions(nowIso: string): RenderableSuggestion[] {
+    return this.buildRenderableSuggestions(nowIso)
+      .filter((item) => item.observation && this.stalledKinds.has(item.observation.kind))
+      .slice(0, 4);
+  }
+
   private buildResult(input: AutonomyDirectInput, reply: string, toolName: string, preview: Record<string, unknown>): AgentRunResult {
     return {
       requestId: input.requestId,
@@ -373,6 +431,51 @@ export class AutonomyDirectService {
         this.buildWeeklyReview(nowIso),
         "autonomy_review_weekly",
         { weeklyReview: true },
+      );
+    }
+
+    if (isCommitmentListPrompt(normalized)) {
+      requestLogger.info("Using direct commitment review route");
+      const items = this.deps.commitments?.listByStatus(["candidate", "confirmed", "snoozed"], 6) ?? [];
+      return this.buildResult(
+        input,
+        this.renderer.renderCommitments(items),
+        "autonomy_commitments",
+        {
+          count: items.length,
+          statuses: items.map((item) => item.status),
+        },
+      );
+    }
+
+    if (isPendingLearningPrompt(normalized)) {
+      requestLogger.info("Using direct pending learning review route");
+      const items = (this.deps.memoryCandidates?.listByStatus(["candidate"], 6) ?? [])
+        .filter((item) => !item.snoozedUntil || item.snoozedUntil <= nowIso)
+        .slice(0, 5);
+      return this.buildResult(
+        input,
+        this.renderer.renderMemoryCandidates(items),
+        "autonomy_memory_candidates",
+        {
+          count: items.length,
+          ids: items.map((item) => item.id),
+        },
+      );
+    }
+
+    if (isStalledItemsPrompt(normalized)) {
+      requestLogger.info("Using direct stalled autonomy review route");
+      await this.deps.loop.runOnce();
+      const items = this.buildStalledSuggestions(nowIso);
+      return this.buildResult(
+        input,
+        this.renderer.renderStalledItems(items),
+        "autonomy_stalled_review",
+        {
+          count: items.length,
+          ids: items.map((item) => item.suggestion.id),
+        },
       );
     }
 

@@ -950,6 +950,12 @@ export function isLearnedPreferencesListPrompt(prompt: string): boolean {
   return includesAny(normalized, [
     "o que voce aprendeu sobre mim",
     "o que você aprendeu sobre mim",
+    "o que voce leva em conta sobre mim",
+    "o que você leva em conta sobre mim",
+    "que preferencias minhas voce considera",
+    "que preferências minhas você considera",
+    "que padroes meus voce esta usando",
+    "que padrões meus você está usando",
     "o que voce aprendeu sobre minha agenda",
     "o que você aprendeu sobre minha agenda",
     "o que voce aprendeu com minhas correcoes",
@@ -994,6 +1000,8 @@ export function isLearnedPreferencesDeletePrompt(prompt: string): boolean {
     "desative a preferência aprendida",
     "esqueca essa preferencia",
     "esqueca essa preferência",
+    "esquece a preferencia",
+    "esquece a preferência",
   ]);
 }
 

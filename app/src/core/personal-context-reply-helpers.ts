@@ -180,21 +180,23 @@ export function formatLearnedPreferenceTypeLabel(type: LearnedPreference["type"]
 
 export function buildLearnedPreferencesReply(items: LearnedPreference[]): string {
   if (items.length === 0) {
-    return "Ainda não encontrei aprendizados operacionais ativos sobre você.";
+    return "Ainda não tenho nenhum aprendizado ativo consolidado sobre teu jeito de usar o Atlas.";
   }
 
   return [
-    `Aprendizados operacionais ativos: ${items.length}.`,
+    `Hoje eu estou levando em conta ${items.length} aprendizado(s) ativo(s) sobre teu jeito de usar o Atlas:`,
     ...items.slice(0, 10).map((item) =>
-      `- #${item.id} | ${formatLearnedPreferenceTypeLabel(item.type)} | ${item.description} => ${item.value} | confiança ${Math.round(item.confidence * 100)}% | confirmações ${item.confirmations}`,
+      `- ${formatLearnedPreferenceTypeLabel(item.type)}: ${item.description} -> ${item.value} (#${item.id})`,
     ),
+    "",
+    "Se algum deles estiver errado ou tiver envelhecido, me diga de forma natural. Ex.: `esquece a preferência sobre respostas curtas`.",
   ].join("\n");
 }
 
 export function buildLearnedPreferenceDeactivatedReply(item: LearnedPreference): string {
   return [
-    "Preferência aprendida desativada.",
-    `- #${item.id} | ${formatLearnedPreferenceTypeLabel(item.type)} | ${item.description} => ${item.value}`,
+    "Deixei de usar esse aprendizado ativo:",
+    `- ${formatLearnedPreferenceTypeLabel(item.type)}: ${item.description} -> ${item.value} (#${item.id})`,
   ].join("\n");
 }
 

@@ -171,6 +171,20 @@ async function main(): Promise<void> {
     assert.equal(suggestions.getById(suggestion.id)?.status, "snoozed");
     assert.ok(suggestions.getById(suggestion.id)?.snoozedUntil);
 
+    suggestions.updateStatus({
+      id: suggestion.id,
+      status: "notified",
+    });
+
+    const stalledResult = await service.tryRunAutonomyReview({
+      userPrompt: "o que ficou parado?",
+      requestId: "req-stalled",
+      orchestration,
+    });
+    assert.ok(stalledResult);
+    assert.match(stalledResult!.reply, /pouco avanço ou risco claro/i);
+    assert.match(stalledResult!.reply, /Revisar plano para fechar 2 clientes SaaS/);
+
     const briefRenderer = new BriefRenderer();
     const brief = briefRenderer.render({
       timezone: "America/Sao_Paulo",
@@ -223,7 +237,7 @@ async function main(): Promise<void> {
     const audits = audit.listRecent(12);
     assert.ok(audits.some((item) => item.kind === "suggestion_status_changed"));
 
-    console.log("eval-proactive-inbox: 6/6 passed");
+    console.log("eval-proactive-inbox: 7/7 passed");
   } finally {
     rmSync(workspace, { recursive: true, force: true });
   }

@@ -12,7 +12,9 @@ import { SuggestionStore } from "../src/core/autonomy/suggestion-store.js";
 import { AutonomyAuditStore } from "../src/core/autonomy/autonomy-audit-store.js";
 import { FeedbackStore } from "../src/core/autonomy/feedback-store.js";
 import { AutonomyActionService } from "../src/core/autonomy/autonomy-action-service.js";
+import { AutonomyDirectService } from "../src/core/autonomy/autonomy-direct-service.js";
 import { PersonalOperationalMemoryStore } from "../src/core/personal-operational-memory.js";
+import { buildLearnedPreferencesReply } from "../src/core/personal-context-reply-helpers.js";
 import type { Logger } from "../src/types/logger.js";
 
 const logger: Logger = {
@@ -149,7 +151,69 @@ async function main(): Promise<void> {
     assert.equal(store.getById(ruleCandidate.id)?.status, "active");
     assert.ok(personalMemory.listItems({ search: "casaco leve", limit: 10 }).length > 0);
 
-    console.log("eval-memory-candidates: 5/5 passed");
+    store.upsert({
+      kind: "preference",
+      statement: "Prefiro que o briefing venha mais compacto em dia pesado.",
+      sourceKind: "operator",
+      sourceId: "chat-1",
+      evidence: ["Preferência recente ainda sem confirmação recorrente."],
+      confidence: 0.74,
+      sensitivity: "normal",
+      status: "candidate",
+      reviewStatus: "needs_review",
+    });
+
+    const autonomyService = new AutonomyDirectService({
+      logger,
+      loop: { runOnce: async () => ({ observations: [], assessments: [], suggestions: [] }) },
+      actionService: {
+        approveSuggestion: async () => ({ kind: "approved_only" as const, reply: "ok" }),
+      },
+      suggestions: suggestionStore,
+      observations: observationStore,
+      audit: auditStore,
+      feedback: feedbackStore,
+      memoryCandidates: store,
+      buildBaseMessages: () => [],
+    });
+    const pendingLearningReply = await autonomyService.tryRunAutonomyReview({
+      userPrompt: "tem algo em revisão sobre mim?",
+      requestId: "req-pending-learning",
+      orchestration: {
+        route: {
+          primaryDomain: "secretario_operacional",
+          secondaryDomains: [],
+          confidence: 0.9,
+          actionMode: "communicate",
+          reasons: [],
+        },
+        policy: {
+          riskLevel: "low",
+          autonomyLevel: "draft_with_confirmation",
+          guardrails: [],
+          requiresApprovalFor: [],
+          capabilities: {
+            canReadSensitiveChannels: true,
+            canDraftExternalReplies: true,
+            canSendExternalReplies: false,
+            canWriteWorkspace: true,
+            canPersistMemory: true,
+            canRunProjectTools: false,
+            canModifyCalendar: false,
+            canPublishContent: false,
+          },
+        },
+      },
+    });
+    assert.ok(pendingLearningReply);
+    assert.match(pendingLearningReply!.reply, /ainda em observacao|ainda em observação/i);
+    assert.match(pendingLearningReply!.reply, /briefing venha mais compacto/i);
+
+    const learnedReply = buildLearnedPreferencesReply(personalMemory.listLearnedPreferences({ activeOnly: true, limit: 10 }));
+    assert.match(learnedReply, /Hoje eu estou levando em conta/i);
+    assert.match(learnedReply, /esquece a preferência|esquece a preferencia/i);
+
+    console.log("eval-memory-candidates: 7/7 passed");
   } finally {
     rmSync(workspace, { recursive: true, force: true });
   }
