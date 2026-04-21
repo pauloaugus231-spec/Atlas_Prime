@@ -14,6 +14,7 @@ import type {
 import type { OperationalState } from "../types/operational-state.js";
 import type { UpdateUserPreferencesInput, UserPreferences } from "../types/user-preferences.js";
 import type { ActiveGoal } from "./goal-store.js";
+import { BriefRenderer } from "./brief-renderer.js";
 
 interface GoogleWorkspaceStatusLike {
   ready: boolean;
@@ -185,6 +186,8 @@ function normalizePrompt(value: string): string {
 function includesAny(value: string, tokens: string[]): boolean {
   return tokens.some((token) => value.includes(token));
 }
+
+const morningBriefRenderer = new BriefRenderer();
 
 function isGoalListPrompt(prompt: string): boolean {
   const normalized = normalizePrompt(prompt);
@@ -463,16 +466,11 @@ export class OperationalContextDirectService {
     });
 
     const brief = await this.deps.personalOs.getExecutiveMorningBrief();
-    const profile = this.deps.personalMemory.getProfile();
-    const operationalMode = this.deps.helpers.resolveEffectiveOperationalMode(input.userPrompt, profile);
-
     return {
       requestId: input.requestId,
-      reply: this.deps.helpers.buildMorningBriefReply(brief, {
-        compact: operationalMode === "field",
-        operationalMode,
-        profile,
-      }),
+      reply: brief.overloadLevel === "pesado"
+        ? morningBriefRenderer.renderCompact(brief)
+        : morningBriefRenderer.render(brief),
       messages: this.deps.buildBaseMessages(input.userPrompt, input.orchestration, input.preferences),
       toolExecutions: [
         {

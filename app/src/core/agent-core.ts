@@ -61,6 +61,7 @@ import { buildOrchestrationContext, buildOrchestrationSystemMessage } from "./or
 import { buildSystemPrompt } from "./system-prompt.js";
 import { WeatherService } from "./weather-service.js";
 import { ApprovalInboxStore } from "./approval-inbox.js";
+import { BriefRenderer } from "./brief-renderer.js";
 import { CommunicationRouter, ContactIntelligenceStore } from "./contact-intelligence.js";
 import { isPersonallyRelevantCalendarEvent, matchPersonalCalendarTerms } from "./calendar-relevance.js";
 import type { EmailMessageSummary, EmailReader } from "../integrations/email/email-reader.js";
@@ -4677,170 +4678,11 @@ export function buildMorningBriefReply(
     operationalMode?: "field" | null;
   },
 ): string {
-  const compact = options?.compact === true || options?.operationalMode === "field";
-  const highestEmail = input.emails.find((item) => item.priority === "alta") ?? input.emails[0];
-  const nextEvent = input.events[0];
-  const nextTask = input.taskBuckets.overdue[0] ?? input.taskBuckets.today[0];
-  const topOperationalSignal = input.operationalSignals?.[0];
-  const pauloConflicts = input.events.filter((event) => event.owner === "paulo" && event.hasConflict);
-  const focusLabel = truncateBriefText(options?.profile?.savedFocus[0] ?? input.personalFocus[0] ?? "", 110);
-  const topGoal = input.activeGoals?.[0];
-  const groupedEvents = {
-    manha: input.events.filter((event) => classifyBriefPeriod(event.start, input.timezone) === "manha"),
-    tarde: input.events.filter((event) => classifyBriefPeriod(event.start, input.timezone) === "tarde"),
-    noite: input.events.filter((event) => classifyBriefPeriod(event.start, input.timezone) === "noite"),
-  };
-  const periodCounts = [
-    { label: "manhã", count: groupedEvents.manha.length },
-    { label: "tarde", count: groupedEvents.tarde.length },
-    { label: "noite", count: groupedEvents.noite.length },
-  ].sort((left, right) => right.count - left.count);
-  const busiestPeriod = periodCounts[0]?.count ? periodCounts[0].label : undefined;
-  const actionableTasks = input.taskBuckets.actionableCount;
-  const keyAttentionCount =
-    (pauloConflicts.length > 0 ? 1 : 0)
-    + (nextTask ? 1 : 0)
-    + (highestEmail ? 1 : 0);
-
-  const summarizeEventLine = (event: ExecutiveMorningBrief["events"][number]): string => {
-    const tags = [
-      event.hasConflict ? "conflito" : undefined,
-      compact ? undefined : event.owner !== "paulo" ? labelBriefOwner(event.owner) : undefined,
-    ].filter(Boolean);
-    return `${formatBriefDateTime(event.start, input.timezone)} — ${truncateBriefText(event.summary)}${event.location ? ` — ${summarizeCalendarLocation(event.location)}` : ""}${tags.length > 0 ? ` | ${tags.join(" | ")}` : ""}`;
-  };
-
-  const visionLine = compact
-    ? `Hoje o foco é operar em modo rua, com ${input.events.length} compromisso(s) e ${keyAttentionCount} ponto(s) que merecem atenção imediata.`
-    : `Hoje teu dia está ${input.overloadLevel}, com ${input.events.length} compromisso(s) e ${actionableTasks} tarefa(s) que podem virar ação real.`;
-  const periodLine = busiestPeriod
-    ? `O trecho mais carregado tende a ficar na ${busiestPeriod}${pauloConflicts.length > 0 ? ", então vale resolver conflito antes de abrir coisa nova." : "."}`
-    : undefined;
-  const mainAttention = pauloConflicts[0]
-    ? `O principal agora é tirar o conflito em ${truncateBriefText(pauloConflicts[0].summary, 96)} antes que ele contamine o resto do dia.`
-    : topOperationalSignal
-      ? `O principal agora é revisar este sinal do institucional: ${truncateBriefText(topOperationalSignal.summary, 96)}.`
-    : nextEvent
-      ? `O principal agora é ${nextEvent.prepHint} para ${truncateBriefText(nextEvent.summary, 96)}.`
-      : nextTask
-        ? `O principal agora é destravar ${truncateBriefText(nextTask.title, 96)} para não empurrar isso mais uma vez.`
-        : highestEmail
-          ? `O principal agora é decidir se ${truncateBriefText(highestEmail.subject || "(sem assunto)", 96)} exige ação hoje.`
-          : "O principal agora é manter o dia simples e sem abrir frente desnecessária.";
-
-  const lines = [
-    "Briefing da manhã",
-    "",
-    "Visão do dia:",
-    `- ${visionLine}`,
-  ];
-
-  if (periodLine) {
-    lines.push(`- ${periodLine}`);
+  const renderer = new BriefRenderer();
+  if (options?.compact === true || options?.operationalMode === "field") {
+    return renderer.renderCompact(input);
   }
-  if (focusLabel) {
-    lines.push(`- Foco de base: ${focusLabel}`);
-  }
-  if (topGoal) {
-    const goalMeta = [
-      topGoal.deadline ? `prazo ${topGoal.deadline}` : undefined,
-      topGoal.progress != null ? `${Math.round(topGoal.progress * 100)}%` : undefined,
-    ].filter(Boolean).join(" | ");
-    lines.push(`- Objetivo ativo puxando a semana: ${truncateBriefText(topGoal.title, 96)}${goalMeta ? ` | ${goalMeta}` : ""}`);
-  }
-
-  lines.push("", "Atenção principal:");
-  lines.push(`- ${mainAttention}`);
-  if (nextEvent) {
-    lines.push(`- Próximo compromisso: ${summarizeEventLine(nextEvent)}`);
-  }
-  if (topOperationalSignal) {
-    lines.push(`- Sinal operacional ativo: ${truncateBriefText(topOperationalSignal.summary, 104)}${topOperationalSignal.priority !== "low" ? ` | prioridade ${topOperationalSignal.priority}` : ""}`);
-  }
-  if (pauloConflicts.length > 0) {
-    lines.push(`- ${pauloConflicts.length} conflito(s) de agenda ainda exigem decisão antes de aceitar coisa nova.`);
-  }
-  if (nextTask) {
-    lines.push(`- Tarefa que pode te travar: ${truncateBriefText(nextTask.title)} — ${formatTaskDue(nextTask, input.timezone)}`);
-  }
-  if (!compact && input.activeGoals && input.activeGoals.length > 1) {
-    lines.push(`- Você está com ${input.activeGoals.length} objetivos ativos; vale proteger foco para não dispersar.`);
-  }
-  if (highestEmail) {
-    lines.push(`- Email que merece triagem: ${truncateBriefText(highestEmail.subject || "(sem assunto)")} — ${summarizeEmailSender(highestEmail.from)}`);
-  }
-  if (!nextEvent && !nextTask && !highestEmail) {
-    lines.push("- Nada crítico pendente agora.");
-  }
-
-  lines.push("", "Rua, clima e deslocamento:");
-  if (input.mobilityAlerts.length > 0) {
-    for (const item of input.mobilityAlerts.slice(0, compact ? 2 : 3)) {
-      lines.push(`- ${truncateBriefText(item, 110)}`);
-    }
-  }
-  if (input.weather?.current) {
-    lines.push(`- Agora em ${input.weather.locationLabel}: ${input.weather.current.description}, ${formatBriefTemperature(input.weather.current.temperatureC)}.`);
-  }
-  for (const day of (input.weather?.days ?? []).slice(0, compact ? 1 : 2)) {
-    const rain = typeof day.precipitationProbabilityMax === "number"
-      ? ` | chuva ${day.precipitationProbabilityMax}%`
-      : "";
-    lines.push(`- ${day.label}: ${day.description} | ${formatBriefTemperatureRange(day.minTempC, day.maxTempC)}${rain}`);
-    lines.push(`  Dica prática: ${day.tip}`);
-  }
-  if ((input.weather?.days.length ?? 0) === 0 && input.mobilityAlerts.length === 0) {
-    lines.push("- Sem alerta extra de clima ou deslocamento agora.");
-  }
-
-  lines.push("", "Agenda limpa:");
-  if (input.events.length === 0) {
-    lines.push("- Nenhum compromisso pessoal hoje.");
-  } else {
-    if (groupedEvents.manha.length > 0) {
-      lines.push("- Manhã:");
-      for (const event of groupedEvents.manha) {
-        lines.push(`  - ${summarizeEventLine(event)}`);
-      }
-    }
-    if (groupedEvents.tarde.length > 0) {
-      lines.push("- Tarde:");
-      for (const event of groupedEvents.tarde) {
-        lines.push(`  - ${summarizeEventLine(event)}`);
-      }
-    }
-    if (groupedEvents.noite.length > 0) {
-      lines.push("- Noite:");
-      for (const event of groupedEvents.noite) {
-        lines.push(`  - ${summarizeEventLine(event)}`);
-      }
-    }
-  }
-
-  lines.push("", "Prioridade do dia / próxima ação:");
-  if (input.dayRecommendation) {
-    lines.push(`- Prioridade: ${truncateBriefText(input.dayRecommendation, 120)}`);
-  }
-  if (input.nextAction) {
-    lines.push(`- Próxima ação: ${truncateBriefText(input.nextAction, 110)}`);
-  }
-  if (!compact && input.goalSummary) {
-    lines.push(`- Meta de fundo: ${truncateBriefText(input.goalSummary.replace(/^Objetivos:\s*/i, ""), 140)}`);
-  }
-  if (compact && options?.profile?.attire.carryItems.length) {
-    lines.push(`- Levar: ${options.profile.attire.carryItems.slice(0, 4).join(", ")}`);
-  }
-  if (!input.dayRecommendation && !input.nextAction) {
-    lines.push("- Seguir pelo próximo compromisso do dia.");
-  }
-
-  lines.push("", "Mensagem do dia:");
-  lines.push(`"${input.motivation.text}"`);
-  if (input.motivation.author) {
-    lines.push(input.motivation.author);
-  }
-
-  return lines.join("\n");
+  return renderer.render(input);
 }
 
 function buildMacQueueStatusReply(input: {

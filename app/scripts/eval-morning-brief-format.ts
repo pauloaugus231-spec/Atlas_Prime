@@ -151,28 +151,29 @@ function run() {
     {
       name: "morning_brief_has_operational_sections_in_order",
       passed:
-        normal.includes("Visão do dia:")
-        && normal.includes("Atenção principal:")
-        && normal.includes("Rua, clima e deslocamento:")
-        && normal.includes("Agenda limpa:")
-        && normal.includes("Prioridade do dia / próxima ação:")
-        && normal.includes("Mensagem do dia:"),
+        normal.includes("*Foco do dia*")
+        && normal.includes("*Próxima ação*")
+        && normal.includes("*Agenda*")
+        && normal.includes("*Emails críticos*")
+        && normal.includes("*Motivação*"),
       detail: normal,
     },
     {
       name: "morning_brief_opens_with_assistive_day_summary",
       passed:
-        normal.includes("Hoje teu dia está")
-        && normal.includes("O principal agora é")
+        normal.includes("Bom dia")
+        && normal.includes("Reunião CAPS Girassol")
+        && normal.includes("🏢 Dia de campo")
         && !normal.includes("Resumo rápido:")
         && !normal.includes("Leitura operacional"),
       detail: normal,
     },
     {
-      name: "morning_brief_compact_field_mode_mentions_carry_items",
+      name: "morning_brief_compact_field_mode_is_still_short_and_actionable",
       passed:
-        field.includes("Levar: carregador, casaco leve")
-        && field.includes("Hoje o foco é operar em modo rua"),
+        field.includes("*Agenda*")
+        && field.includes("*Próxima ação*")
+        && field.split("\n").length <= 15,
       detail: field,
     },
     {

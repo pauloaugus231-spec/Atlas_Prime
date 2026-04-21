@@ -293,9 +293,9 @@ async function run(): Promise<void> {
     });
     results.push(assert(
       "morning_brief_mentions_active_goal",
-      morningBriefReply.includes("Objetivo ativo puxando a semana")
+      morningBriefReply.includes("*Objetivos ativos*")
         && morningBriefReply.includes("Fechar 2 clientes SaaS")
-        && morningBriefReply.includes("Meta de fundo"),
+        && morningBriefReply.includes("*Próxima ação*"),
       morningBriefReply,
     ));
 
