@@ -63,6 +63,10 @@ import { ObservationStore } from "./autonomy/observation-store.js";
 import { AutonomyLoop } from "./autonomy/autonomy-loop.js";
 import { AutonomyPolicy } from "./autonomy/autonomy-policy.js";
 import { SuggestionStore } from "./autonomy/suggestion-store.js";
+import { ApprovalCollector } from "./autonomy/collectors/approval-collector.js";
+import { GoalRiskCollector } from "./autonomy/collectors/goal-risk-collector.js";
+import { OperationalStateCollector } from "./autonomy/collectors/operational-state-collector.js";
+import { StaleWorkCollector } from "./autonomy/collectors/stale-work-collector.js";
 
 function withLlmProviderConfig(config: AppConfig, providerConfig: LlmProviderConfig): AppConfig {
   return {
@@ -218,16 +222,6 @@ export async function createAgentCore() {
   );
   const autonomyAssessor = new AutonomyAssessor();
   const autonomyPolicy = new AutonomyPolicy();
-  const autonomyLoop = new AutonomyLoop({
-    collectors: [],
-    assessor: autonomyAssessor,
-    policy: autonomyPolicy,
-    observations: autonomyObservations,
-    suggestions: autonomySuggestions,
-    audit: autonomyAudit,
-    feedback: autonomyFeedback,
-    logger: logger.child({ scope: "autonomy-loop" }),
-  });
   const contentOps = new ContentOpsStore(
     config.paths.contentDbPath,
     logger.child({ scope: "content-ops" }),
@@ -244,6 +238,21 @@ export async function createAgentCore() {
     config.paths.approvalInboxDbPath,
     logger.child({ scope: "approval-inbox" }),
   );
+  const autonomyLoop = new AutonomyLoop({
+    collectors: [
+      new OperationalStateCollector(personalMemory),
+      new ApprovalCollector(approvals),
+      new GoalRiskCollector(goalStore),
+      new StaleWorkCollector(memory),
+    ],
+    assessor: autonomyAssessor,
+    policy: autonomyPolicy,
+    observations: autonomyObservations,
+    suggestions: autonomySuggestions,
+    audit: autonomyAudit,
+    feedback: autonomyFeedback,
+    logger: logger.child({ scope: "autonomy-loop" }),
+  });
   const clarifications = new ClarificationInboxStore(
     config.paths.clarificationInboxDbPath,
     logger.child({ scope: "clarification-inbox" }),
