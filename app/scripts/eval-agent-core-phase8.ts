@@ -325,6 +325,41 @@ async function run(): Promise<void> {
   }
 
   {
+    const result = await (core as any).tryRunDirectGoogleEventMove(
+      "altere meu evento reunião caps amanhã para às 11h",
+      "req-move-natural",
+      logger,
+      orchestration,
+    );
+    results.push(assert(
+      "agent_core_google_event_move_wrapper_accepts_more_natural_prompt",
+      Boolean(
+        result?.reply?.includes("Rascunho de atualização de evento Google pronto.") &&
+        result.reply.includes("- Atual: Paulo - Reunião CAPS") &&
+        result.reply.includes("- Conta: abordagem"),
+      ),
+      result?.reply,
+    ));
+  }
+
+  {
+    const result = await (core as any).tryRunDirectGoogleEventMove(
+      "altere meu evento reunião caps amanhã",
+      "req-move-clarify",
+      logger,
+      orchestration,
+    );
+    results.push(assert(
+      "agent_core_google_event_move_wrapper_asks_for_adjustment_when_missing",
+      Boolean(
+        result?.reply?.includes("Agora me diga só o ajuste") &&
+        result.reply.includes("para às 11h"),
+      ),
+      result?.reply,
+    ));
+  }
+
+  {
     const result = await (core as any).tryRunDirectGoogleEventDelete(
       "cancele o evento reunião caps amanhã",
       "req-delete-single",

@@ -787,7 +787,21 @@ export class GoogleWorkspaceDirectService {
 
     const parts = this.deps.helpers.extractCalendarMoveParts(input.userPrompt);
     if (!parts) {
-      return null;
+      return {
+        requestId: input.requestId,
+        reply: "Consigo alterar o evento, mas preciso da referência e do ajuste em uma frase curta. Exemplo: `altere meu evento reunião CAPS amanhã para às 11h` ou `edite o compromisso reunião CAPS com local: CAPS Girassol`.",
+        messages: this.deps.buildBaseMessages(input.userPrompt, input.orchestration),
+        toolExecutions: [],
+      };
+    }
+
+    if (!parts.targetInstruction.trim()) {
+      return {
+        requestId: input.requestId,
+        reply: "Entendi qual evento você quer alterar. Agora me diga só o ajuste, por exemplo: `para às 11h`, `com local: CAPS Girassol` ou `com título: Reunião no CAPS`.",
+        messages: this.deps.buildBaseMessages(input.userPrompt, input.orchestration),
+        toolExecutions: [],
+      };
     }
 
     const sourceDate = this.deps.helpers.parseCalendarLookupDate(parts.source, this.deps.defaultTimezone);

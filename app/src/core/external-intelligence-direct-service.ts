@@ -60,6 +60,7 @@ interface ExternalIntelligenceDirectHelpers {
     roundTrip?: boolean;
     fuelPricePerLiter?: number;
     consumptionKmPerLiter?: number;
+    alignedGoal?: string;
   }) => string;
   buildPlaceDiscoveryReply: (input: {
     categoryLabel: string;
@@ -352,6 +353,7 @@ export class ExternalIntelligenceDirectService {
         roundTrip: input.plan.routeRequest.roundTrip,
         fuelPricePerLiter: input.plan.routeRequest.fuelPricePerLiter,
         consumptionKmPerLiter: input.plan.routeRequest.consumptionKmPerLiter,
+        alignedGoal: input.plan.alignedGoals?.[0],
       }),
       messages: this.deps.buildBaseMessages(input.userPrompt, input.orchestration, input.preferences),
       toolExecutions: [

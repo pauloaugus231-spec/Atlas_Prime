@@ -120,6 +120,23 @@ const GOAL_CONTEXT_STOPWORDS = new Set([
   "cliente", "clientes", "fechar", "seguir", "fazer", "como", "qual", "quais", "para", "pela", "pelo",
 ]);
 
+const GOAL_TRAVEL_QUERY_HINT_TOKENS = new Set([
+  "palestra",
+  "evento",
+  "congresso",
+  "seminario",
+  "seminário",
+  "workshop",
+  "show",
+  "feira",
+  "reuniao",
+  "reunião",
+  "apresentacao",
+  "apresentação",
+  "hospedagem",
+  "hotel",
+]);
+
 function formatMoney(value: number): string {
   return new Intl.NumberFormat("pt-BR", {
     style: "currency",
@@ -183,6 +200,37 @@ function computeGoalContext(
     alignedGoals,
     activeGoalSummary: context?.goalSummary,
   };
+}
+
+function buildGoalAwareTravelResearchQuery(
+  query: string,
+  context: CapabilityPlanningContext | undefined,
+  goalContext: Pick<CapabilityPlan, "alignedGoals" | "activeGoalSummary">,
+): string {
+  if (!goalContext.alignedGoals?.length || !context?.activeGoals?.length) {
+    return query;
+  }
+
+  const matchedGoal = context.activeGoals.find((goal) => goalContext.alignedGoals?.includes(goal.title));
+  if (!matchedGoal) {
+    return query;
+  }
+
+  const normalizedQuery = normalize(query);
+  const hintTokens = [
+    ...extractGoalContextTokens(matchedGoal.title),
+    ...extractGoalContextTokens(matchedGoal.description),
+  ]
+    .filter((token, index, items) => items.indexOf(token) === index)
+    .filter((token) => GOAL_TRAVEL_QUERY_HINT_TOKENS.has(token))
+    .filter((token) => !normalizedQuery.includes(token))
+    .slice(0, 2);
+
+  if (hintTokens.length === 0) {
+    return query;
+  }
+
+  return `${query} para ${hintTokens.join(" e ")}`.trim();
 }
 
 export function looksLikeCapabilityInspectionPrompt(prompt: string): boolean {
@@ -621,7 +669,7 @@ export class CapabilityPlanner {
 
     const travelResearchRequest = extractTravelResearchRequest(prompt);
     if (travelResearchRequest) {
-      const plan = this.planTravelResearchRequest(travelResearchRequest, goalContext);
+      const plan = this.planTravelResearchRequest(travelResearchRequest, goalContext, planningContext);
       this.logger.info("Capability planner produced travel research plan", {
         objective: plan.objective,
         suggestedAction: plan.suggestedAction,
@@ -739,7 +787,9 @@ export class CapabilityPlanner {
   private planTravelResearchRequest(
     request: TravelResearchRequest,
     goalContext: Pick<CapabilityPlan, "alignedGoals" | "activeGoalSummary">,
+    planningContext?: CapabilityPlanningContext,
   ): CapabilityPlan {
+    const effectiveQuery = buildGoalAwareTravelResearchQuery(request.query, planningContext, goalContext);
     const availability = [this.resolveAvailabilityByName("web.search")];
     const missingRequirements: CapabilityGapRequirement[] = [];
     const missingUserData: string[] = [];
@@ -783,7 +833,7 @@ export class CapabilityPlanner {
         missingRequirements: [],
         missingUserData: [...new Set(missingUserData)],
         suggestedAction: "ask_user_data",
-        webQuery: request.query,
+        webQuery: effectiveQuery,
         researchMode: request.mode,
       }, goalContext);
     }
@@ -800,7 +850,7 @@ export class CapabilityPlanner {
         suggestedAction: "handle_gap",
         gapType: "travel_search_missing",
         shouldLogGap: true,
-        webQuery: request.query,
+        webQuery: effectiveQuery,
         researchMode: request.mode,
       }, goalContext);
     }
@@ -814,7 +864,7 @@ export class CapabilityPlanner {
       missingRequirements: [],
       missingUserData: [],
       suggestedAction: "run_web_search",
-      webQuery: request.query,
+      webQuery: effectiveQuery,
       researchMode: request.mode,
     }, goalContext);
   }

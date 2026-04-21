@@ -308,6 +308,7 @@ async function run(): Promise<void> {
     passed:
       goalAlignedTravelPlan?.objective === "flight_search"
       && goalAlignedTravelPlan.alignedGoals?.includes("Planejar viagem para palestra em Recife")
+      && goalAlignedTravelPlan.webQuery?.includes("palestra")
       && goalAlignedTravelPlan.summary.includes("objetivo ativo"),
     detail: JSON.stringify(goalAlignedTravelPlan, null, 2),
   });

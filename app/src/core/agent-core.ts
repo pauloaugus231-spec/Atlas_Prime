@@ -3437,23 +3437,8 @@ function isCalendarConflictReviewPrompt(prompt: string): boolean {
 
 function isCalendarMovePrompt(prompt: string): boolean {
   const normalized = normalizeEmailAnalysisText(prompt);
-  return includesAny(normalized, [
-    "mova o evento",
-    "mover o evento",
-    "reagende o evento",
-    "reagendar o evento",
-    "mude o evento",
-    "altere o evento",
-    "alterar o evento",
-    "atualize o evento",
-    "atualizar o evento",
-    "ajuste o evento",
-    "ajustar o evento",
-    "edite o evento",
-    "editar o evento",
-    "renomeie o evento",
-    "renomear o evento",
-  ]);
+  return /\b(?:mova|mover|reagende|reagendar|mude|mudar|altere|alterar|atualize|atualizar|ajuste|ajustar|edite|editar|renomeie|renomear)\b/i.test(normalized)
+    && /\b(?:evento|compromisso|reuniao|reunião)\b/i.test(normalized);
 }
 
 function isCalendarPeriodDeletePrompt(prompt: string): boolean {
@@ -3468,17 +3453,25 @@ function isCalendarPeriodDeletePrompt(prompt: string): boolean {
 }
 
 function extractCalendarMoveParts(prompt: string): { verb: string; source: string; targetInstruction: string } | undefined {
-  const match = prompt.match(
-    /\b(mova|mover|reagende|reagendar|mude|mudar|altere|alterar|atualize|atualizar|ajuste|ajustar|edite|editar|renomeie|renomear)\s+o?\s*evento\s+(.+?)\s+(?:para|com)\s+([\s\S]+)/i,
-  );
-  if (!match?.[1] || !match?.[2] || !match?.[3]) {
-    return undefined;
+  const patterns = [
+    /\b(mova|mover|reagende|reagendar|mude|mudar|altere|alterar|atualize|atualizar|ajuste|ajustar|edite|editar|renomeie|renomear)\s+(?:(?:o|a|um|uma|meu|minha)\s+)?(?:evento|compromisso|reuniao|reunião)\s+(.+?)\s+(?:para|com)\s+([\s\S]+)/i,
+    /\b(mova|mover|reagende|reagendar|mude|mudar|altere|alterar|atualize|atualizar|ajuste|ajustar|edite|editar|renomeie|renomear)\s+(?:(?:o|a|um|uma|meu|minha)\s+)?(?:evento|compromisso|reuniao|reunião)\s+(.+?)$/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = prompt.match(pattern);
+    if (!match?.[1] || !match?.[2]) {
+      continue;
+    }
+
+    return {
+      verb: match[1].trim(),
+      source: match[2].trim(),
+      targetInstruction: match[3]?.trim() ?? "",
+    };
   }
-  return {
-    verb: match[1].trim(),
-    source: match[2].trim(),
-    targetInstruction: match[3].trim(),
-  };
+
+  return undefined;
 }
 
 function normalizeCalendarUpdateInstruction(input: {
@@ -5368,6 +5361,7 @@ function buildMapsRouteReply(input: {
   roundTrip?: boolean;
   fuelPricePerLiter?: number;
   consumptionKmPerLiter?: number;
+  alignedGoal?: string;
 }): string {
   const lines: string[] = [];
   const multiplier = input.roundTrip ? 2 : 1;
@@ -5443,6 +5437,9 @@ function buildMapsRouteReply(input: {
 
   if (input.route.warnings.length > 0) {
     lines.push(`Atenção: ${input.route.warnings[0]}.`);
+  }
+  if (input.alignedGoal) {
+    lines.push(`Isso ajuda diretamente no objetivo ativo: ${input.alignedGoal}.`);
   }
   lines.push(`Maps: ${input.route.mapsUrl}`);
   return lines.join(" ");
