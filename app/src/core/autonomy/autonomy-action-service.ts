@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { CapabilityDefinition } from "../../types/capability.js";
 import type { PendingActionDraft, PendingAutonomyCapabilityDraft } from "../draft-action-service.js";
 import type { AutonomyObservation, AutonomySuggestion } from "../../types/autonomy.js";
+import type { CommitmentStore } from "./commitment-store.js";
 import type { Logger } from "../../types/logger.js";
 import type { CapabilityRegistry } from "../capability-registry.js";
 import type { ObservationStore } from "./observation-store.js";
@@ -83,6 +84,7 @@ export interface AutonomyActionServiceDependencies {
   suggestions: Pick<SuggestionStore, "updateStatus">;
   audit: Pick<AutonomyAuditStore, "record">;
   feedback: Pick<FeedbackStore, "record">;
+  commitments?: Pick<CommitmentStore, "update">;
   executeToolDirect: (
     toolName: string,
     rawArguments: unknown,
@@ -91,6 +93,18 @@ export interface AutonomyActionServiceDependencies {
 
 export class AutonomyActionService {
   constructor(private readonly deps: AutonomyActionServiceDependencies) {}
+
+  private syncLinkedCommitment(observation: AutonomyObservation | undefined, status: "confirmed" | "dismissed" | "snoozed", snoozedUntil?: string): void {
+    if (!this.deps.commitments || observation?.kind !== "commitment_detected" || !observation.sourceId) {
+      return;
+    }
+
+    this.deps.commitments.update({
+      id: observation.sourceId,
+      status,
+      ...(status === "snoozed" ? { snoozedUntil: snoozedUntil ?? null } : { snoozedUntil: null }),
+    });
+  }
 
   private markApproved(suggestion: AutonomySuggestion, feedbackNote: string): void {
     this.deps.suggestions.updateStatus({
@@ -109,6 +123,7 @@ export class AutonomyActionService {
 
     if (!suggestion.suggestedAction) {
       this.markApproved(suggestion, "approved_without_bound_action");
+      this.syncLinkedCommitment(observation, "confirmed");
       this.deps.audit.record({
         kind: "suggestion_status_changed",
         suggestionId: suggestion.id,
@@ -128,6 +143,7 @@ export class AutonomyActionService {
     const capability = this.deps.capabilityRegistry.getCapability(suggestion.suggestedAction.capabilityName);
     if (!capability) {
       this.markApproved(suggestion, "approved_missing_capability_binding");
+      this.syncLinkedCommitment(observation, "confirmed");
       this.deps.audit.record({
         kind: "suggestion_action_blocked",
         suggestionId: suggestion.id,
@@ -145,6 +161,7 @@ export class AutonomyActionService {
 
     if (capability.allowedSourceTrust?.length && observation && !capability.allowedSourceTrust.includes(observation.sourceTrust)) {
       this.markApproved(suggestion, "approved_blocked_by_source_trust");
+      this.syncLinkedCommitment(observation, "confirmed");
       this.deps.audit.record({
         kind: "suggestion_action_blocked",
         suggestionId: suggestion.id,
@@ -179,6 +196,7 @@ export class AutonomyActionService {
 
     if (requiresApproval(capability)) {
       this.markApproved(suggestion, "approved_and_emitted_draft");
+      this.syncLinkedCommitment(observation, "confirmed");
       const draft: PendingAutonomyCapabilityDraft = {
         kind: "autonomy_capability",
         suggestionId: suggestion.id,
@@ -211,6 +229,7 @@ export class AutonomyActionService {
         capability.name,
         suggestion.suggestedAction.arguments,
       );
+      this.syncLinkedCommitment(observation, "confirmed");
       this.deps.suggestions.updateStatus({
         id: suggestion.id,
         status: "executed",

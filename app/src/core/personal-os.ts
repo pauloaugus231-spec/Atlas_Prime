@@ -144,6 +144,10 @@ interface SuggestionStoreLike {
   ): AutonomySuggestion[];
 }
 
+interface AutonomyLoopLike {
+  runOnce(input?: { now?: string; context?: Record<string, unknown> }): Promise<unknown>;
+}
+
 const EXECUTIVE_BRIEF_CALENDAR_ALIASES = new Set(["primary", "abordagem"]);
 const TEAM_EVENT_HINTS = [
   "juliana",
@@ -773,6 +777,7 @@ export class PersonalOSService {
     private readonly personalMemory: PersonalOperationalMemoryStore,
     private readonly goalStore: { list: () => ActiveGoal[]; summarize: () => string },
     private readonly autonomySuggestions?: Pick<SuggestionStoreLike, "listByStatus">,
+    private readonly autonomyLoop?: AutonomyLoopLike,
   ) {
     this.weather = new WeatherService(this.logger.child({ scope: "weather" }));
   }
@@ -970,7 +975,21 @@ export class PersonalOSService {
     const motivation = pickDailyMotivation(this.timezone);
     const operationalMemory = this.contextMemory.summarize("operational", 4);
     const currentOperationalState = this.personalMemory.getOperationalState();
-    const activeAutonomySuggestions = (this.autonomySuggestions?.listByStatus(["queued", "notified", "approved", "snoozed"], 8) ?? [])
+    if (this.autonomyLoop) {
+      try {
+        await this.autonomyLoop.runOnce({
+          context: {
+            operationalState: currentOperationalState,
+          },
+        });
+      } catch (error) {
+        this.logger.warn("Failed to refresh autonomy loop before morning brief", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    const activeAutonomySuggestions = (this.autonomySuggestions?.listByStatus(["queued", "notified", "snoozed"], 8) ?? [])
       .filter((item) => item.status !== "dismissed" && item.status !== "executed" && item.status !== "failed")
       .filter((item) => !item.snoozedUntil || item.snoozedUntil <= new Date().toISOString())
       .slice(0, 2)

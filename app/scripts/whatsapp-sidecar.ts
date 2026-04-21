@@ -87,6 +87,9 @@ async function main(): Promise<void> {
     approvals,
     communicationRouter,
     contacts,
+    commitments,
+    commitmentExtractor,
+    personalMemory,
     whatsappMessages,
   } = await createAgentCore();
 
@@ -141,6 +144,10 @@ async function main(): Promise<void> {
     personalMemory,
     client,
     alertDispatcher,
+    {
+      extractor: commitmentExtractor,
+      store: commitments,
+    },
   );
 
   const server = http.createServer(async (request, response) => {

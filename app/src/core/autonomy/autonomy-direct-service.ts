@@ -6,6 +6,7 @@ import type { UserPreferences } from "../../types/user-preferences.js";
 import type { AutonomySuggestion } from "../../types/autonomy.js";
 import { AutonomyActionService } from "./autonomy-action-service.js";
 import { AutonomyAuditStore } from "./autonomy-audit-store.js";
+import type { CommitmentStore } from "./commitment-store.js";
 import { AutonomyLoop } from "./autonomy-loop.js";
 import { FeedbackStore } from "./feedback-store.js";
 import { ObservationStore } from "./observation-store.js";
@@ -189,6 +190,7 @@ export interface AutonomyDirectServiceDependencies {
   logger: Logger;
   loop: Pick<AutonomyLoop, "runOnce">;
   actionService: Pick<AutonomyActionService, "approveSuggestion">;
+  commitments?: Pick<CommitmentStore, "update">;
   suggestions: Pick<SuggestionStore, "getById" | "listByStatus" | "updateStatus">;
   observations: Pick<ObservationStore, "getById">;
   audit: Pick<AutonomyAuditStore, "record">;
@@ -212,6 +214,18 @@ export class AutonomyDirectService {
   private readonly renderer = new SuggestionRenderer();
 
   constructor(private readonly deps: AutonomyDirectServiceDependencies) {}
+
+  private syncLinkedCommitment(item: RenderableSuggestion | undefined, status: "dismissed" | "snoozed", snoozedUntil?: string): void {
+    if (!item?.observation || item.observation.kind !== "commitment_detected" || !item.observation.sourceId || !this.deps.commitments) {
+      return;
+    }
+
+    this.deps.commitments.update({
+      id: item.observation.sourceId,
+      status,
+      ...(status === "snoozed" ? { snoozedUntil: snoozedUntil ?? null } : { snoozedUntil: null }),
+    });
+  }
 
   private buildRenderableSuggestions(nowIso: string): RenderableSuggestion[] {
     const suggestions = this.deps.suggestions
@@ -352,6 +366,7 @@ export class AutonomyDirectService {
         id: target.item.suggestion.id,
         status: "dismissed",
       });
+      this.syncLinkedCommitment(target.item, "dismissed");
       this.deps.feedback.record({
         suggestionId: target.item.suggestion.id,
         feedbackKind: "dismissed",
@@ -404,6 +419,7 @@ export class AutonomyDirectService {
         status: "snoozed",
         snoozedUntil,
       });
+      this.syncLinkedCommitment(target.item, "snoozed", snoozedUntil);
       this.deps.feedback.record({
         suggestionId: target.item.suggestion.id,
         feedbackKind: "snoozed",

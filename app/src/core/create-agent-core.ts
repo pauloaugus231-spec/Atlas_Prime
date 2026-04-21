@@ -64,9 +64,12 @@ import { AutonomyLoop } from "./autonomy/autonomy-loop.js";
 import { AutonomyPolicy } from "./autonomy/autonomy-policy.js";
 import { SuggestionStore } from "./autonomy/suggestion-store.js";
 import { ApprovalCollector } from "./autonomy/collectors/approval-collector.js";
+import { CommitmentCollector } from "./autonomy/collectors/commitment-collector.js";
 import { GoalRiskCollector } from "./autonomy/collectors/goal-risk-collector.js";
 import { OperationalStateCollector } from "./autonomy/collectors/operational-state-collector.js";
 import { StaleWorkCollector } from "./autonomy/collectors/stale-work-collector.js";
+import { CommitmentExtractor } from "./autonomy/commitment-extractor.js";
+import { CommitmentStore } from "./autonomy/commitment-store.js";
 
 function withLlmProviderConfig(config: AppConfig, providerConfig: LlmProviderConfig): AppConfig {
   return {
@@ -220,6 +223,13 @@ export async function createAgentCore() {
     config.paths.autonomyDbPath,
     logger.child({ scope: "autonomy-feedback" }),
   );
+  const commitments = new CommitmentStore(
+    config.paths.autonomyDbPath,
+    logger.child({ scope: "commitment-store" }),
+  );
+  const commitmentExtractor = new CommitmentExtractor(
+    logger.child({ scope: "commitment-extractor" }),
+  );
   const autonomyAssessor = new AutonomyAssessor();
   const autonomyPolicy = new AutonomyPolicy();
   const contentOps = new ContentOpsStore(
@@ -242,6 +252,7 @@ export async function createAgentCore() {
     collectors: [
       new OperationalStateCollector(personalMemory),
       new ApprovalCollector(approvals),
+      new CommitmentCollector(commitments),
       new GoalRiskCollector(goalStore),
       new StaleWorkCollector(memory),
     ],
@@ -341,6 +352,7 @@ export async function createAgentCore() {
     personalMemory,
     goalStore,
     autonomySuggestions,
+    autonomyLoop,
   );
   const email = emailAccounts.getReader("primary");
   const emailWriter = emailAccounts.getWriter("primary");
@@ -464,6 +476,7 @@ export async function createAgentCore() {
     autonomySuggestions,
     autonomyAudit,
     autonomyFeedback,
+    commitments,
     autonomyLoop,
   );
   const actionDispatcher = new AssistantActionDispatcher(
@@ -478,6 +491,10 @@ export async function createAgentCore() {
     core,
     actionDispatcher,
     logger.child({ scope: "request-orchestrator" }),
+    {
+      extractor: commitmentExtractor,
+      store: commitments,
+    },
   );
 
   return {
@@ -533,8 +550,10 @@ export async function createAgentCore() {
     autonomySuggestions,
     autonomyAudit,
     autonomyFeedback,
+    commitments,
     autonomyAssessor,
     autonomyPolicy,
     autonomyLoop,
+    commitmentExtractor,
   };
 }

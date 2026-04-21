@@ -12,6 +12,8 @@ import {
   type PendingMonitoredChannelAlertDraft,
 } from "../../core/monitored-channel-alerts.js";
 import { buildOperationalStatePatchForMonitoredAlert } from "../../core/operational-state-signals.js";
+import type { CommitmentExtractor } from "../../core/autonomy/commitment-extractor.js";
+import type { CommitmentStore } from "../../core/autonomy/commitment-store.js";
 import type { ApprovalInboxStore } from "../../core/approval-inbox.js";
 import type { CommunicationRouter, ContactIntelligenceStore } from "../../core/contact-intelligence.js";
 import type { PersonalOperationalMemoryStore } from "../../core/personal-operational-memory.js";
@@ -115,7 +117,43 @@ export class WhatsAppMonitorService {
     private readonly personalMemory: PersonalOperationalMemoryStore,
     private readonly client: LlmClient,
     private readonly alerts: OperatorAlertDispatcher,
+    private readonly commitmentCapture?: {
+      extractor: Pick<CommitmentExtractor, "extract">;
+      store: Pick<CommitmentStore, "upsert">;
+    },
   ) {}
+
+  private captureCommitments(input: MonitoredWhatsAppInput): void {
+    if (!this.commitmentCapture) {
+      return;
+    }
+
+    try {
+      const commitments = this.commitmentCapture.extractor.extract({
+        text: input.text,
+        sourceKind: "whatsapp",
+        sourceId: input.remoteJid,
+        sourceTrust: "external_contact",
+        counterparty: input.pushName ?? input.number,
+        observedAt: input.createdAt,
+      });
+      for (const commitment of commitments) {
+        this.commitmentCapture.store.upsert(commitment);
+      }
+
+      if (commitments.length > 0) {
+        this.logger.debug("Commitments captured from monitored WhatsApp", {
+          sourceNumber: input.number,
+          count: commitments.length,
+        });
+      }
+    } catch (error) {
+      this.logger.warn("Failed to capture commitments from monitored WhatsApp; continuing", {
+        sourceNumber: input.number,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
 
   async handleInboundText(input: MonitoredWhatsAppInput): Promise<MonitoredWhatsAppResult> {
     this.whatsappMessages.saveMessage({
@@ -166,6 +204,8 @@ export class WhatsAppMonitorService {
       urgency: classification.urgency,
       timeSignal: classification.timeSignal,
     });
+
+    this.captureCommitments(input);
 
     if (!classification.shouldAlert) {
       return {
