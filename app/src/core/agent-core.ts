@@ -9684,6 +9684,19 @@ export class AgentCore {
           events: input.events.length,
           emailFallbackCount: input.emailFallbackCount,
         }),
+        buildCalendarConflictReviewReply: (input: {
+          scopeLabel: string;
+          totalEvents: number;
+          overlapCount: number;
+          duplicateCount: number;
+          namingCount: number;
+        }) => JSON.stringify({
+          scopeLabel: input.scopeLabel,
+          totalEvents: input.totalEvents,
+          overlapCount: input.overlapCount,
+          duplicateCount: input.duplicateCount,
+          namingCount: input.namingCount,
+        }),
       };
       this.googleWorkspaceDirectService = new GoogleWorkspaceDirectService({
         logger: baseLogger.child({ scope: "google-workspace-direct-service" }),
@@ -9757,6 +9770,16 @@ export class AgentCore {
           parseCalendarPeriodWindow,
           resolveActionAutonomyKey: (prompt) => resolveActionAutonomyRule(prompt).key,
           resolveEffectiveOperationalMode,
+          isCalendarConflictReviewPrompt,
+          isCalendarMovePrompt,
+          isCalendarPeriodDeletePrompt,
+          isCalendarDeletePrompt,
+          extractCalendarMoveParts,
+          parseCalendarLookupDate,
+          extractCalendarDeleteTopic,
+          extractCalendarLookupTopic,
+          cleanCalendarEventTopicReference,
+          normalizeCalendarUpdateInstruction,
         },
       });
     }
@@ -12180,121 +12203,12 @@ export class AgentCore {
     requestLogger: Logger,
     orchestration: OrchestrationContext,
   ): Promise<AgentRunResult | null> {
-    if (!isCalendarConflictReviewPrompt(userPrompt)) {
-      return null;
-    }
-
-    const explicitWindow = parseCalendarPeriodWindow(userPrompt, this.config.google.defaultTimezone);
-    const start = explicitWindow
-      ? explicitWindow.startIso
-      : new Date().toISOString();
-    const end = explicitWindow
-      ? explicitWindow.endIso
-      : new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
-    const scopeLabel = explicitWindow?.label ?? "próximos 7 dias";
-    const profile = this.personalMemory.getProfile();
-    const operationalMode = resolveEffectiveOperationalMode(userPrompt, profile);
-    const aliases = resolvePromptAccountAliases(
+    return this.getGoogleWorkspaceDirectService().tryRunCalendarConflictReview({
       userPrompt,
-      this.googleWorkspaces.getAliases(),
-      profile.defaultAgendaScope,
-    );
-
-    const events: Array<{
-      account: string;
-      summary: string;
-      start: string | null;
-      end: string | null;
-      location?: string;
-      owner: "paulo" | "equipe" | "delegavel";
-    }> = [];
-
-    for (const alias of aliases) {
-      const workspace = this.googleWorkspaces.getWorkspace(alias);
-      if (!workspace.getStatus().ready) {
-        continue;
-      }
-
-      const calendarTargets = resolveCalendarTargets(workspace, userPrompt);
-      for (const calendarId of calendarTargets) {
-        const items = await workspace.listEventsInWindow({
-          timeMin: start,
-          timeMax: end,
-          maxResults: 40,
-          calendarId,
-        });
-        for (const event of items) {
-          if (!isPersonallyRelevantCalendarEvent({
-            account: alias,
-            summary: event.summary,
-            description: event.description,
-            location: event.location,
-          })) {
-            continue;
-          }
-          const matchedTerms = matchPersonalCalendarTerms({
-            account: alias,
-            summary: event.summary,
-            description: event.description,
-            location: event.location,
-          });
-          events.push({
-            account: alias,
-            summary: event.summary,
-            start: event.start,
-            end: event.end,
-            location: event.location,
-            owner: alias === "primary"
-              ? "paulo"
-              : normalizeEmailAnalysisText([event.summary, event.location].filter(Boolean).join(" ")).includes("paulo")
-                ? "paulo"
-                : matchedTerms.length > 0
-                  ? "equipe"
-                  : "delegavel",
-          });
-        }
-      }
-    }
-
-    const insights = analyzeCalendarInsights(events, this.config.google.defaultTimezone);
-    requestLogger.info("Using direct calendar conflict review route", {
-      scopeLabel,
-      events: events.length,
-      insights: insights.length,
-    });
-
-    return {
       requestId,
-      reply: this.responseOs.buildCalendarConflictReviewReply({
-        scopeLabel,
-        totalEvents: events.length,
-        overlapCount: insights.filter((item) => item.kind === "overlap").length,
-        duplicateCount: insights.filter((item) => item.kind === "duplicate").length,
-        namingCount: insights.filter((item) => item.kind === "inconsistent_name").length,
-        items: insights.slice(0, operationalMode === "field" ? 3 : 6).map((item) => ({
-          kind: item.kind,
-          dayLabel: item.dayLabel,
-          summary: item.summary,
-          recommendation: item.recommendation,
-        })),
-        recommendedNextStep: insights[0]?.recommendation,
-      }),
-      messages: buildBaseMessages(userPrompt, orchestration),
-      toolExecutions: [
-        {
-          toolName: "calendar_conflict_review",
-          resultPreview: JSON.stringify(
-            {
-              scopeLabel,
-              events: events.length,
-              insights: insights.length,
-            },
-            null,
-            2,
-          ),
-        },
-      ],
-    };
+      requestLogger,
+      orchestration,
+    });
   }
 
   private async tryRunDirectGoogleEventDraft(
@@ -12331,90 +12245,12 @@ export class AgentCore {
     requestLogger: Logger,
     orchestration: OrchestrationContext,
   ): Promise<AgentRunResult | null> {
-    if (!isCalendarMovePrompt(userPrompt)) {
-      return null;
-    }
-    const parts = extractCalendarMoveParts(userPrompt);
-    if (!parts) {
-      return null;
-    }
-    const sourceDate = parseCalendarLookupDate(parts.source, this.config.google.defaultTimezone);
-    const topic =
-      cleanCalendarEventTopicReference(extractCalendarDeleteTopic(parts.source)) ??
-      cleanCalendarEventTopicReference(extractCalendarLookupTopic(parts.source)) ??
-      cleanCalendarEventTopicReference(parts.source) ??
-      parts.source;
-    const explicitAccount = extractExplicitAccountAlias(userPrompt, this.googleWorkspaces.getAliases());
-    const profile = this.personalMemory.getProfile();
-    const aliases = explicitAccount
-      ? [explicitAccount]
-      : resolvePromptAccountAliases(
-          userPrompt,
-          this.googleWorkspaces.getAliases(),
-          profile.defaultAgendaScope,
-        );
-    const resolution = await resolveCalendarEventReference({
-      accounts: this.googleWorkspaces,
-      aliases,
-      timezone: this.config.google.defaultTimezone,
-      timeMin: sourceDate?.startIso ?? new Date().toISOString(),
-      timeMax: sourceDate?.endIso ?? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
-      action: "move",
-      topic,
-      recentMessages: [userPrompt],
-    });
-    if (resolution.kind === "not_found") {
-      return {
-        requestId,
-        reply: resolution.message,
-        messages: buildBaseMessages(userPrompt, orchestration),
-        toolExecutions: [],
-      };
-    }
-    if (resolution.kind === "clarify") {
-      return {
-        requestId,
-        reply: resolution.message,
-        messages: buildBaseMessages(userPrompt, orchestration),
-        toolExecutions: [],
-      };
-    }
-    const match = resolution.match;
-    const baseDraft = {
-      kind: "google_event_update" as const,
-      eventId: match.event.id,
-      summary: match.event.summary,
-      originalSummary: match.event.summary,
-      originalStart: match.event.start ?? "",
-      originalEnd: match.event.end ?? "",
-      originalLocation: match.event.location,
-      start: match.event.start ?? "",
-      end: match.event.end ?? "",
-      timezone: this.config.google.defaultTimezone,
-      account: match.account,
-      reminderMinutes: 30,
-    };
-    const normalizedInstruction = normalizeCalendarUpdateInstruction(parts);
-    const adjusted = adjustEventDraftFromInstruction(baseDraft, normalizedInstruction);
-    if (!adjusted) {
-      return {
-        requestId,
-        reply: "Entendi o evento, mas faltou um ajuste claro. Diga em uma frase curta o que mudar, por exemplo: `título: Reunião no CAPS`, `local: Sala 5` ou `das 14h às 15h`.",
-        messages: buildBaseMessages(userPrompt, orchestration),
-        toolExecutions: [],
-      };
-    }
-    const finalDraft = adjusted as PendingGoogleEventUpdateDraft;
-    requestLogger.info("Using direct Google Calendar update draft route", {
-      account: match.account,
-      verb: parts.verb,
-    });
-    return {
+    return this.getGoogleWorkspaceDirectService().tryRunGoogleEventMove({
+      userPrompt,
       requestId,
-      reply: buildGoogleEventUpdateDraftReply(finalDraft),
-      messages: buildBaseMessages(userPrompt, orchestration),
-      toolExecutions: [],
-    };
+      requestLogger,
+      orchestration,
+    });
   }
 
   private async tryRunDirectGoogleEventDelete(
@@ -12423,145 +12259,12 @@ export class AgentCore {
     requestLogger: Logger,
     orchestration: OrchestrationContext,
   ): Promise<AgentRunResult | null> {
-    if (isCalendarPeriodDeletePrompt(userPrompt)) {
-      const window = parseCalendarPeriodWindow(userPrompt, this.config.google.defaultTimezone);
-      if (!window) {
-        return null;
-      }
-      const explicitAccount = extractExplicitAccountAlias(userPrompt, this.googleWorkspaces.getAliases());
-      const aliases = explicitAccount ? [explicitAccount] : this.googleWorkspaces.getAliases();
-      const events: PendingGoogleEventDeleteBatchDraft["events"] = [];
-      for (const alias of aliases) {
-        const workspace = this.googleWorkspaces.getWorkspace(alias);
-        if (!workspace.getStatus().ready) continue;
-        const items = await workspace.listEventsInWindow({
-          timeMin: window.startIso,
-          timeMax: window.endIso,
-          maxResults: 20,
-        });
-        for (const event of items) {
-          events.push({
-            eventId: event.id,
-            summary: event.summary,
-            start: event.start ?? undefined,
-            end: event.end ?? undefined,
-            account: alias,
-          });
-        }
-      }
-      if (events.length === 0) {
-        return {
-          requestId,
-          reply: `Não encontrei compromissos para cancelar em ${window.label}.`,
-          messages: buildBaseMessages(userPrompt, orchestration),
-          toolExecutions: [],
-        };
-      }
-      return {
-        requestId,
-        reply: buildGoogleEventDeleteBatchDraftReply({
-          kind: "google_event_delete_batch",
-          timezone: this.config.google.defaultTimezone,
-          events,
-        }),
-        messages: buildBaseMessages(userPrompt, orchestration),
-        toolExecutions: [],
-      };
-    }
-
-    if (!isCalendarDeletePrompt(userPrompt)) {
-      return null;
-    }
-
-    const explicitAccount = extractExplicitAccountAlias(userPrompt, this.googleWorkspaces.getAliases());
-    const profile = this.personalMemory.getProfile();
-    const accountAliases = explicitAccount
-      ? [explicitAccount]
-      : resolvePromptAccountAliases(
-          userPrompt,
-          this.googleWorkspaces.getAliases(),
-          profile.defaultAgendaScope,
-        );
-    const explicitCalendar = extractExplicitCalendarAlias(
+    return this.getGoogleWorkspaceDirectService().tryRunGoogleEventDelete({
       userPrompt,
-      Object.keys(this.googleWorkspaces.getWorkspace(explicitAccount).getCalendarAliases()),
-    );
-    const targetDate = parseCalendarLookupDate(userPrompt, this.config.google.defaultTimezone);
-    const topic = extractCalendarDeleteTopic(userPrompt) ?? extractCalendarLookupTopic(userPrompt);
-    if (!topic) {
-      return {
-        requestId,
-        reply: "Consigo cancelar o evento, mas preciso do título ou de uma referência mais específica.",
-        messages: buildBaseMessages(userPrompt, orchestration),
-        toolExecutions: [],
-      };
-    }
-
-    const hasReadyAccount = accountAliases.some((alias) => this.googleWorkspaces.getWorkspace(alias).getStatus().ready);
-    if (!hasReadyAccount) {
-      const fallbackStatus = this.googleWorkspaces.getWorkspace(explicitAccount).getStatus();
-      return {
-        requestId,
-        reply: `A integração do Google Workspace não está pronta. ${fallbackStatus.message}`,
-        messages: buildBaseMessages(userPrompt, orchestration),
-        toolExecutions: [],
-      };
-    }
-
-    const resolution = await resolveCalendarEventReference({
-      accounts: this.googleWorkspaces,
-      aliases: accountAliases,
-      timezone: this.config.google.defaultTimezone,
-      timeMin: targetDate?.startIso ?? new Date().toISOString(),
-      timeMax: targetDate?.endIso ?? new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
-      action: "delete",
-      topic,
-      calendarId: explicitCalendar,
-      recentMessages: [userPrompt],
-    });
-
-    if (resolution.kind === "not_found") {
-      return {
-        requestId,
-        reply: targetDate ? `${resolution.message.replace(/\.$/, "")} em ${targetDate.label}.` : resolution.message,
-        messages: buildBaseMessages(userPrompt, orchestration),
-        toolExecutions: [],
-      };
-    }
-
-    if (resolution.kind === "clarify") {
-      return {
-        requestId,
-        reply: resolution.message,
-        messages: buildBaseMessages(userPrompt, orchestration),
-        toolExecutions: [],
-      };
-    }
-
-    const match = resolution.match;
-    requestLogger.info("Using direct Google Calendar event delete draft route", {
-      domain: orchestration.route.primaryDomain,
-      account: match.account,
-    });
-
-    return {
       requestId,
-      reply: buildGoogleEventDeleteDraftReply({
-        kind: "google_event_delete",
-        eventId: match.event.id,
-        summary: match.event.summary,
-        description: match.event.description,
-        location: match.event.location,
-        start: match.event.start ?? undefined,
-        end: match.event.end ?? undefined,
-        timezone: this.config.google.defaultTimezone,
-        ...(match.calendarId ? { calendarId: match.calendarId } : {}),
-        account: match.account,
-        reminderMinutes: 30,
-      }),
-      messages: buildBaseMessages(userPrompt, orchestration),
-      toolExecutions: [],
-    };
+      requestLogger,
+      orchestration,
+    });
   }
 
   private async tryRunDirectGoogleContacts(

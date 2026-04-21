@@ -40,6 +40,7 @@
     "eval:agent-core-phase5": "tsx scripts/eval-agent-core-phase5.ts",
     "eval:agent-core-phase6": "tsx scripts/eval-agent-core-phase6.ts",
     "eval:agent-core-phase7": "tsx scripts/eval-agent-core-phase7.ts",
+    "eval:agent-core-phase8": "tsx scripts/eval-agent-core-phase8.ts",
     "eval:request-orchestration": "tsx scripts/eval-request-orchestration.ts",
     "eval:personal-memory": "tsx scripts/eval-personal-memory.ts",
     "eval:personal-context": "tsx scripts/eval-personal-context-layers.ts",
