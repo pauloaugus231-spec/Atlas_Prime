@@ -384,6 +384,10 @@ function buildProfileUpdateToolArguments(profile: UpdatePersonalOperationalProfi
     ...(profile.timezone ? { timezone: profile.timezone } : {}),
     ...(profile.preferredChannels ? { preferredChannels: profile.preferredChannels } : {}),
     ...(profile.preferredAlertChannel ? { preferredAlertChannel: profile.preferredAlertChannel } : {}),
+    ...(profile.homeAddress ? { homeAddress: profile.homeAddress } : {}),
+    ...(profile.homeLocationLabel ? { homeLocationLabel: profile.homeLocationLabel } : {}),
+    ...(profile.defaultVehicle ? { defaultVehicle: profile.defaultVehicle } : {}),
+    ...(typeof profile.defaultFuelPricePerLiter === "number" ? { defaultFuelPricePerLiter: profile.defaultFuelPricePerLiter } : {}),
     ...(profile.priorityAreas ? { priorityAreas: profile.priorityAreas } : {}),
     ...(profile.defaultAgendaScope ? { defaultAgendaScope: profile.defaultAgendaScope } : {}),
     ...(profile.responseStyle ? { responseStyle: profile.responseStyle } : {}),
@@ -826,7 +830,17 @@ export class OperationalContextDirectService {
     if (!extracted) {
       return {
         requestId: input.requestId,
-        reply: "Diga o ajuste de perfil que você quer. Exemplo: `defina meu estilo de resposta como direto e objetivo`.",
+        reply: [
+          "Posso montar teu perfil base com uma mensagem só.",
+          "Me mande algo neste formato:",
+          "",
+          "Meu nome é ...",
+          "Moro em ...",
+          "Trabalho com ...",
+          "Minhas agendas principais são ...",
+          "Meu carro é ... e faz ... km/l",
+          "Quero que o Atlas me ajude principalmente com ...",
+        ].join("\n"),
         messages: this.deps.buildBaseMessages(input.userPrompt, input.orchestration, input.preferences),
         toolExecutions: [],
       };

@@ -5,6 +5,14 @@ export interface IdentityProfile {
   timezone: string;
   preferredChannels: string[];
   preferredAlertChannel?: string;
+  homeAddress?: string;
+  homeLocationLabel?: string;
+  defaultVehicle?: {
+    name?: string;
+    consumptionKmPerLiter?: number;
+    fuelType?: "gasolina" | "etanol" | "diesel" | "flex" | "eletrico" | "outro";
+  };
+  defaultFuelPricePerLiter?: number;
   priorityAreas: string[];
   defaultAgendaScope: "primary" | "work" | "both";
   workCalendarAliases: string[];
@@ -34,6 +42,10 @@ export interface UpdateIdentityProfileInput {
   timezone?: string;
   preferredChannels?: string[];
   preferredAlertChannel?: string;
+  homeAddress?: string;
+  homeLocationLabel?: string;
+  defaultVehicle?: Partial<IdentityProfile["defaultVehicle"]>;
+  defaultFuelPricePerLiter?: number;
   priorityAreas?: string[];
   defaultAgendaScope?: IdentityProfile["defaultAgendaScope"];
   workCalendarAliases?: string[];

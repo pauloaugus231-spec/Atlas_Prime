@@ -202,15 +202,6 @@ export class MessagingDirectService {
       return null;
     }
 
-    if (!this.deps.whatsappConfig.enabled) {
-      return {
-        requestId: input.requestId,
-        reply: "O WhatsApp do Atlas não está habilitado neste ambiente.",
-        messages: this.deps.buildBaseMessages(input.activeUserPrompt, input.orchestration),
-        toolExecutions: [],
-      };
-    }
-
     const query = extractWhatsAppSearchQuery(input.activeUserPrompt, fullPrompt);
     if (!query) {
       return {
@@ -286,6 +277,8 @@ export class MessagingDirectService {
         })),
         recommendedNextStep: messages[0]
           ? "Ler a última mensagem e decidir se o próximo passo é responder, acompanhar ou registrar contexto."
+          : !this.deps.whatsappConfig.enabled
+            ? "Não achei mensagens no histórico local. Para leitura ao vivo, confira se Evolution/WhatsApp está habilitado no ambiente."
           : undefined,
       }),
       messages: this.deps.buildBaseMessages(input.activeUserPrompt, input.orchestration),

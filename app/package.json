@@ -79,7 +79,8 @@
     "container:bootstrap": "bash ./scripts/docker/bootstrap.sh",
     "container:healthcheck": "bash ./scripts/docker/healthcheck.sh",
     "email:smoke": "tsx scripts/smoke-email.ts",
-    "eval:reasoning-engine": "tsx scripts/eval-reasoning-engine.ts"
+    "eval:reasoning-engine": "tsx scripts/eval-reasoning-engine.ts",
+    "eval:profile-travel-whatsapp": "tsx scripts/eval-profile-travel-whatsapp-routing.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.101.1",

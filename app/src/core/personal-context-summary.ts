@@ -22,6 +22,16 @@ export function summarizeIdentityProfileForReasoning(profile: PersonalOperationa
     timezone: profile.timezone,
     preferred_channels: profile.preferredChannels.slice(0, 4),
     preferred_alert_channel: profile.preferredAlertChannel,
+    home_address_saved: Boolean(profile.homeAddress),
+    home_location_label: profile.homeLocationLabel,
+    default_vehicle: profile.defaultVehicle
+      ? {
+          name: profile.defaultVehicle.name,
+          consumption_km_per_liter: profile.defaultVehicle.consumptionKmPerLiter,
+          fuel_type: profile.defaultVehicle.fuelType,
+        }
+      : undefined,
+    default_fuel_price_per_liter_saved: typeof profile.defaultFuelPricePerLiter === "number",
     priority_areas: profile.priorityAreas.slice(0, 4),
     routine_summary: profile.routineSummary.slice(0, 4),
     response_style: profile.responseStyle,

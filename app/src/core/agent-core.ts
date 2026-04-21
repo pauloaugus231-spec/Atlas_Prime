@@ -155,6 +155,7 @@ import {
   isActiveGoalCancellationPrompt,
   mergePlaceDiscoveryGoal,
   mergeTravelPlanningGoal,
+  type TravelPlanningGoal,
   type ActivePlanningGoal,
 } from "./active-goal-state.js";
 import { MessagingDirectService } from "./messaging-direct-service.js";
@@ -1441,6 +1442,16 @@ function isPersonalOperationalProfileUpdatePrompt(prompt: string): boolean {
     "atualizar meu perfil",
     "ajuste meu perfil",
     "ajustar meu perfil",
+    "onboarding",
+    "configuracao inicial",
+    "configuração inicial",
+    "meu endereco",
+    "meu endereço",
+    "moro em",
+    "minha casa fica",
+    "meu carro",
+    "meu veiculo",
+    "meu veículo",
     "modo mais executivo",
     "modo mais humano",
     "modo mais firme",
@@ -1632,6 +1643,61 @@ function extractPersonalOperationalProfileUpdate(
   if (timezoneMatch?.[1]?.trim()) {
     profile.timezone = timezoneMatch[1].trim();
     changeLabels.push(`fuso: ${profile.timezone}`);
+  }
+
+  const homeAddressMatch = prompt.match(/(?:meu\s+endere[cç]o(?:\s+de\s+casa)?|moro\s+em|minha\s+casa\s+fica\s+em|saio\s+de\s+casa\s+(?:em|de))\s*(?:[ée]|:)?\s+(.+?)(?=(?:[.!?;]|$))/i);
+  if (homeAddressMatch?.[1]?.trim()) {
+    profile.homeAddress = homeAddressMatch[1].trim();
+    profile.homeLocationLabel = "casa";
+    changeLabels.push("endereço base: casa");
+  }
+
+  const vehicleMatch = prompt.match(/(?:meu\s+(?:carro|ve[ií]culo)|minha\s+moto)\s*(?:[ée]|:)?\s+(.+?)(?=(?:,|;|\.|$|\s+e\s+(?:faz|consome)|\s+com\s+consumo))/i);
+  if (vehicleMatch?.[1]?.trim()) {
+    profile.defaultVehicle = {
+      ...(profile.defaultVehicle ?? {}),
+      name: vehicleMatch[1].trim(),
+    };
+    changeLabels.push(`veículo padrão: ${profile.defaultVehicle.name}`);
+  }
+
+  const consumptionMatch = prompt.match(/\b(?:faz|consome|consumo(?: medio| médio)?(?: é| e)?|m[eé]dia(?: de)?)\s*(\d+(?:[.,]\d+)?)\s*(?:km\/l|km por litro)\b/i)
+    ?? prompt.match(/\b(\d+(?:[.,]\d+)?)\s*(?:km\/l|km por litro)\b/i);
+  if (consumptionMatch?.[1]) {
+    const consumption = Number(consumptionMatch[1].replace(",", "."));
+    if (Number.isFinite(consumption) && consumption > 0) {
+      profile.defaultVehicle = {
+        ...(profile.defaultVehicle ?? {}),
+        consumptionKmPerLiter: consumption,
+      };
+      changeLabels.push(`consumo padrão: ${consumption.toFixed(1).replace(".", ",")} km/l`);
+    }
+  }
+
+  const fuelType = normalized.includes("gasolina")
+    ? "gasolina" as const
+    : normalized.includes("etanol")
+      ? "etanol" as const
+      : normalized.includes("diesel")
+        ? "diesel" as const
+        : normalized.includes("flex")
+          ? "flex" as const
+          : undefined;
+  if (fuelType) {
+    profile.defaultVehicle = {
+      ...(profile.defaultVehicle ?? {}),
+      fuelType,
+    };
+    changeLabels.push(`combustível padrão: ${fuelType}`);
+  }
+
+  const fuelPriceMatch = prompt.match(/\b(?:gasolina|etanol|diesel|combust[ií]vel)\b.*?(?:r\$?\s*)?(\d+(?:[.,]\d+)?)/i);
+  if (fuelPriceMatch?.[1]) {
+    const price = Number(fuelPriceMatch[1].replace(",", "."));
+    if (Number.isFinite(price) && price > 0) {
+      profile.defaultFuelPricePerLiter = price;
+      changeLabels.push(`preço de combustível padrão: R$ ${price.toFixed(2).replace(".", ",")}/l`);
+    }
   }
 
   if (normalized.includes("telegram")) {
@@ -4955,6 +5021,9 @@ function buildPersonalOperationalProfileReply(profile: PersonalOperationalProfil
     `- Fuso: ${profile.timezone}`,
     `- Canais preferidos: ${profile.preferredChannels.join(" | ")}`,
     `- Canal preferido de alerta: ${profile.preferredAlertChannel ?? "não definido"}`,
+    `- Endereço base: ${profile.homeAddress ? `${profile.homeLocationLabel ?? "casa"} salvo` : "não definido"}`,
+    `- Veículo padrão: ${profile.defaultVehicle?.name ?? "não definido"}${profile.defaultVehicle?.consumptionKmPerLiter ? ` | ${profile.defaultVehicle.consumptionKmPerLiter.toFixed(1).replace(".", ",")} km/l` : ""}${profile.defaultVehicle?.fuelType ? ` | ${profile.defaultVehicle.fuelType}` : ""}`,
+    `- Preço combustível padrão: ${profile.defaultFuelPricePerLiter ? `R$ ${profile.defaultFuelPricePerLiter.toFixed(2).replace(".", ",")}/l` : "não definido"}`,
     `- Estilo de resposta: ${profile.responseStyle}`,
     `- Briefing da manhã: ${profile.briefingPreference}`,
     `- Nível de detalhe: ${profile.detailLevel}`,
@@ -9607,7 +9676,10 @@ export class AgentCore {
     }
 
     const merged = activeGoal.kind === "travel_planning"
-      ? mergeTravelPlanningGoal(activeGoal, userPrompt)
+      ? {
+          ...mergeTravelPlanningGoal(activeGoal, userPrompt),
+          goal: this.applyProfileTravelDefaults(mergeTravelPlanningGoal(activeGoal, userPrompt).goal),
+        }
       : mergePlaceDiscoveryGoal(activeGoal, userPrompt);
     if (merged.hasMeaningfulUpdate) {
       return true;
@@ -11782,6 +11854,45 @@ export class AgentCore {
     this.activeGoals.set(String(chatId), goal);
   }
 
+  private applyProfileTravelDefaults(goal: TravelPlanningGoal): TravelPlanningGoal {
+    const profile = this.personalMemory.getProfile();
+    const homeAddress = profile.homeAddress?.trim();
+    const normalizePlace = (value: string | undefined): string =>
+      normalizeEmailAnalysisText(value ?? "").replace(/\s+/g, " ").trim();
+    const isHomeAlias = (value: string | undefined): boolean => {
+      const normalized = normalizePlace(value);
+      return [
+        "casa",
+        "minha casa",
+        "de casa",
+        "meu endereco",
+        "meu endereço",
+        normalizePlace(profile.homeLocationLabel),
+      ].filter(Boolean).includes(normalized);
+    };
+    const promptMentionsHomeOrigin = /\b(?:sair|saindo|sairei|partir|partindo|vou sair)\s+(?:de|da)\s+casa\b/i.test(goal.lastPrompt)
+      || /\bde\s+casa\b/i.test(goal.lastPrompt);
+
+    const origin = homeAddress && (isHomeAlias(goal.origin) || (!goal.origin && promptMentionsHomeOrigin))
+      ? homeAddress
+      : goal.origin;
+    const destination = homeAddress && isHomeAlias(goal.destination)
+      ? homeAddress
+      : goal.destination;
+    const vehicle = goal.vehicle ?? profile.defaultVehicle?.name;
+    const consumptionKmPerLiter = goal.consumptionKmPerLiter ?? profile.defaultVehicle?.consumptionKmPerLiter;
+    const fuelPricePerLiter = goal.fuelPricePerLiter ?? profile.defaultFuelPricePerLiter;
+
+    return {
+      ...goal,
+      origin,
+      destination,
+      vehicle,
+      consumptionKmPerLiter,
+      fuelPricePerLiter,
+    };
+  }
+
   private buildActiveGoalUserDataReply(goal: ActivePlanningGoal, plan: CapabilityPlan): string {
     if (goal.kind === "place_discovery") {
       const known = describePlaceDiscoveryGoal(goal);
@@ -11903,7 +12014,13 @@ export class AgentCore {
       ? looksLikeCapabilityAwareTravelPrompt(userPrompt)
       : looksLikeCapabilityAwarePlacePrompt(userPrompt);
     const merged = activeGoal.kind === "travel_planning"
-      ? mergeTravelPlanningGoal(activeGoal, userPrompt)
+      ? (() => {
+          const result = mergeTravelPlanningGoal(activeGoal, userPrompt);
+          return {
+            ...result,
+            goal: this.applyProfileTravelDefaults(result.goal),
+          };
+        })()
       : mergePlaceDiscoveryGoal(activeGoal, userPrompt);
 
     if (!merged.hasMeaningfulUpdate && !promptLooksCompatible && interpreted.isTopLevelRequest) {
@@ -13428,15 +13545,18 @@ export class AgentCore {
     });
     let effectivePrompt = userPrompt;
     let activeGoal: ActivePlanningGoal | undefined;
-    if (options?.chatId !== undefined) {
-      const seededGoal = buildTravelPlanningGoalFromPrompt(userPrompt) ?? buildPlaceDiscoveryGoalFromPrompt(userPrompt);
-      if (seededGoal) {
-        activeGoal = seededGoal;
+    const rawSeededGoal = buildTravelPlanningGoalFromPrompt(userPrompt) ?? buildPlaceDiscoveryGoalFromPrompt(userPrompt);
+    const seededGoal = rawSeededGoal?.kind === "travel_planning"
+      ? this.applyProfileTravelDefaults(rawSeededGoal)
+      : rawSeededGoal;
+    if (seededGoal) {
+      activeGoal = seededGoal;
+      if (options?.chatId !== undefined) {
         this.setActiveGoal(options.chatId, seededGoal);
-        effectivePrompt = seededGoal.kind === "travel_planning"
-          ? buildTravelPlanningPrompt(seededGoal)
-          : buildPlaceDiscoveryPrompt(seededGoal);
       }
+      effectivePrompt = seededGoal.kind === "travel_planning"
+        ? buildTravelPlanningPrompt(seededGoal)
+        : buildPlaceDiscoveryPrompt(seededGoal);
     }
 
     const plan = this.capabilityPlanner.plan(effectivePrompt, interpreted);

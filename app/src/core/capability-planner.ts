@@ -552,6 +552,12 @@ export function extractTravelRequest(prompt: string): TravelRequest | null {
   const directRouteMatch = prompt.match(
     /\bde\s+(.+?)\s+(?:ate|até|para)\s+(.+?)(?=(?:\s+com\s+(?:meu|o\s+meu|minha|a\s+minha|gasolina|etanol|diesel|combust[ií]vel)\b|[,.!?]|$))/i,
   );
+  const homeToDestinationMatch = !directRouteMatch
+    ? prompt.match(/\b(?:sair|saindo|sairei|partir|partindo|vou sair)\s+(?:de|da)\s+casa\s+(?:ate|até|para|pra|pro)\s+(.+?)(?=(?:\s+com\s+(?:meu|o\s+meu|minha|a\s+minha|gasolina|etanol|diesel|combust[ií]vel)\b|[,.!?]|$))/i)
+    : undefined;
+  const destinationOnlyMatch = !directRouteMatch && !homeToDestinationMatch
+    ? prompt.match(/\b(?:ir|vou|viajar|ida)\s+(?:ate|até|para|pra|pro)\s+(.+?)(?=(?:\s+saindo\s+(?:de|da)\s+casa|\s+com\s+(?:meu|o\s+meu|minha|a\s+minha|gasolina|etanol|diesel|combust[ií]vel)\b|[,.!?]|$))/i)
+    : undefined;
   const distanceMatch = prompt.match(/\b(\d+(?:[.,]\d+)?)\s*km\b(?!\s*\/\s*l)/i);
   const fuelPriceMatch = prompt.match(/\b(?:gasolina|etanol|diesel|combust[ií]vel)\b.*?(?:r\$?\s*)?(\d+(?:[.,]\d+)?)/i);
   const consumptionMatch = prompt.match(/\b(\d+(?:[.,]\d+)?)\s*(?:km\/l|km por litro)\b/i);
@@ -564,8 +570,8 @@ export function extractTravelRequest(prompt: string): TravelRequest | null {
 
   return {
     objective: wantsCost ? "travel_cost_estimate" : wantsTolls ? "route_tolls" : "route_distance",
-    origin: directRouteMatch?.[1]?.trim(),
-    destination: directRouteMatch?.[2]?.trim(),
+    origin: directRouteMatch?.[1]?.trim() ?? (homeToDestinationMatch || (destinationOnlyMatch && /\bsaindo\s+(?:de|da)\s+casa\b/i.test(prompt)) ? "casa" : undefined),
+    destination: directRouteMatch?.[2]?.trim() ?? homeToDestinationMatch?.[1]?.trim() ?? destinationOnlyMatch?.[1]?.trim(),
     distanceKm: parseNumber(distanceMatch?.[1]),
     fuelPricePerLiter: parseNumber(fuelPriceMatch?.[1]),
     consumptionKmPerLiter: parseNumber(consumptionMatch?.[1]),

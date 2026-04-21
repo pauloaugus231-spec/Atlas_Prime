@@ -213,6 +213,27 @@ function extractDirectRoutePair(prompt: string): { origin?: string; destination?
   const match = prompt.match(
     /\bde\s+(.+?)\s+(?:ate|até|para)\s+(.+?)(?=(?:\s+com\s+(?:meu|o\s+meu|minha|a\s+minha|gasolina|etanol|diesel|combust[ií]vel)\b|[,.!?]|$))/i,
   );
+  if (!match) {
+    const homeToDestination = prompt.match(
+      /\b(?:sair|saindo|sairei|partir|partindo|vou sair)\s+(?:de|da)\s+casa\s+(?:ate|até|para|pra|pro)\s+(.+?)(?=(?:\s+com\s+(?:meu|o\s+meu|minha|a\s+minha|gasolina|etanol|diesel|combust[ií]vel)\b|[,.!?]|$))/i,
+    );
+    if (homeToDestination?.[1]?.trim()) {
+      return {
+        origin: "casa",
+        destination: homeToDestination[1].trim(),
+      };
+    }
+
+    const destinationOnly = prompt.match(
+      /\b(?:ir|vou|viajar|ida)\s+(?:ate|até|para|pra|pro)\s+(.+?)(?=(?:\s+saindo\s+(?:de|da)\s+casa|\s+com\s+(?:meu|o\s+meu|minha|a\s+minha|gasolina|etanol|diesel|combust[ií]vel)\b|[,.!?]|$))/i,
+    );
+    if (destinationOnly?.[1]?.trim()) {
+      return {
+        origin: /\bsaindo\s+(?:de|da)\s+casa\b/i.test(prompt) ? "casa" : undefined,
+        destination: destinationOnly[1].trim(),
+      };
+    }
+  }
   return {
     origin: match?.[1]?.trim() || undefined,
     destination: match?.[2]?.trim() || undefined,

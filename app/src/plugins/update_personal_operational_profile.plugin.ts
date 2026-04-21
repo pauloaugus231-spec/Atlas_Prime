@@ -8,6 +8,10 @@ interface UpdatePersonalOperationalProfileParameters {
   timezone?: string;
   preferredChannels?: string[];
   preferredAlertChannel?: string;
+  homeAddress?: string;
+  homeLocationLabel?: string;
+  defaultVehicle?: PersonalOperationalProfile["defaultVehicle"];
+  defaultFuelPricePerLiter?: number;
   priorityAreas?: string[];
   defaultAgendaScope?: PersonalOperationalProfile["defaultAgendaScope"];
   responseStyle?: string;
@@ -54,6 +58,28 @@ export default defineToolPlugin<UpdatePersonalOperationalProfileParameters>({
       },
       preferredAlertChannel: {
         type: "string",
+      },
+      homeAddress: {
+        type: "string",
+      },
+      homeLocationLabel: {
+        type: "string",
+      },
+      defaultVehicle: {
+        type: "object",
+        properties: {
+          name: { type: "string" },
+          consumptionKmPerLiter: { type: "number", minimum: 0 },
+          fuelType: {
+            type: "string",
+            enum: ["gasolina", "etanol", "diesel", "flex", "eletrico", "outro"],
+          },
+        },
+        additionalProperties: false,
+      },
+      defaultFuelPricePerLiter: {
+        type: "number",
+        minimum: 0,
       },
       priorityAreas: {
         type: "array",
@@ -135,6 +161,10 @@ export default defineToolPlugin<UpdatePersonalOperationalProfileParameters>({
       timezone: parameters.timezone,
       preferredChannels: parameters.preferredChannels,
       preferredAlertChannel: parameters.preferredAlertChannel,
+      homeAddress: parameters.homeAddress,
+      homeLocationLabel: parameters.homeLocationLabel,
+      defaultVehicle: parameters.defaultVehicle,
+      defaultFuelPricePerLiter: parameters.defaultFuelPricePerLiter,
       priorityAreas: parameters.priorityAreas,
       defaultAgendaScope: parameters.defaultAgendaScope,
       responseStyle: parameters.responseStyle,

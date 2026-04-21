@@ -120,12 +120,23 @@ export function isWhatsAppRecentSearchPrompt(prompt: string): boolean {
     "listar mensagens",
     "mostre mensagens",
     "ver mensagens",
+    "verificar whatsapp",
+    "checar whatsapp",
+    "ler whatsapp",
+    "acessar whatsapp",
+    "olha o whatsapp",
+    "olhe o whatsapp",
+    "o que chegou",
+    "o que tem no whatsapp",
+    "o que tem no institucional",
+    "tem algo no institucional",
+    "mensagens do institucional",
     "procure no whatsapp",
     "busque no whatsapp",
     "veja no whatsapp",
     "conversa recente",
   ]);
-  const hasWhatsAppContext = includesAny(normalized, ["whatsapp", "zap", "abordagem"]);
+  const hasWhatsAppContext = includesAny(normalized, ["whatsapp", "zap", "abordagem", "institucional", "monitorado", "monitorada"]);
   return hasMessageLookupIntent && hasWhatsAppContext;
 }
 
@@ -226,6 +237,14 @@ export function extractWhatsAppSearchQuery(currentPrompt: string, fullPrompt: st
   const current = extractWhatsAppTargetReference(currentPrompt);
   if (current) {
     return current;
+  }
+
+  const normalizedCurrent = normalizeEmailAnalysisText(currentPrompt);
+  if (includesAny(normalizedCurrent, ["institucional", "monitorado", "monitorada", "abordagem"])) {
+    return "abordagem";
+  }
+  if (includesAny(normalizedCurrent, ["whatsapp pessoal", "meu whatsapp", "whatsapp principal"])) {
+    return "primary";
   }
 
   if (!isGenericWhatsAppFollowUp(currentPrompt)) {

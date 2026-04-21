@@ -29,6 +29,9 @@ export function detectWhatsAppAccountAliasFromText(text: string | undefined): st
 
   if (
     normalized.includes("abordagem") ||
+    normalized.includes("institucional") ||
+    normalized.includes("monitorado") ||
+    normalized.includes("monitorada") ||
     normalized.includes("social") ||
     normalized.includes("creas") ||
     normalized.includes("caps") ||

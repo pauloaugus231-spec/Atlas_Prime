@@ -34,6 +34,7 @@ const DEFAULT_PROFILE: PersonalOperationalProfile = {
   timezone: "America/Sao_Paulo",
   preferredChannels: ["telegram"],
   preferredAlertChannel: "telegram",
+  homeLocationLabel: "casa",
   priorityAreas: [],
   defaultAgendaScope: "both",
   workCalendarAliases: ["abordagem"],
@@ -110,6 +111,26 @@ function normalizeOptionalString(value: string | undefined): string | undefined 
   }
   const normalized = value.trim();
   return normalized.length > 0 ? normalized : undefined;
+}
+
+function normalizePositiveNumber(value: number | undefined): number | undefined {
+  if (value === undefined || !Number.isFinite(value)) {
+    return undefined;
+  }
+  return Number(value) > 0 ? Number(value) : undefined;
+}
+
+function normalizeFuelType(
+  value: NonNullable<PersonalOperationalProfile["defaultVehicle"]>["fuelType"] | undefined,
+): NonNullable<PersonalOperationalProfile["defaultVehicle"]>["fuelType"] | undefined {
+  return value === "gasolina"
+    || value === "etanol"
+    || value === "diesel"
+    || value === "flex"
+    || value === "eletrico"
+    || value === "outro"
+    ? value
+    : undefined;
 }
 
 function normalizeResponseStyle(value: string | undefined, fallback: string): string {
@@ -428,6 +449,16 @@ function mergeProfileWithItems(
     timezone: normalizeString(profile.timezone, DEFAULT_PROFILE.timezone),
     preferredChannels: normalizeStringList(profile.preferredChannels, DEFAULT_PROFILE.preferredChannels),
     preferredAlertChannel: normalizeString(profile.preferredAlertChannel, DEFAULT_PROFILE.preferredAlertChannel ?? DEFAULT_PROFILE.preferredChannels[0]),
+    homeAddress: normalizeOptionalString(profile.homeAddress),
+    homeLocationLabel: normalizeString(profile.homeLocationLabel, DEFAULT_PROFILE.homeLocationLabel ?? "casa"),
+    defaultVehicle: profile.defaultVehicle
+      ? {
+          ...(normalizeOptionalString(profile.defaultVehicle.name) ? { name: normalizeOptionalString(profile.defaultVehicle.name) } : {}),
+          ...(normalizePositiveNumber(profile.defaultVehicle.consumptionKmPerLiter) ? { consumptionKmPerLiter: normalizePositiveNumber(profile.defaultVehicle.consumptionKmPerLiter) } : {}),
+          ...(normalizeFuelType(profile.defaultVehicle.fuelType) ? { fuelType: normalizeFuelType(profile.defaultVehicle.fuelType) } : {}),
+        }
+      : undefined,
+    defaultFuelPricePerLiter: normalizePositiveNumber(profile.defaultFuelPricePerLiter),
     priorityAreas: normalizeStringList(profile.priorityAreas, DEFAULT_PROFILE.priorityAreas),
     responseStyle: normalizeResponseStyle(profile.responseStyle, DEFAULT_PROFILE.responseStyle),
     briefingPreference: normalizeBriefingPreference(profile.briefingPreference, DEFAULT_PROFILE.briefingPreference),
@@ -545,6 +576,15 @@ export class PersonalOperationalMemoryStore {
       timezone: normalizeString(input.timezone, current.timezone),
       preferredChannels: normalizeStringList(input.preferredChannels, current.preferredChannels),
       preferredAlertChannel: normalizeOptionalString(input.preferredAlertChannel) ?? current.preferredAlertChannel,
+      homeAddress: normalizeOptionalString(input.homeAddress) ?? current.homeAddress,
+      homeLocationLabel: normalizeOptionalString(input.homeLocationLabel) ?? current.homeLocationLabel,
+      defaultVehicle: {
+        ...(current.defaultVehicle ?? {}),
+        ...(input.defaultVehicle?.name ? { name: input.defaultVehicle.name.trim() } : {}),
+        ...(normalizePositiveNumber(input.defaultVehicle?.consumptionKmPerLiter) ? { consumptionKmPerLiter: normalizePositiveNumber(input.defaultVehicle?.consumptionKmPerLiter) } : {}),
+        ...(normalizeFuelType(input.defaultVehicle?.fuelType) ? { fuelType: normalizeFuelType(input.defaultVehicle?.fuelType) } : {}),
+      },
+      defaultFuelPricePerLiter: normalizePositiveNumber(input.defaultFuelPricePerLiter) ?? current.defaultFuelPricePerLiter,
       priorityAreas: normalizeStringList(input.priorityAreas, current.priorityAreas),
       defaultAgendaScope: input.defaultAgendaScope ?? current.defaultAgendaScope,
       workCalendarAliases: normalizeStringList(input.workCalendarAliases, current.workCalendarAliases),
@@ -1162,6 +1202,16 @@ export class PersonalOperationalMemoryStore {
         timezone: normalizeString(parsed.timezone, DEFAULT_PROFILE.timezone),
         preferredChannels: normalizeStringList(parsed.preferredChannels, DEFAULT_PROFILE.preferredChannels),
         preferredAlertChannel: normalizeOptionalString(parsed.preferredAlertChannel) ?? DEFAULT_PROFILE.preferredAlertChannel,
+        homeAddress: normalizeOptionalString(parsed.homeAddress),
+        homeLocationLabel: normalizeOptionalString(parsed.homeLocationLabel) ?? DEFAULT_PROFILE.homeLocationLabel,
+        defaultVehicle: parsed.defaultVehicle
+          ? {
+              ...(normalizeOptionalString(parsed.defaultVehicle.name) ? { name: normalizeOptionalString(parsed.defaultVehicle.name) } : {}),
+              ...(normalizePositiveNumber(parsed.defaultVehicle.consumptionKmPerLiter) ? { consumptionKmPerLiter: normalizePositiveNumber(parsed.defaultVehicle.consumptionKmPerLiter) } : {}),
+              ...(normalizeFuelType(parsed.defaultVehicle.fuelType) ? { fuelType: normalizeFuelType(parsed.defaultVehicle.fuelType) } : {}),
+            }
+          : undefined,
+        defaultFuelPricePerLiter: normalizePositiveNumber(parsed.defaultFuelPricePerLiter),
         priorityAreas: normalizeStringList(parsed.priorityAreas, DEFAULT_PROFILE.priorityAreas),
         defaultAgendaScope:
           parsed.defaultAgendaScope === "primary" || parsed.defaultAgendaScope === "work"
