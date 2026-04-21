@@ -166,6 +166,7 @@ import {
   type ActivePlanningGoal,
 } from "./active-goal-state.js";
 import { MessagingDirectService } from "./messaging-direct-service.js";
+import { GoogleWorkspaceDirectService } from "./google-workspace-direct-service.js";
 
 function stripCodeFences(value: string): string {
   const trimmed = value.trim();
@@ -9514,6 +9515,7 @@ export class AgentCore {
   private readonly turnPlanner: TurnPlanner;
   private readonly directRouteRunner: DirectRouteRunner;
   private readonly messagingDirectService: MessagingDirectService;
+  private googleWorkspaceDirectService?: GoogleWorkspaceDirectService;
   private readonly activeGoals = new Map<string, ActivePlanningGoal>();
 
   constructor(
@@ -9644,6 +9646,122 @@ export class AgentCore {
       return;
     }
     this.activeGoals.delete(String(chatId));
+  }
+
+  private getGoogleWorkspaceDirectService(): GoogleWorkspaceDirectService {
+    if (!this.googleWorkspaceDirectService) {
+      const fallbackLogger: Logger = {
+        debug: () => undefined,
+        info: () => undefined,
+        warn: () => undefined,
+        error: () => undefined,
+        child: () => fallbackLogger,
+      };
+      const baseLogger = this.logger ?? fallbackLogger;
+      const fallbackEmailAccounts = {
+        getAliases: (): string[] => [],
+        getReader: () => ({
+          getStatus: async () => ({ ready: false, message: "Email indisponível." }),
+          scanRecentMessages: async () => [],
+        }),
+      };
+      const fallbackResponseOs = {
+        buildTaskReviewReply: (input: {
+          scopeLabel: string;
+          items: Array<{ title: string; account: string; dueLabel: string }>;
+        }) => [
+          `${input.scopeLabel}: ${input.items.length}.`,
+          ...input.items.map((item) => `- ${item.title} | conta: ${item.account} | prazo: ${item.dueLabel}`),
+        ].join("\n"),
+        buildScheduleLookupReply: (input: {
+          targetLabel: string;
+          topicLabel?: string;
+          events: Array<{ account: string; summary: string; start: string | null; location?: string }>;
+          emailFallbackCount: number;
+        }) => JSON.stringify({
+          targetLabel: input.targetLabel,
+          topicLabel: input.topicLabel,
+          events: input.events.length,
+          emailFallbackCount: input.emailFallbackCount,
+        }),
+      };
+      this.googleWorkspaceDirectService = new GoogleWorkspaceDirectService({
+        logger: baseLogger.child({ scope: "google-workspace-direct-service" }),
+        defaultTimezone: this.config.google.defaultTimezone,
+        googleWorkspaces: this.googleWorkspaces,
+        googleMaps: this.googleMaps,
+        emailAccounts: this.emailAccounts ?? fallbackEmailAccounts,
+        responseOs: this.responseOs ?? fallbackResponseOs,
+        getPreferences: () => this.preferences?.get?.() ?? {
+          responseStyle: "executive",
+          responseLength: "medium",
+          proactiveNextStep: false,
+          autoSourceFallback: false,
+          preferredAgentName: "Atlas",
+        },
+        getProfile: () => this.personalMemory?.getProfile?.() ?? {
+          displayName: "Usuário",
+          primaryRole: "operador",
+          routineSummary: [],
+          timezone: this.config.google.defaultTimezone,
+          preferredChannels: ["telegram"],
+          priorityAreas: [],
+          defaultAgendaScope: "both",
+          workCalendarAliases: [],
+          responseStyle: "direto",
+          briefingPreference: "executivo",
+          detailLevel: "equilibrado",
+          tonePreference: "objetivo",
+          defaultOperationalMode: "normal",
+          mobilityPreferences: [],
+          autonomyPreferences: [],
+          savedFocus: [],
+          routineAnchors: [],
+          operationalRules: [],
+          attire: {
+            umbrellaProbabilityThreshold: 40,
+            coldTemperatureC: 14,
+            lightClothingTemperatureC: 24,
+            carryItems: [],
+          },
+          fieldModeHours: 6,
+        },
+        buildBaseMessages: (userPrompt, orchestration, preferences) =>
+          buildBaseMessages(userPrompt, orchestration, preferences),
+        executeToolDirect: (toolName, rawArguments) => this.executeToolDirect(toolName, rawArguments),
+        helpers: {
+          isGoogleTasksPrompt,
+          extractCalendarLookupRequest,
+          extractExplicitAccountAlias,
+          resolvePromptAccountAliases,
+          resolveCalendarTargets,
+          extractExplicitCalendarAlias,
+          formatTaskDue,
+          formatBriefDateTime,
+          summarizeCalendarLocation,
+          buildGoogleContactsReply,
+          buildGoogleCalendarsReply,
+          buildCalendarPeriodReply,
+          buildPlaceLookupReply,
+          looksLikePostalAddress,
+          lookupVenueAddress: (location, prompt, logger) =>
+            lookupVenueAddress(location, prompt, logger, this.googleMaps),
+          shouldAutoCreateGoogleEvent,
+          buildDirectGoogleEventCreateReply,
+          isGoogleContactsPrompt,
+          extractGoogleContactsQuery,
+          isGoogleCalendarsListPrompt,
+          isPlaceLookupPrompt,
+          extractPlaceLookupQuery,
+          isCalendarPeriodListPrompt,
+          parseCalendarPeriodWindow,
+          resolveActionAutonomyKey: (prompt) => resolveActionAutonomyRule(prompt).key,
+          resolveEffectiveOperationalMode,
+        },
+      });
+    }
+
+    return this.googleWorkspaceDirectService;
   }
 
   private async tryRunPreLocalExternalReasoning(
@@ -12020,80 +12138,12 @@ export class AgentCore {
     requestLogger: Logger,
     orchestration: OrchestrationContext,
   ): Promise<AgentRunResult | null> {
-    if (!isGoogleTasksPrompt(userPrompt)) {
-      return null;
-    }
-    const preferences = this.preferences.get();
-    const profile = this.personalMemory.getProfile();
-    const candidateAliases = resolvePromptAccountAliases(
+    return this.getGoogleWorkspaceDirectService().tryRunGoogleTasks({
       userPrompt,
-      this.googleWorkspaces.getAliases(),
-      profile.defaultAgendaScope,
-    );
-    const explicitAccount = candidateAliases.length === 1 ? candidateAliases[0] : undefined;
-
-    requestLogger.info("Using direct Google Tasks route", {
-      domain: orchestration.route.primaryDomain,
-      account: explicitAccount ?? (candidateAliases.length > 1 ? candidateAliases.join(",") : "all"),
-      autonomy: resolveActionAutonomyRule(userPrompt).key,
-    });
-
-    const tasks: Array<TaskSummary & { account: string }> = [];
-    for (const alias of candidateAliases) {
-      const workspace = this.googleWorkspaces.getWorkspace(alias);
-      const status = workspace.getStatus();
-      if (!status.ready) {
-        continue;
-      }
-
-      const accountTasks = await workspace.listTasks({
-        maxResults: 15,
-        showCompleted: false,
-      });
-      tasks.push(...accountTasks.map((task) => ({ ...task, account: alias })));
-    }
-
-    if (tasks.length === 0) {
-      return {
-        requestId,
-        reply: explicitAccount
-          ? `Não encontrei tarefas abertas na conta Google ${explicitAccount}.`
-          : "Não encontrei tarefas abertas nas contas Google conectadas.",
-        messages: buildBaseMessages(userPrompt, orchestration, preferences),
-        toolExecutions: [],
-      };
-    }
-
-    return {
       requestId,
-      reply: this.responseOs.buildTaskReviewReply({
-        scopeLabel: explicitAccount ? `Google Tasks da conta ${explicitAccount}` : "Google Tasks das contas conectadas",
-        items: tasks.map((task) => ({
-          title: task.title || "(sem titulo)",
-          taskListTitle: task.taskListTitle,
-          account: task.account,
-          status: task.status,
-          dueLabel: formatTaskDue(task, this.config.google.defaultTimezone),
-        })),
-        recommendedNextStep: tasks[0]
-          ? `Revisar a primeira tarefa aberta: ${tasks[0].title || "(sem titulo)"}.`
-          : undefined,
-      }),
-      messages: buildBaseMessages(userPrompt, orchestration, preferences),
-      toolExecutions: [
-        {
-          toolName: "list_google_tasks",
-          resultPreview: JSON.stringify(
-            {
-              total: tasks.length,
-              account: explicitAccount ?? "all",
-            },
-            null,
-            2,
-          ),
-        },
-      ],
-    };
+      requestLogger,
+      orchestration,
+    });
   }
 
   private async tryRunDirectCalendarLookup(
@@ -12102,156 +12152,12 @@ export class AgentCore {
     requestLogger: Logger,
     orchestration: OrchestrationContext,
   ): Promise<AgentRunResult | null> {
-    const lookup = extractCalendarLookupRequest(userPrompt, this.config.google.defaultTimezone);
-    if (!lookup?.targetDate) {
-      return null;
-    }
-
-    const preferences = this.preferences.get();
-    requestLogger.info("Using direct calendar multi-source lookup route", {
-      targetDate: lookup.targetDate.isoDate,
-      topic: lookup.topic,
-      autonomy: resolveActionAutonomyRule(userPrompt).key,
-    });
-    const profile = this.personalMemory.getProfile();
-    const candidateAliases = resolvePromptAccountAliases(
+    return this.getGoogleWorkspaceDirectService().tryRunCalendarLookup({
       userPrompt,
-      this.googleWorkspaces.getAliases(),
-      profile.defaultAgendaScope,
-    );
-    const explicitAccount = candidateAliases.length === 1 ? candidateAliases[0] : undefined;
-
-    const eventMatches: Array<{
-      account: string;
-      summary: string;
-      start: string | null;
-      location?: string;
-      htmlLink?: string;
-    }> = [];
-
-    for (const alias of candidateAliases) {
-      const workspace = this.googleWorkspaces.getWorkspace(alias);
-      const status = workspace.getStatus();
-      if (!status.ready) {
-        continue;
-      }
-
-      const calendarTargets = resolveCalendarTargets(workspace, userPrompt);
-
-      for (const calendarId of calendarTargets) {
-        const events = await workspace.listEventsInWindow({
-          timeMin: lookup.targetDate.startIso,
-          timeMax: lookup.targetDate.endIso,
-          maxResults: 10,
-          calendarId,
-          ...(lookup.topic ? { query: lookup.topic } : {}),
-        });
-
-        for (const event of events) {
-          if (!isPersonallyRelevantCalendarEvent({
-            account: alias,
-            summary: event.summary,
-            description: event.description,
-            location: event.location,
-          })) {
-            continue;
-          }
-          eventMatches.push({
-            account: alias,
-            summary: event.summary,
-            start: event.start,
-            location: event.location,
-            htmlLink: event.htmlLink,
-          });
-        }
-      }
-    }
-
-    const emailMatches: Array<{
-      account: string;
-      uid: string;
-      subject: string;
-      from: string[];
-      date: string | null;
-    }> = [];
-
-    if (eventMatches.length === 0 && preferences.autoSourceFallback) {
-      const topic = lookup.topic?.trim();
-      if (topic) {
-        for (const alias of this.emailAccounts.getAliases()) {
-          const reader = this.emailAccounts.getReader(alias);
-          const status = await reader.getStatus();
-          if (!status.ready) {
-            continue;
-          }
-
-          const messages = await reader.scanRecentMessages({
-            scanLimit: 120,
-            unreadOnly: false,
-            sinceHours: 24 * 45,
-          });
-
-          const tokens = normalizeEmailAnalysisText(topic)
-            .split(/\s+/)
-            .filter((token) => token.length >= 3);
-
-          for (const message of messages) {
-            const haystack = normalizeEmailAnalysisText(
-              `${message.subject}\n${message.from.join(" ")}\n${message.preview}`,
-            );
-            if (tokens.length > 0 && tokens.every((token) => haystack.includes(token))) {
-              emailMatches.push({
-                account: alias,
-                uid: message.uid,
-                subject: message.subject,
-                from: message.from,
-                date: message.date,
-              });
-            }
-          }
-        }
-
-        emailMatches.sort((left, right) => (right.date ?? "").localeCompare(left.date ?? ""));
-      }
-    }
-
-    return {
       requestId,
-      reply: this.responseOs.buildScheduleLookupReply({
-        targetLabel: lookup.targetDate.label,
-        topicLabel: lookup.topic,
-        events: eventMatches.map((item) => ({
-          account: item.account,
-          summary: item.summary,
-          start: item.start ? formatBriefDateTime(item.start, this.config.google.defaultTimezone) : null,
-          location: item.location ? summarizeCalendarLocation(item.location) : undefined,
-        })),
-        emailFallbackCount: emailMatches.length,
-        recommendedNextStep: preferences.proactiveNextStep
-          ? eventMatches.length > 1
-            ? "Revisar os demais eventos do mesmo dia para confirmar conflito ou contexto."
-            : emailMatches.length > 0
-              ? "Abrir o email mais recente para confirmar data, horário ou convite."
-              : "Verificar outras contas ou calendários se a busca precisar ser ampliada."
-          : undefined,
-      }),
-      messages: buildBaseMessages(userPrompt, orchestration, preferences),
-      toolExecutions: [
-        {
-          toolName: "calendar_email_lookup",
-          resultPreview: JSON.stringify(
-            {
-              targetDate: lookup.targetDate.isoDate,
-              topic: lookup.topic ?? null,
-              events: eventMatches.length,
-              emails: emailMatches.length,
-            },
-            null,
-            2,
-          ),
-        },
-      ],
-    };
+      requestLogger,
+      orchestration,
+    });
   }
 
   private async tryRunDirectGoogleTaskDraft(
@@ -12260,56 +12166,12 @@ export class AgentCore {
     requestLogger: Logger,
     orchestration: OrchestrationContext,
   ): Promise<AgentRunResult | null> {
-    if (!isGoogleTaskCreatePrompt(userPrompt)) {
-      return null;
-    }
-
-    const explicitAccount = extractExplicitAccountAlias(userPrompt, this.googleWorkspaces.getAliases());
-    const workspace = this.googleWorkspaces.getWorkspace(explicitAccount);
-    const status = workspace.getStatus();
-    if (!status.ready) {
-      return {
-        requestId,
-        reply: `A integração do Google Workspace não está pronta. ${status.message}`,
-        messages: buildBaseMessages(userPrompt, orchestration),
-        toolExecutions: [],
-      };
-    }
-
-    requestLogger.info("Using direct Google Task draft route", {
-      domain: orchestration.route.primaryDomain,
-    });
-
-    const draftResult = buildTaskDraftFromPrompt(userPrompt, this.config.google.defaultTimezone);
-    if (!draftResult.draft) {
-      return {
-        requestId,
-        reply: draftResult.reason ?? "Não consegui preparar a tarefa com os dados informados.",
-        messages: buildBaseMessages(userPrompt, orchestration),
-        toolExecutions: [],
-      };
-    }
-
-    if (explicitAccount) {
-      draftResult.draft.account = explicitAccount;
-    }
-
-    const scopeNotice = status.writeReady
-      ? undefined
-      : "Observação: a conta Google atual ainda está somente leitura. Antes de confirmar a criação, reautorize com `npm run google:auth` para liberar escopo de escrita.";
-    const reply = [
-      buildGoogleTaskDraftReply(draftResult.draft, this.config.google.defaultTimezone),
-      scopeNotice,
-    ]
-      .filter(Boolean)
-      .join("\n\n");
-
-    return {
+    return this.getGoogleWorkspaceDirectService().tryRunGoogleTaskDraft({
+      userPrompt,
       requestId,
-      reply,
-      messages: buildBaseMessages(userPrompt, orchestration),
-      toolExecutions: [],
-    };
+      requestLogger,
+      orchestration,
+    });
   }
 
   private async tryRunDirectCalendarConflictReview(
@@ -12441,134 +12303,12 @@ export class AgentCore {
     requestLogger: Logger,
     orchestration: OrchestrationContext,
   ): Promise<AgentRunResult | null> {
-    if (!isGoogleEventCreatePrompt(userPrompt)) {
-      return null;
-    }
-
-    const availableAliases = this.googleWorkspaces.getAliases();
-    const explicitAccount = extractExplicitAccountAlias(userPrompt, availableAliases);
-    const readyAliases = availableAliases.filter((alias) => this.googleWorkspaces.getWorkspace(alias).getStatus().ready);
-    const selectedAccount = explicitAccount ?? (readyAliases.length === 1 ? readyAliases[0] : undefined);
-    const workspace = selectedAccount ? this.googleWorkspaces.getWorkspace(selectedAccount) : undefined;
-    const status = workspace?.getStatus();
-    if (selectedAccount && !status?.ready) {
-      return {
-        requestId,
-        reply: `A integração do Google Workspace não está pronta. ${status?.message ?? "Conta indisponível no momento."}`,
-        messages: buildBaseMessages(userPrompt, orchestration),
-        toolExecutions: [],
-      };
-    }
-    if (!selectedAccount && readyAliases.length === 0) {
-      const fallbackStatus = this.googleWorkspaces.getWorkspace(explicitAccount).getStatus();
-      return {
-        requestId,
-        reply: `A integração do Google Workspace não está pronta. ${fallbackStatus.message}`,
-        messages: buildBaseMessages(userPrompt, orchestration),
-        toolExecutions: [],
-      };
-    }
-
-    requestLogger.info("Using direct Google Calendar event draft route", {
-      domain: orchestration.route.primaryDomain,
-      account: selectedAccount ?? (readyAliases.length > 1 ? "clarify_account" : "default"),
-    });
-
-    const draftResult = buildEventDraftFromPrompt(userPrompt, this.config.google.defaultTimezone);
-    if (!draftResult.draft) {
-      return {
-        requestId,
-        reply: draftResult.reason ?? "Não consegui preparar o evento com os dados informados.",
-        messages: buildBaseMessages(userPrompt, orchestration),
-        toolExecutions: [],
-      };
-    }
-
-    if (selectedAccount) {
-      draftResult.draft.account = selectedAccount;
-    }
-    const explicitCalendar = extractExplicitCalendarAlias(
+    return this.getGoogleWorkspaceDirectService().tryRunGoogleEventDraft({
       userPrompt,
-      Object.keys((workspace ?? this.googleWorkspaces.getWorkspace(explicitAccount)).getCalendarAliases()),
-    );
-    if (explicitCalendar) {
-      draftResult.draft.calendarId = explicitCalendar;
-    }
-
-    if (!selectedAccount && readyAliases.length > 1) {
-      return {
-        requestId,
-        reply: [
-          "Preciso saber em qual agenda salvar: pessoal ou abordagem?",
-          buildGoogleEventDraftReply(draftResult.draft),
-        ].join("\n\n"),
-        messages: buildBaseMessages(userPrompt, orchestration),
-        toolExecutions: [],
-      };
-    }
-
-    if (draftResult.draft.location && !looksLikePostalAddress(draftResult.draft.location)) {
-      const addressCandidate = await lookupVenueAddress(
-        draftResult.draft.location,
-        userPrompt,
-        requestLogger.child({ scope: "event-location-lookup" }),
-        this.googleMaps,
-      );
-      if (addressCandidate) {
-        draftResult.draft.location = `${draftResult.draft.location} - ${addressCandidate}`;
-      }
-    }
-
-    if (shouldAutoCreateGoogleEvent(userPrompt, draftResult.draft, Boolean(status?.writeReady))) {
-      requestLogger.info("Using direct Google Calendar auto-create route", {
-        account: draftResult.draft.account ?? "primary",
-        calendarId: draftResult.draft.calendarId ?? "default",
-      });
-      const execution = await this.executeToolDirect("create_calendar_event", {
-        summary: draftResult.draft.summary,
-        start: draftResult.draft.start,
-        end: draftResult.draft.end,
-        ...(draftResult.draft.description ? { description: draftResult.draft.description } : {}),
-        ...(draftResult.draft.location ? { location: draftResult.draft.location } : {}),
-        ...(draftResult.draft.attendees?.length ? { attendees: draftResult.draft.attendees } : {}),
-        ...(draftResult.draft.timezone ? { timezone: draftResult.draft.timezone } : {}),
-        ...(draftResult.draft.calendarId ? { calendar_id: draftResult.draft.calendarId } : {}),
-        ...(draftResult.draft.account ? { account: draftResult.draft.account } : {}),
-        ...(typeof draftResult.draft.reminderMinutes === "number"
-          ? { reminder_minutes: draftResult.draft.reminderMinutes }
-          : {}),
-        ...(draftResult.draft.createMeet ? { create_meet: true } : {}),
-      });
-
-      return {
-        requestId,
-        reply: buildDirectGoogleEventCreateReply(execution.rawResult, this.config.google.defaultTimezone),
-        messages: buildBaseMessages(userPrompt, orchestration),
-        toolExecutions: [
-          {
-            toolName: "create_calendar_event",
-            resultPreview: execution.content.slice(0, 240),
-          },
-        ],
-      };
-    }
-
-    const scopeNotice = status?.writeReady
-      ? undefined
-      : "Observação: a conta Google atual ainda está somente leitura. Antes de confirmar a criação, reautorize com `npm run google:auth` para liberar escopo de escrita.";
-    const reply = [
-      buildGoogleEventDraftReply(draftResult.draft),
-      scopeNotice,
-    ]
-      .filter(Boolean)
-      .join("\n\n");
-
-    return {
       requestId,
-      reply,
-      messages: buildBaseMessages(userPrompt, orchestration),
-      toolExecutions: [],
-    };
+      requestLogger,
+      orchestration,
+    });
   }
 
   private async tryRunDirectCalendarPeriodList(
@@ -12577,50 +12317,12 @@ export class AgentCore {
     requestLogger: Logger,
     orchestration: OrchestrationContext,
   ): Promise<AgentRunResult | null> {
-    if (!isCalendarPeriodListPrompt(userPrompt)) {
-      return null;
-    }
-    const window = parseCalendarPeriodWindow(userPrompt, this.config.google.defaultTimezone);
-    if (!window) {
-      return null;
-    }
-    const profile = this.personalMemory.getProfile();
-    const operationalMode = resolveEffectiveOperationalMode(userPrompt, profile);
-    const aliases = resolvePromptAccountAliases(
+    return this.getGoogleWorkspaceDirectService().tryRunCalendarPeriodList({
       userPrompt,
-      this.googleWorkspaces.getAliases(),
-      profile.defaultAgendaScope,
-    );
-    const explicitAccount = aliases.length === 1 ? aliases[0] : undefined;
-    const events: Array<{ account: string; event: Awaited<ReturnType<GoogleWorkspaceService["listEventsInWindow"]>>[number] }> = [];
-    for (const alias of aliases) {
-      const workspace = this.googleWorkspaces.getWorkspace(alias);
-      if (!workspace.getStatus().ready) continue;
-      const calendarTargets = resolveCalendarTargets(workspace, userPrompt);
-      for (const calendarId of calendarTargets) {
-        const items = await workspace.listEventsInWindow({
-          timeMin: window.startIso,
-          timeMax: window.endIso,
-          maxResults: 20,
-          calendarId,
-        });
-        for (const event of items) {
-          events.push({ account: alias, event });
-        }
-      }
-    }
-    requestLogger.info("Using direct calendar period list route", { period: window.label, account: explicitAccount ?? "all" });
-    return {
       requestId,
-      reply: buildCalendarPeriodReply({
-        label: window.label,
-        timezone: this.config.google.defaultTimezone,
-        compact: operationalMode === "field",
-        events,
-      }),
-      messages: buildBaseMessages(userPrompt, orchestration),
-      toolExecutions: [],
-    };
+      requestLogger,
+      orchestration,
+    });
   }
 
   private async tryRunDirectGoogleEventMove(
@@ -12868,79 +12570,12 @@ export class AgentCore {
     requestLogger: Logger,
     orchestration: OrchestrationContext,
   ): Promise<AgentRunResult | null> {
-    if (!isGoogleContactsPrompt(userPrompt)) {
-      return null;
-    }
-
-    const query = extractGoogleContactsQuery(userPrompt);
-    if (!query) {
-      return {
-        requestId,
-        reply: "Diga qual contato devo procurar no Google Contacts.",
-        messages: buildBaseMessages(userPrompt, orchestration),
-        toolExecutions: [],
-      };
-    }
-    const preferences = this.preferences.get();
-    const explicitAccount = extractExplicitAccountAlias(userPrompt, this.googleWorkspaces.getAliases());
-    const candidateAliases = explicitAccount ? [explicitAccount] : this.googleWorkspaces.getAliases();
-
-    requestLogger.info("Using direct Google Contacts route", {
-      query,
-      account: explicitAccount ?? "all",
-    });
-
-    const contacts: Array<{
-      account: string;
-      displayName: string;
-      emailAddresses: string[];
-      phoneNumbers: string[];
-      organizations: string[];
-    }> = [];
-    for (const alias of candidateAliases) {
-      const workspace = this.googleWorkspaces.getWorkspace(alias);
-      const status = workspace.getStatus();
-      if (!status.ready) {
-        continue;
-      }
-
-      const accountContacts = await workspace.searchContacts(query, 10);
-      contacts.push(...accountContacts.map((contact) => ({ ...contact, account: alias })));
-    }
-
-    if (contacts.length === 0) {
-      return {
-        requestId,
-        reply: explicitAccount
-          ? `Não encontrei contatos na conta Google ${explicitAccount} para a busca: ${query}.`
-          : `Não encontrei contatos nas contas Google conectadas para a busca: ${query}.`,
-        messages: buildBaseMessages(userPrompt, orchestration, preferences),
-        toolExecutions: [],
-      };
-    }
-
-    return {
+    return this.getGoogleWorkspaceDirectService().tryRunGoogleContacts({
+      userPrompt,
       requestId,
-      reply: buildGoogleContactsReply({
-        query,
-        contacts,
-      }),
-      messages: buildBaseMessages(userPrompt, orchestration, preferences),
-      toolExecutions: [
-        {
-          toolName: "search_google_contacts",
-          resultPreview: JSON.stringify(
-            {
-              query,
-              total: contacts.length,
-              account: explicitAccount ?? "all",
-            },
-            null,
-            2,
-          ),
-        },
-      ],
-    };
+      requestLogger,
+      orchestration,
+    });
   }
 
   private async tryRunDirectGoogleCalendarsList(
@@ -12949,73 +12584,12 @@ export class AgentCore {
     requestLogger: Logger,
     orchestration: OrchestrationContext,
   ): Promise<AgentRunResult | null> {
-    if (!isGoogleCalendarsListPrompt(userPrompt)) {
-      return null;
-    }
-
-    const preferences = this.preferences.get();
-    const explicitAccount = extractExplicitAccountAlias(userPrompt, this.googleWorkspaces.getAliases());
-    const candidateAliases = explicitAccount ? [explicitAccount] : this.googleWorkspaces.getAliases();
-
-    requestLogger.info("Using direct Google calendars list route", {
-      account: explicitAccount ?? "all",
-    });
-
-    const calendarsByAccount: Array<{ account: string; calendars: CalendarListSummary[] }> = [];
-    for (const alias of candidateAliases) {
-      const workspace = this.googleWorkspaces.getWorkspace(alias);
-      const status = workspace.getStatus();
-      if (!status.ready) {
-        continue;
-      }
-
-      let calendars: CalendarListSummary[];
-      try {
-        calendars = await workspace.listCalendars();
-      } catch (error) {
-        requestLogger.warn("Falling back to configured calendars list", {
-          account: alias,
-          error: error instanceof Error ? error.message : String(error),
-        });
-        calendars = workspace.listConfiguredCalendars();
-      }
-      calendarsByAccount.push({
-        account: alias,
-        calendars,
-      });
-    }
-
-    if (calendarsByAccount.length === 0 || calendarsByAccount.every((item) => item.calendars.length === 0)) {
-      return {
-        requestId,
-        reply: explicitAccount
-          ? `Não encontrei calendários disponíveis na conta Google ${explicitAccount}.`
-          : "Não encontrei calendários disponíveis nas contas Google conectadas.",
-        messages: buildBaseMessages(userPrompt, orchestration, preferences),
-        toolExecutions: [],
-      };
-    }
-
-    return {
+    return this.getGoogleWorkspaceDirectService().tryRunGoogleCalendarsList({
+      userPrompt,
       requestId,
-      reply: buildGoogleCalendarsReply({
-        calendars: calendarsByAccount,
-      }),
-      messages: buildBaseMessages(userPrompt, orchestration, preferences),
-      toolExecutions: [
-        {
-          toolName: "list_google_calendars",
-          resultPreview: JSON.stringify(
-            calendarsByAccount.map((item) => ({
-              account: item.account,
-              total: item.calendars.length,
-            })),
-            null,
-            2,
-          ),
-        },
-      ],
-    };
+      requestLogger,
+      orchestration,
+    });
   }
 
   private async tryRunDirectPlaceLookup(
@@ -13024,47 +12598,12 @@ export class AgentCore {
     requestLogger: Logger,
     orchestration: OrchestrationContext,
   ): Promise<AgentRunResult | null> {
-    if (!isPlaceLookupPrompt(userPrompt)) {
-      return null;
-    }
-
-    const query = extractPlaceLookupQuery(userPrompt);
-    if (!query) {
-      return {
-        requestId,
-        reply: "Diga qual lugar devo localizar no Google Maps.",
-        messages: buildBaseMessages(userPrompt, orchestration),
-        toolExecutions: [],
-      };
-    }
-
-    const status = this.googleMaps.getStatus();
-    if (!status.ready) {
-      return null;
-    }
-
-    const result = await this.googleMaps.lookupPlace(query);
-    if (!result) {
-      return null;
-    }
-
-    requestLogger.info("Using direct Google Maps place lookup route", {
-      query,
-      source: result.source,
-      placeId: result.placeId,
-    });
-
-    return {
+    return this.getGoogleWorkspaceDirectService().tryRunPlaceLookup({
+      userPrompt,
       requestId,
-      reply: buildPlaceLookupReply(result),
-      messages: buildBaseMessages(userPrompt, orchestration),
-      toolExecutions: [
-        {
-          toolName: "google_maps_lookup",
-          resultPreview: JSON.stringify(result, null, 2).slice(0, 240),
-        },
-      ],
-    };
+      requestLogger,
+      orchestration,
+    });
   }
 
   private async tryRunDirectInternalKnowledgeLookup(
