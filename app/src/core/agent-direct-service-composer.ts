@@ -116,6 +116,7 @@ import { AutonomyLoop } from "./autonomy/autonomy-loop.js";
 import { AutonomyActionService } from "./autonomy/autonomy-action-service.js";
 import { AutonomyDirectService } from "./autonomy/autonomy-direct-service.js";
 import { CommitmentStore } from "./autonomy/commitment-store.js";
+import { MemoryCandidateStore } from "./autonomy/memory-candidate-store.js";
 import {
   selectRelevantLearnedPreferences,
   summarizeIdentityProfileForReasoning,
@@ -608,6 +609,7 @@ export interface AgentDirectServiceComposerDependencies {
   autonomyAudit: AutonomyAuditStore;
   autonomyFeedback: FeedbackStore;
   commitments: CommitmentStore;
+  memoryCandidates: MemoryCandidateStore;
   autonomyLoop: AutonomyLoop;
   capabilityPlanner: CapabilityPlanner;
   memory: OperationalMemoryStore;
@@ -689,6 +691,8 @@ export class AgentDirectServiceComposer {
         audit: this.deps.autonomyAudit,
         feedback: this.deps.autonomyFeedback,
         commitments: this.deps.commitments,
+        memoryCandidates: this.deps.memoryCandidates,
+        personalMemory: this.deps.personalMemory,
         executeToolDirect: (toolName, rawArguments) => this.deps.executeToolDirect(toolName, rawArguments),
       });
 
@@ -697,6 +701,7 @@ export class AgentDirectServiceComposer {
         loop: this.deps.autonomyLoop,
         actionService,
         commitments: this.deps.commitments,
+        memoryCandidates: this.deps.memoryCandidates,
         suggestions: this.deps.autonomySuggestions,
         observations: this.deps.autonomyObservations,
         audit: this.deps.autonomyAudit,

@@ -65,11 +65,14 @@ import { AutonomyPolicy } from "./autonomy/autonomy-policy.js";
 import { SuggestionStore } from "./autonomy/suggestion-store.js";
 import { ApprovalCollector } from "./autonomy/collectors/approval-collector.js";
 import { CommitmentCollector } from "./autonomy/collectors/commitment-collector.js";
+import { MemoryCandidateCollector } from "./autonomy/collectors/memory-candidate-collector.js";
 import { GoalRiskCollector } from "./autonomy/collectors/goal-risk-collector.js";
 import { OperationalStateCollector } from "./autonomy/collectors/operational-state-collector.js";
 import { StaleWorkCollector } from "./autonomy/collectors/stale-work-collector.js";
 import { CommitmentExtractor } from "./autonomy/commitment-extractor.js";
 import { CommitmentStore } from "./autonomy/commitment-store.js";
+import { MemoryCandidateExtractor } from "./autonomy/memory-candidate-extractor.js";
+import { MemoryCandidateStore } from "./autonomy/memory-candidate-store.js";
 
 function withLlmProviderConfig(config: AppConfig, providerConfig: LlmProviderConfig): AppConfig {
   return {
@@ -230,6 +233,13 @@ export async function createAgentCore() {
   const commitmentExtractor = new CommitmentExtractor(
     logger.child({ scope: "commitment-extractor" }),
   );
+  const memoryCandidates = new MemoryCandidateStore(
+    config.paths.autonomyDbPath,
+    logger.child({ scope: "memory-candidate-store" }),
+  );
+  const memoryCandidateExtractor = new MemoryCandidateExtractor(
+    logger.child({ scope: "memory-candidate-extractor" }),
+  );
   const autonomyAssessor = new AutonomyAssessor();
   const autonomyPolicy = new AutonomyPolicy();
   const contentOps = new ContentOpsStore(
@@ -253,6 +263,7 @@ export async function createAgentCore() {
       new OperationalStateCollector(personalMemory),
       new ApprovalCollector(approvals),
       new CommitmentCollector(commitments),
+      new MemoryCandidateCollector(memoryCandidates),
       new GoalRiskCollector(goalStore),
       new StaleWorkCollector(memory),
     ],
@@ -477,6 +488,7 @@ export async function createAgentCore() {
     autonomyAudit,
     autonomyFeedback,
     commitments,
+    memoryCandidates,
     autonomyLoop,
   );
   const actionDispatcher = new AssistantActionDispatcher(
@@ -494,6 +506,10 @@ export async function createAgentCore() {
     {
       extractor: commitmentExtractor,
       store: commitments,
+    },
+    {
+      extractor: memoryCandidateExtractor,
+      store: memoryCandidates,
     },
   );
 
@@ -551,9 +567,11 @@ export async function createAgentCore() {
     autonomyAudit,
     autonomyFeedback,
     commitments,
+    memoryCandidates,
     autonomyAssessor,
     autonomyPolicy,
     autonomyLoop,
     commitmentExtractor,
+    memoryCandidateExtractor,
   };
 }

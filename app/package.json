@@ -84,7 +84,8 @@
     "eval:autonomy-loop": "tsx scripts/eval-autonomy-loop.ts",
     "eval:proactive-inbox": "tsx scripts/eval-proactive-inbox.ts",
     "eval:autonomy-audit": "tsx scripts/eval-autonomy-audit.ts",
-    "eval:commitment-extractor": "tsx scripts/eval-commitment-extractor.ts"
+    "eval:commitment-extractor": "tsx scripts/eval-commitment-extractor.ts",
+    "eval:memory-candidates": "tsx scripts/eval-memory-candidates.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.101.1",

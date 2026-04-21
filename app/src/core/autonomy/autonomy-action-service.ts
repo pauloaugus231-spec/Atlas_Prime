@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import type { CapabilityDefinition } from "../../types/capability.js";
 import type { PendingActionDraft, PendingAutonomyCapabilityDraft } from "../draft-action-service.js";
 import type { AutonomyObservation, AutonomySuggestion } from "../../types/autonomy.js";
+import type { CreateLearnedPreferenceInput } from "../../types/learned-preferences.js";
+import type { CreatePersonalOperationalMemoryItemInput } from "../../types/personal-operational-memory.js";
 import type { CommitmentStore } from "./commitment-store.js";
 import type { Logger } from "../../types/logger.js";
 import type { CapabilityRegistry } from "../capability-registry.js";
@@ -9,6 +11,9 @@ import type { ObservationStore } from "./observation-store.js";
 import type { SuggestionStore } from "./suggestion-store.js";
 import type { AutonomyAuditStore } from "./autonomy-audit-store.js";
 import type { FeedbackStore } from "./feedback-store.js";
+import type { MemoryCandidateStore } from "./memory-candidate-store.js";
+import type { MemoryCandidate } from "../../types/memory-candidates.js";
+import type { PersonalOperationalMemoryStore } from "../personal-operational-memory.js";
 
 function stableStringify(value: unknown): string {
   if (value === null || typeof value !== "object") {
@@ -85,6 +90,8 @@ export interface AutonomyActionServiceDependencies {
   audit: Pick<AutonomyAuditStore, "record">;
   feedback: Pick<FeedbackStore, "record">;
   commitments?: Pick<CommitmentStore, "update">;
+  memoryCandidates?: Pick<MemoryCandidateStore, "getById" | "update">;
+  personalMemory?: Pick<PersonalOperationalMemoryStore, "saveItem" | "recordLearnedPreferenceObservation">;
   executeToolDirect: (
     toolName: string,
     rawArguments: unknown,
@@ -93,6 +100,51 @@ export interface AutonomyActionServiceDependencies {
 
 export class AutonomyActionService {
   constructor(private readonly deps: AutonomyActionServiceDependencies) {}
+
+  private buildLearnedPreference(candidate: MemoryCandidate): CreateLearnedPreferenceInput | undefined {
+    const normalized = candidate.statement.toLowerCase();
+    if (candidate.kind === "style") {
+      return {
+        type: "response_style",
+        key: "operator_response_style",
+        description: `Preferência de estilo confirmada: ${candidate.statement}`,
+        value: candidate.statement,
+        source: "explicit",
+        confidence: candidate.confidence,
+      };
+    }
+    if (candidate.kind === "preference" && /telegram|whatsapp|email/.test(normalized)) {
+      return {
+        type: "channel_preference",
+        key: "operator_primary_channel",
+        description: `Preferência de canal confirmada: ${candidate.statement}`,
+        value: candidate.statement,
+        source: "explicit",
+        confidence: candidate.confidence,
+      };
+    }
+    return undefined;
+  }
+
+  private buildPersonalMemoryItem(candidate: MemoryCandidate): CreatePersonalOperationalMemoryItemInput {
+    const kind = candidate.kind === "routine"
+      ? "routine"
+      : candidate.kind === "preference" || candidate.kind === "style"
+        ? "preference"
+        : candidate.kind === "rule" || candidate.kind === "constraint"
+          ? "rule"
+          : "context";
+
+    return {
+      kind,
+      title: candidate.statement.slice(0, 80),
+      content: candidate.statement,
+      tags: [
+        `memory-candidate:${candidate.kind}`,
+        `source:${candidate.sourceKind}`,
+      ],
+    };
+  }
 
   private syncLinkedCommitment(observation: AutonomyObservation | undefined, status: "confirmed" | "dismissed" | "snoozed", snoozedUntil?: string): void {
     if (!this.deps.commitments || observation?.kind !== "commitment_detected" || !observation.sourceId) {
@@ -104,6 +156,33 @@ export class AutonomyActionService {
       status,
       ...(status === "snoozed" ? { snoozedUntil: snoozedUntil ?? null } : { snoozedUntil: null }),
     });
+  }
+
+  private promoteLinkedMemoryCandidate(observation: AutonomyObservation | undefined): void {
+    if (!this.deps.memoryCandidates || !this.deps.personalMemory || observation?.kind !== "memory_candidate" || !observation.sourceId) {
+      return;
+    }
+
+    const candidate = this.deps.memoryCandidates.getById(observation.sourceId);
+    if (!candidate) {
+      return;
+    }
+
+    this.deps.memoryCandidates.update({
+      id: candidate.id,
+      status: "active",
+      reviewStatus: "confirmed",
+      confirmedAt: new Date().toISOString(),
+      snoozedUntil: null,
+    });
+
+    const learnedPreference = this.buildLearnedPreference(candidate);
+    if (learnedPreference) {
+      this.deps.personalMemory.recordLearnedPreferenceObservation(learnedPreference);
+      return;
+    }
+
+    this.deps.personalMemory.saveItem(this.buildPersonalMemoryItem(candidate));
   }
 
   private markApproved(suggestion: AutonomySuggestion, feedbackNote: string): void {
@@ -124,6 +203,7 @@ export class AutonomyActionService {
     if (!suggestion.suggestedAction) {
       this.markApproved(suggestion, "approved_without_bound_action");
       this.syncLinkedCommitment(observation, "confirmed");
+      this.promoteLinkedMemoryCandidate(observation);
       this.deps.audit.record({
         kind: "suggestion_status_changed",
         suggestionId: suggestion.id,

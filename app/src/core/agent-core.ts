@@ -112,6 +112,7 @@ import { FeedbackStore } from "./autonomy/feedback-store.js";
 import { AutonomyLoop } from "./autonomy/autonomy-loop.js";
 import { AutonomyDirectService } from "./autonomy/autonomy-direct-service.js";
 import { CommitmentStore } from "./autonomy/commitment-store.js";
+import { MemoryCandidateStore } from "./autonomy/memory-candidate-store.js";
 import {
   selectRelevantLearnedPreferences,
   summarizeIdentityProfileForReasoning,
@@ -666,6 +667,7 @@ export class AgentCore {
     private readonly autonomyAudit?: AutonomyAuditStore,
     private readonly autonomyFeedback?: FeedbackStore,
     private readonly commitments?: CommitmentStore,
+    private readonly memoryCandidates?: MemoryCandidateStore,
     private readonly autonomyLoop?: AutonomyLoop,
   ) {
     this.createWebResearchService = (logger) => new WebResearchService(logger);
@@ -795,6 +797,7 @@ export class AgentCore {
       autonomyAudit: this.autonomyAudit!,
       autonomyFeedback: this.autonomyFeedback!,
       commitments: this.commitments!,
+      memoryCandidates: this.memoryCandidates!,
       autonomyLoop: this.autonomyLoop!,
       capabilityPlanner: this.capabilityPlanner,
       memory: this.memory,
@@ -916,6 +919,7 @@ export class AgentCore {
         autonomyAudit: this.autonomyAudit!,
         autonomyFeedback: this.autonomyFeedback!,
         commitments: this.commitments!,
+        memoryCandidates: this.memoryCandidates!,
         autonomyLoop: this.autonomyLoop!,
         capabilityPlanner: this.capabilityPlanner,
         memory: this.memory,

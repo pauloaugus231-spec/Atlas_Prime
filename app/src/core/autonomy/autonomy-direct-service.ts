@@ -7,6 +7,7 @@ import type { AutonomySuggestion } from "../../types/autonomy.js";
 import { AutonomyActionService } from "./autonomy-action-service.js";
 import { AutonomyAuditStore } from "./autonomy-audit-store.js";
 import type { CommitmentStore } from "./commitment-store.js";
+import type { MemoryCandidateStore } from "./memory-candidate-store.js";
 import { AutonomyLoop } from "./autonomy-loop.js";
 import { FeedbackStore } from "./feedback-store.js";
 import { ObservationStore } from "./observation-store.js";
@@ -191,6 +192,7 @@ export interface AutonomyDirectServiceDependencies {
   loop: Pick<AutonomyLoop, "runOnce">;
   actionService: Pick<AutonomyActionService, "approveSuggestion">;
   commitments?: Pick<CommitmentStore, "update">;
+  memoryCandidates?: Pick<MemoryCandidateStore, "update">;
   suggestions: Pick<SuggestionStore, "getById" | "listByStatus" | "updateStatus">;
   observations: Pick<ObservationStore, "getById">;
   audit: Pick<AutonomyAuditStore, "record">;
@@ -224,6 +226,19 @@ export class AutonomyDirectService {
       id: item.observation.sourceId,
       status,
       ...(status === "snoozed" ? { snoozedUntil: snoozedUntil ?? null } : { snoozedUntil: null }),
+    });
+  }
+
+  private syncLinkedMemoryCandidate(item: RenderableSuggestion | undefined, status: "rejected" | "candidate", reviewStatus: "needs_review", snoozedUntil?: string): void {
+    if (!item?.observation || item.observation.kind !== "memory_candidate" || !item.observation.sourceId || !this.deps.memoryCandidates) {
+      return;
+    }
+
+    this.deps.memoryCandidates.update({
+      id: item.observation.sourceId,
+      status,
+      reviewStatus,
+      ...(status === "candidate" ? { snoozedUntil: snoozedUntil ?? null } : { snoozedUntil: null }),
     });
   }
 
@@ -367,6 +382,7 @@ export class AutonomyDirectService {
         status: "dismissed",
       });
       this.syncLinkedCommitment(target.item, "dismissed");
+      this.syncLinkedMemoryCandidate(target.item, "rejected", "needs_review");
       this.deps.feedback.record({
         suggestionId: target.item.suggestion.id,
         feedbackKind: "dismissed",
@@ -420,6 +436,7 @@ export class AutonomyDirectService {
         snoozedUntil,
       });
       this.syncLinkedCommitment(target.item, "snoozed", snoozedUntil);
+      this.syncLinkedMemoryCandidate(target.item, "candidate", "needs_review", snoozedUntil);
       this.deps.feedback.record({
         suggestionId: target.item.suggestion.id,
         feedbackKind: "snoozed",
