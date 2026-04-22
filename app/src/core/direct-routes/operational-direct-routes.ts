@@ -5,6 +5,13 @@ import {
 } from "../direct-route-runner.js";
 
 export interface OperationalDirectRouteDependencies {
+  commandCenter: DirectRouteHandler;
+  connectionOverview: DirectRouteHandler;
+  connectionStart: DirectRouteHandler;
+  connectionRevoke: DirectRouteHandler;
+  destinationList: DirectRouteHandler;
+  destinationSave: DirectRouteHandler;
+  sharedBriefingPreview: DirectRouteHandler;
   morningBrief: DirectRouteHandler;
   operationalPlanning: DirectRouteHandler;
   macQueueStatus: DirectRouteHandler;
@@ -40,6 +47,13 @@ export function buildOperationalDirectRoutes(
   deps: OperationalDirectRouteDependencies,
 ): DirectRouteDefinition[] {
   return [
+    defineDirectRoute("command_center", "operational", deps.commandCenter),
+    defineDirectRoute("connection_overview", "operational", deps.connectionOverview),
+    defineDirectRoute("connection_start", "operational", deps.connectionStart),
+    defineDirectRoute("connection_revoke", "operational", deps.connectionRevoke),
+    defineDirectRoute("destination_list", "operational", deps.destinationList),
+    defineDirectRoute("destination_save", "operational", deps.destinationSave),
+    defineDirectRoute("shared_briefing_preview", "operational", deps.sharedBriefingPreview),
     defineDirectRoute("morning_brief", "operational", deps.morningBrief),
     defineDirectRoute("operational_planning", "operational", deps.operationalPlanning),
     defineDirectRoute("mac_queue_status", "operational", deps.macQueueStatus),

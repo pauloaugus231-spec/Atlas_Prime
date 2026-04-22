@@ -105,6 +105,8 @@ import { looksLikeLowFrictionReadPrompt } from "./clarification-rules.js";
 import { interpretConversationTurn } from "./conversation-interpreter.js";
 import { PersonalOperationalMemoryStore } from "./personal-operational-memory.js";
 import { GoalStore } from "./goal-store.js";
+import { AccountLinkingService } from "./account-linking/account-linking-service.js";
+import { DestinationRegistry } from "./destination-registry.js";
 import { ObservationStore } from "./autonomy/observation-store.js";
 import { SuggestionStore } from "./autonomy/suggestion-store.js";
 import { AutonomyAuditStore } from "./autonomy/autonomy-audit-store.js";
@@ -118,6 +120,8 @@ import {
   summarizeIdentityProfileForReasoning,
   summarizeOperationalStateForReasoning,
 } from "./personal-context-summary.js";
+import { ProfessionBootstrapService } from "./profession-bootstrap-service.js";
+import { ProfessionPackService } from "./profession-pack-service.js";
 import {
   TurnPlanner,
 } from "./turn-planner.js";
@@ -125,6 +129,10 @@ import {
   ReasoningEngine,
 } from "./reasoning-engine.js";
 import { UserModelTracker } from "./user-model-tracker.js";
+import { UserRoleProfileService } from "./user-role-profile-service.js";
+import { SharedBriefingComposer } from "./shared-briefing-composer.js";
+import { BriefingPrivacyPolicy } from "./briefing-privacy-policy.js";
+import { CommandCenterService } from "./command-center/command-center-service.js";
 import {
   DirectRouteRunner,
 } from "./direct-route-runner.js";
@@ -605,7 +613,118 @@ export interface AgentRunOptions {
   chatId?: string | number;
 }
 
+export interface AgentCoreDependencies {
+  config: AppConfig;
+  logger: Logger;
+  fileAccess: FileAccessPolicy;
+  client: LlmClient;
+  capabilityRegistry: CapabilityRegistry;
+  pluginRegistry: ToolPluginRegistry;
+  memory: OperationalMemoryStore;
+  goalStore: GoalStore;
+  preferences: UserPreferencesStore;
+  personalMemory: PersonalOperationalMemoryStore;
+  growthOps: GrowthOpsStore;
+  contentOps: ContentOpsStore;
+  socialAssistant: SocialAssistantStore;
+  contacts: ContactIntelligenceStore;
+  communicationRouter: CommunicationRouter;
+  approvals: ApprovalInboxStore;
+  memoryEntities: MemoryEntityStore;
+  whatsappMessages: WhatsAppMessageStore;
+  workflows: WorkflowOrchestratorStore;
+  workflowRuntime: WorkflowExecutionRuntime;
+  entityLinker: EntityLinker;
+  macCommandQueue: SupabaseMacCommandQueue;
+  email: EmailReader;
+  emailWriter: EmailWriter;
+  emailAccounts: EmailAccountsService;
+  googleWorkspace: GoogleWorkspaceService;
+  googleWorkspaces: GoogleWorkspaceAccountsService;
+  googleMaps: GoogleMapsService;
+  personalOs: PersonalOSService;
+  intentRouter: IntentRouter;
+  responseOs: ResponseOS;
+  contextPacks: ContextPackService;
+  planBuilder: WorkflowPlanBuilderService;
+  externalReasoning: ExternalReasoningClient;
+  pexelsMedia: PexelsMediaService;
+  projectOps: ProjectOpsService;
+  safeExec: SafeExecService;
+  accountLinking?: AccountLinkingService;
+  userRoleProfiles?: UserRoleProfileService;
+  professionPacks?: ProfessionPackService;
+  professionBootstrap?: ProfessionBootstrapService;
+  destinationRegistry?: DestinationRegistry;
+  briefingPrivacyPolicy?: BriefingPrivacyPolicy;
+  sharedBriefingComposer?: SharedBriefingComposer;
+  commandCenter?: CommandCenterService;
+  reasoningEngine?: ReasoningEngine;
+  userModelTracker?: UserModelTracker;
+  autonomyObservations?: ObservationStore;
+  autonomySuggestions?: SuggestionStore;
+  autonomyAudit?: AutonomyAuditStore;
+  autonomyFeedback?: FeedbackStore;
+  commitments?: CommitmentStore;
+  memoryCandidates?: MemoryCandidateStore;
+  autonomyLoop?: AutonomyLoop;
+}
+
 export class AgentCore {
+  private readonly config: AppConfig;
+  private readonly logger: Logger;
+  private readonly fileAccess: FileAccessPolicy;
+  private readonly client: LlmClient;
+  private readonly capabilityRegistry: CapabilityRegistry;
+  private readonly pluginRegistry: ToolPluginRegistry;
+  private readonly memory: OperationalMemoryStore;
+  private readonly goalStore: GoalStore;
+  private readonly preferences: UserPreferencesStore;
+  private readonly personalMemory: PersonalOperationalMemoryStore;
+  private readonly growthOps: GrowthOpsStore;
+  private readonly contentOps: ContentOpsStore;
+  private readonly socialAssistant: SocialAssistantStore;
+  private readonly contacts: ContactIntelligenceStore;
+  private readonly communicationRouter: CommunicationRouter;
+  private readonly approvals: ApprovalInboxStore;
+  private readonly memoryEntities: MemoryEntityStore;
+  private readonly whatsappMessages: WhatsAppMessageStore;
+  private readonly workflows: WorkflowOrchestratorStore;
+  private readonly workflowRuntime: WorkflowExecutionRuntime;
+  private readonly entityLinker: EntityLinker;
+  private readonly macCommandQueue: SupabaseMacCommandQueue;
+  private readonly email: EmailReader;
+  private readonly emailWriter: EmailWriter;
+  private readonly emailAccounts: EmailAccountsService;
+  private readonly googleWorkspace: GoogleWorkspaceService;
+  private readonly googleWorkspaces: GoogleWorkspaceAccountsService;
+  private readonly googleMaps: GoogleMapsService;
+  private readonly personalOs: PersonalOSService;
+  private readonly intentRouter: IntentRouter;
+  private readonly responseOs: ResponseOS;
+  private readonly contextPacks: ContextPackService;
+  private readonly planBuilder: WorkflowPlanBuilderService;
+  private readonly externalReasoning: ExternalReasoningClient;
+  private readonly pexelsMedia: PexelsMediaService;
+  private readonly projectOps: ProjectOpsService;
+  private readonly safeExec: SafeExecService;
+  private readonly accountLinking?: AccountLinkingService;
+  private readonly userRoleProfiles?: UserRoleProfileService;
+  private readonly professionPacks?: ProfessionPackService;
+  private readonly professionBootstrap?: ProfessionBootstrapService;
+  private readonly destinationRegistry?: DestinationRegistry;
+  private readonly briefingPrivacyPolicy?: BriefingPrivacyPolicy;
+  private readonly sharedBriefingComposer?: SharedBriefingComposer;
+  private readonly commandCenter?: CommandCenterService;
+  private readonly reasoningEngine?: ReasoningEngine;
+  private readonly userModelTracker?: UserModelTracker;
+  private readonly autonomyObservations?: ObservationStore;
+  private readonly autonomySuggestions?: SuggestionStore;
+  private readonly autonomyAudit?: AutonomyAuditStore;
+  private readonly autonomyFeedback?: FeedbackStore;
+  private readonly commitments?: CommitmentStore;
+  private readonly memoryCandidates?: MemoryCandidateStore;
+  private readonly autonomyLoop?: AutonomyLoop;
   private readonly capabilityPlanner: CapabilityPlanner;
   private readonly contextAssembler: ContextAssembler;
   private readonly responseSynthesizer: ResponseSynthesizer;
@@ -622,54 +741,62 @@ export class AgentCore {
   private readonly deliberativeReasoningRuntime: DeliberativeReasoningRuntime;
   private readonly createWebResearchService: (logger: Logger) => Pick<WebResearchService, "search" | "fetchPageExcerpt">;
 
-  constructor(
-    private readonly config: AppConfig,
-    private readonly logger: Logger,
-    private readonly fileAccess: FileAccessPolicy,
-    private readonly client: LlmClient,
-    private readonly capabilityRegistry: CapabilityRegistry,
-    private readonly pluginRegistry: ToolPluginRegistry,
-    private readonly memory: OperationalMemoryStore,
-    private readonly goalStore: GoalStore,
-    private readonly preferences: UserPreferencesStore,
-    private readonly personalMemory: PersonalOperationalMemoryStore,
-    private readonly growthOps: GrowthOpsStore,
-    private readonly contentOps: ContentOpsStore,
-    private readonly socialAssistant: SocialAssistantStore,
-    private readonly contacts: ContactIntelligenceStore,
-    private readonly communicationRouter: CommunicationRouter,
-    private readonly approvals: ApprovalInboxStore,
-    private readonly memoryEntities: MemoryEntityStore,
-    private readonly whatsappMessages: WhatsAppMessageStore,
-    private readonly workflows: WorkflowOrchestratorStore,
-    private readonly workflowRuntime: WorkflowExecutionRuntime,
-    private readonly entityLinker: EntityLinker,
-    private readonly macCommandQueue: SupabaseMacCommandQueue,
-    private readonly email: EmailReader,
-    private readonly emailWriter: EmailWriter,
-    private readonly emailAccounts: EmailAccountsService,
-    private readonly googleWorkspace: GoogleWorkspaceService,
-    private readonly googleWorkspaces: GoogleWorkspaceAccountsService,
-    private readonly googleMaps: GoogleMapsService,
-    private readonly personalOs: PersonalOSService,
-    private readonly intentRouter: IntentRouter,
-    private readonly responseOs: ResponseOS,
-    private readonly contextPacks: ContextPackService,
-    private readonly planBuilder: WorkflowPlanBuilderService,
-    private readonly externalReasoning: ExternalReasoningClient,
-    private readonly pexelsMedia: PexelsMediaService,
-    private readonly projectOps: ProjectOpsService,
-    private readonly safeExec: SafeExecService,
-    private readonly reasoningEngine?: ReasoningEngine,
-    private readonly userModelTracker?: UserModelTracker,
-    private readonly autonomyObservations?: ObservationStore,
-    private readonly autonomySuggestions?: SuggestionStore,
-    private readonly autonomyAudit?: AutonomyAuditStore,
-    private readonly autonomyFeedback?: FeedbackStore,
-    private readonly commitments?: CommitmentStore,
-    private readonly memoryCandidates?: MemoryCandidateStore,
-    private readonly autonomyLoop?: AutonomyLoop,
-  ) {
+  constructor(deps: AgentCoreDependencies) {
+    this.config = deps.config;
+    this.logger = deps.logger;
+    this.fileAccess = deps.fileAccess;
+    this.client = deps.client;
+    this.capabilityRegistry = deps.capabilityRegistry;
+    this.pluginRegistry = deps.pluginRegistry;
+    this.memory = deps.memory;
+    this.goalStore = deps.goalStore;
+    this.preferences = deps.preferences;
+    this.personalMemory = deps.personalMemory;
+    this.growthOps = deps.growthOps;
+    this.contentOps = deps.contentOps;
+    this.socialAssistant = deps.socialAssistant;
+    this.contacts = deps.contacts;
+    this.communicationRouter = deps.communicationRouter;
+    this.approvals = deps.approvals;
+    this.memoryEntities = deps.memoryEntities;
+    this.whatsappMessages = deps.whatsappMessages;
+    this.workflows = deps.workflows;
+    this.workflowRuntime = deps.workflowRuntime;
+    this.entityLinker = deps.entityLinker;
+    this.macCommandQueue = deps.macCommandQueue;
+    this.email = deps.email;
+    this.emailWriter = deps.emailWriter;
+    this.emailAccounts = deps.emailAccounts;
+    this.googleWorkspace = deps.googleWorkspace;
+    this.googleWorkspaces = deps.googleWorkspaces;
+    this.googleMaps = deps.googleMaps;
+    this.personalOs = deps.personalOs;
+    this.intentRouter = deps.intentRouter;
+    this.responseOs = deps.responseOs;
+    this.contextPacks = deps.contextPacks;
+    this.planBuilder = deps.planBuilder;
+    this.externalReasoning = deps.externalReasoning;
+    this.pexelsMedia = deps.pexelsMedia;
+    this.projectOps = deps.projectOps;
+    this.safeExec = deps.safeExec;
+    this.accountLinking = deps.accountLinking;
+    this.userRoleProfiles = deps.userRoleProfiles;
+    this.professionPacks = deps.professionPacks;
+    this.professionBootstrap = deps.professionBootstrap;
+    this.destinationRegistry = deps.destinationRegistry;
+    this.briefingPrivacyPolicy = deps.briefingPrivacyPolicy;
+    this.sharedBriefingComposer = deps.sharedBriefingComposer;
+    this.commandCenter = deps.commandCenter;
+    this.reasoningEngine = deps.reasoningEngine;
+    this.userModelTracker = deps.userModelTracker;
+    this.autonomyObservations = deps.autonomyObservations;
+    this.autonomySuggestions = deps.autonomySuggestions;
+    this.autonomyAudit = deps.autonomyAudit;
+    this.autonomyFeedback = deps.autonomyFeedback;
+    this.commitments = deps.commitments;
+    this.memoryCandidates = deps.memoryCandidates;
+    this.autonomyLoop = deps.autonomyLoop;
+
     this.createWebResearchService = (logger) => new WebResearchService(logger);
     this.capabilityPlanner = new CapabilityPlanner(
       this.config,
@@ -828,6 +955,13 @@ export class AgentCore {
       pexelsMedia: this.pexelsMedia,
       projectOps: this.projectOps,
       safeExec: this.safeExec,
+      accountLinking: this.accountLinking,
+      userRoleProfiles: this.userRoleProfiles,
+      professionPacks: this.professionPacks,
+      professionBootstrap: this.professionBootstrap,
+      destinationRegistry: this.destinationRegistry,
+      sharedBriefingComposer: this.sharedBriefingComposer,
+      commandCenter: this.commandCenter,
       createWebResearchService: this.createWebResearchService,
       executeToolDirect: (toolName, rawArguments) => this.toolExecutionService.executeToolDirect(toolName, rawArguments),
       buildActiveGoalUserDataReply: (goal, plan) => this.activePlanningSession.buildActiveGoalUserDataReply(goal, plan),
@@ -950,6 +1084,13 @@ export class AgentCore {
         pexelsMedia: this.pexelsMedia,
         projectOps: this.projectOps,
         safeExec: this.safeExec,
+        accountLinking: this.accountLinking,
+        userRoleProfiles: this.userRoleProfiles,
+        professionPacks: this.professionPacks,
+        professionBootstrap: this.professionBootstrap,
+        destinationRegistry: this.destinationRegistry,
+        sharedBriefingComposer: this.sharedBriefingComposer,
+        commandCenter: this.commandCenter,
         createWebResearchService: this.createWebResearchService,
         executeToolDirect: (toolName, rawArguments) => this.toolExecutionService
           ? this.toolExecutionService.executeToolDirect(toolName, rawArguments)

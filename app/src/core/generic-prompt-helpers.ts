@@ -1201,6 +1201,23 @@ export function isPersonalOperationalProfileUpdatePrompt(prompt: string): boolea
     "meu carro",
     "meu veiculo",
     "meu veículo",
+    "sou mecanico",
+    "sou mecânico",
+    "sou medico",
+    "sou médico",
+    "sou professor",
+    "sou professora",
+    "sou consultor",
+    "sou consultora",
+    "sou lider",
+    "sou líder",
+    "sou gerente",
+    "sou gestor",
+    "lidero equipe",
+    "coordeno equipe",
+    "trabalho como",
+    "minha profissao",
+    "minha profissão",
     "modo mais executivo",
     "modo mais humano",
     "modo mais firme",
@@ -1375,6 +1392,67 @@ function parseAllBriefingTimesFromPrompt(prompt: string): string[] {
 function parseBriefingTimeFromPrompt(prompt: string): string | undefined {
   const times = parseAllBriefingTimesFromPrompt(prompt);
   return times.length > 0 ? times[times.length - 1] : undefined;
+}
+
+function detectUserRoleFromPrompt(prompt: string): PersonalOperationalProfile["userRole"] | undefined {
+  const normalized = normalizeEmailAnalysisText(prompt);
+  if (includesAny(normalized, ["sou lider", "sou líder", "lidero", "coordeno equipe", "gerencio equipe"])) {
+    return "team_lead";
+  }
+  if (includesAny(normalized, ["sou gerente", "sou gestor", "sou coordenador", "sou coordenadora", "sou manager"])) {
+    return "manager";
+  }
+  if (includesAny(normalized, ["sou executivo", "sou diretora", "sou diretor", "sou ceo"])) {
+    return "executive";
+  }
+  if (includesAny(normalized, ["trabalho em campo", "fico na rua", "sou operador de campo", "sou mecanico", "sou mecânico"])) {
+    return "field_operator";
+  }
+  if (includesAny(normalized, ["sou medico", "sou médico", "trabalho em clinica", "trabalho em clínica", "sou advogado", "sou advogada"])) {
+    return "regulated_professional";
+  }
+  if (includesAny(normalized, ["sou analista", "sou assistente", "sou professor", "sou professora", "sou consultor", "sou consultora"])) {
+    return "individual_contributor";
+  }
+  return undefined;
+}
+
+function extractProfessionFromPrompt(prompt: string): string | undefined {
+  const patterns = [
+    /(?:sou|trabalho como|atuo como)\s+(?:um|uma)?\s*([a-zà-ÿ][a-zà-ÿ\s-]{2,48}?)(?=(?:\s+e\s+|[.,;!?]|$))/i,
+    /(?:minha profissao(?: e| é)?|minha profissão(?: e| é)?)\s+([a-zà-ÿ][a-zà-ÿ\s-]{2,48}?)(?=(?:\s+e\s+|[.,;!?]|$))/i,
+  ];
+  for (const pattern of patterns) {
+    const match = prompt.match(pattern);
+    const candidate = match?.[1]?.trim();
+    if (candidate && !candidate.toLowerCase().startsWith("que ")) {
+      return candidate;
+    }
+  }
+  return undefined;
+}
+
+function detectProfessionPackId(profession: string | undefined): string | undefined {
+  const normalized = normalizeEmailAnalysisText(profession ?? "");
+  if (!normalized) {
+    return undefined;
+  }
+  if (includesAny(normalized, ["mecanico", "mecânico", "oficina"])) {
+    return "mechanic";
+  }
+  if (includesAny(normalized, ["medico", "médico", "clinica", "clínica"])) {
+    return "doctor";
+  }
+  if (includesAny(normalized, ["professor", "professora", "docente"])) {
+    return "teacher";
+  }
+  if (includesAny(normalized, ["consultor", "consultora", "consultoria"])) {
+    return "consultant";
+  }
+  if (includesAny(normalized, ["assistente social", "servico social", "serviço social"])) {
+    return "social_worker";
+  }
+  return undefined;
 }
 
 function extractBriefingNameFromPrompt(prompt: string): string | undefined {
@@ -1645,6 +1723,23 @@ export function extractPersonalOperationalProfileUpdate(
     changeLabels.push(`papel principal: ${profile.primaryRole}`);
   }
 
+  const detectedUserRole = detectUserRoleFromPrompt(prompt);
+  if (detectedUserRole) {
+    profile.userRole = detectedUserRole;
+    changeLabels.push(`papel operacional: ${detectedUserRole}`);
+  }
+
+  const detectedProfession = extractProfessionFromPrompt(prompt);
+  if (detectedProfession) {
+    profile.profession = detectedProfession;
+    changeLabels.push(`profissão: ${detectedProfession}`);
+    const professionPackId = detectProfessionPackId(detectedProfession);
+    if (professionPackId) {
+      profile.professionPackId = professionPackId;
+      changeLabels.push(`pack profissional: ${professionPackId}`);
+    }
+  }
+
   const timezoneMatch = prompt.match(/(?:meu fuso(?: horario| horário)?(?: e| é)?|timezone(?: e| é)?)\s+([A-Za-z_\/+-]{3,64})/i);
   if (timezoneMatch?.[1]?.trim()) {
     profile.timezone = timezoneMatch[1].trim();
@@ -1714,6 +1809,26 @@ export function extractPersonalOperationalProfileUpdate(
   }
   if (profile.preferredChannels?.length) {
     changeLabels.push(`canais preferidos: ${profile.preferredChannels.join(", ")}`);
+  }
+
+  if (includesAny(normalized, ["so para mim", "só para mim", "uso pessoal", "nao compartilhe", "não compartilhe"])) {
+    profile.audiencePolicy = {
+      mode: "self_only",
+      defaultAudience: "self",
+      allowSharedBriefings: false,
+      requireReviewForTeamDestinations: true,
+      allowedChannels: ["telegram", "email"],
+    };
+    changeLabels.push("audiência padrão: só eu");
+  } else if (includesAny(normalized, ["minha equipe", "para equipe", "lidero equipe", "coordeno equipe", "compartilho com a equipe"])) {
+    profile.audiencePolicy = {
+      mode: "team_briefer",
+      defaultAudience: "team",
+      allowSharedBriefings: true,
+      requireReviewForTeamDestinations: true,
+      allowedChannels: ["telegram", "email", "whatsapp"],
+    };
+    changeLabels.push("audiência padrão: equipe");
   }
 
   const priorityAreasMatch = prompt.match(/(?:areas prioritarias|áreas prioritárias|prioridades principais)\s*(?::|sao|são|sao)\s+(.+?)(?=(?:[?.!,;:]|$))/i);

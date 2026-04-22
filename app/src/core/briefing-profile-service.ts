@@ -17,6 +17,19 @@ interface PersonalOsLike {
   getExecutiveMorningBrief(): Promise<ExecutiveMorningBrief>;
 }
 
+interface SharedBriefingComposerLike {
+  compose(input: {
+    profile: BriefingProfile;
+    brief: ExecutiveMorningBrief;
+    personalProfile: PersonalOperationalProfile;
+  }): {
+    reply: string;
+    effectiveProfile: BriefingProfile;
+    removedSections: string[];
+    blocked: boolean;
+  };
+}
+
 export class BriefingProfileService {
   private readonly renderer = new BriefRenderer();
 
@@ -24,6 +37,7 @@ export class BriefingProfileService {
     private readonly personalMemory: PersonalMemoryLike,
     private readonly personalOs: PersonalOsLike,
     private readonly logger: Logger,
+    private readonly sharedBriefingComposer?: SharedBriefingComposerLike,
   ) {}
 
   listProfiles(): BriefingProfile[] {
@@ -73,7 +87,15 @@ export class BriefingProfileService {
     }
 
     const brief = await this.personalOs.getExecutiveMorningBrief();
-    const reply = this.renderer.renderForProfile(brief, profile);
+    const personalProfile = this.personalMemory.getProfile();
+    const sharedResult = profile.audience === "team" && this.sharedBriefingComposer
+      ? this.sharedBriefingComposer.compose({
+          profile,
+          brief,
+          personalProfile,
+        })
+      : undefined;
+    const reply = sharedResult?.reply ?? this.renderer.renderForProfile(brief, profile);
 
     this.logger.debug("Rendered briefing profile", {
       profileId: profile.id,

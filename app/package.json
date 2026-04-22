@@ -16,6 +16,10 @@
     "eval:responses": "tsx scripts/eval-response-os.ts",
     "eval:assistant-decision": "tsx scripts/eval-assistant-decision.ts",
     "eval:external-reasoning-mode": "tsx scripts/eval-external-reasoning-mode.ts",
+    "eval:human-model": "tsx scripts/eval-human-model.ts",
+    "eval:account-linking": "tsx scripts/eval-account-linking.ts",
+    "eval:destination-privacy": "tsx scripts/eval-destination-privacy.ts",
+    "eval:command-center": "tsx scripts/eval-command-center.ts",
     "eval:telegram-choice": "tsx scripts/eval-telegram-choice-continuity.ts",
     "eval:task-operations": "tsx scripts/eval-task-operations.ts",
     "eval:task-decision-resolution": "tsx scripts/eval-task-decision-resolution.ts",
@@ -87,7 +91,8 @@
     "eval:autonomy-audit": "tsx scripts/eval-autonomy-audit.ts",
     "eval:commitment-extractor": "tsx scripts/eval-commitment-extractor.ts",
     "eval:memory-candidates": "tsx scripts/eval-memory-candidates.ts",
-    "eval:autonomy-review": "tsx scripts/eval-autonomy-review.ts"
+    "eval:autonomy-review": "tsx scripts/eval-autonomy-review.ts",
+    "eval:release-gate": "tsx scripts/eval-release-gate.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.101.1",

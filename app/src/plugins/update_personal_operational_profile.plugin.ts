@@ -4,10 +4,14 @@ import type { PersonalOperationalProfile } from "../types/personal-operational-m
 interface UpdatePersonalOperationalProfileParameters {
   displayName?: string;
   primaryRole?: string;
+  userRole?: PersonalOperationalProfile["userRole"];
+  profession?: string;
+  professionPackId?: string;
   routineSummary?: string[];
   timezone?: string;
   preferredChannels?: string[];
   preferredAlertChannel?: string;
+  audiencePolicy?: PersonalOperationalProfile["audiencePolicy"];
   homeAddress?: string;
   homeLocationLabel?: string;
   defaultVehicle?: PersonalOperationalProfile["defaultVehicle"];
@@ -43,6 +47,16 @@ export default defineToolPlugin<UpdatePersonalOperationalProfileParameters>({
       primaryRole: {
         type: "string",
       },
+      userRole: {
+        type: "string",
+        enum: ["individual_contributor", "team_lead", "manager", "field_operator", "executive", "regulated_professional", "custom"],
+      },
+      profession: {
+        type: "string",
+      },
+      professionPackId: {
+        type: "string",
+      },
       routineSummary: {
         type: "array",
         items: {
@@ -60,6 +74,29 @@ export default defineToolPlugin<UpdatePersonalOperationalProfileParameters>({
       },
       preferredAlertChannel: {
         type: "string",
+      },
+      audiencePolicy: {
+        type: "object",
+        properties: {
+          mode: {
+            type: "string",
+            enum: ["self_only", "team_briefer", "mixed"],
+          },
+          defaultAudience: {
+            type: "string",
+            enum: ["self", "team"],
+          },
+          allowSharedBriefings: { type: "boolean" },
+          requireReviewForTeamDestinations: { type: "boolean" },
+          allowedChannels: {
+            type: "array",
+            items: {
+              type: "string",
+              enum: ["telegram", "whatsapp", "email"],
+            },
+          },
+        },
+        additionalProperties: false,
       },
       homeAddress: {
         type: "string",
@@ -229,10 +266,14 @@ export default defineToolPlugin<UpdatePersonalOperationalProfileParameters>({
     const profile = context.personalMemory.updateProfile({
       displayName: parameters.displayName,
       primaryRole: parameters.primaryRole,
+      userRole: parameters.userRole,
+      profession: parameters.profession,
+      professionPackId: parameters.professionPackId,
       routineSummary: parameters.routineSummary,
       timezone: parameters.timezone,
       preferredChannels: parameters.preferredChannels,
       preferredAlertChannel: parameters.preferredAlertChannel,
+      audiencePolicy: parameters.audiencePolicy,
       homeAddress: parameters.homeAddress,
       homeLocationLabel: parameters.homeLocationLabel,
       defaultVehicle: parameters.defaultVehicle,

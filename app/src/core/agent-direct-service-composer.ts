@@ -182,6 +182,13 @@ import { ContentDirectService } from "./content-direct-service.js";
 import { ContentGenerationDirectService } from "./content-generation-direct-service.js";
 import { EmailDirectService } from "./email-direct-service.js";
 import { BriefingProfileService } from "./briefing-profile-service.js";
+import type { AccountLinkingService } from "./account-linking/account-linking-service.js";
+import type { CommandCenterService } from "./command-center/command-center-service.js";
+import type { DestinationRegistry } from "./destination-registry.js";
+import type { ProfessionBootstrapService } from "./profession-bootstrap-service.js";
+import type { ProfessionPackService } from "./profession-pack-service.js";
+import type { SharedBriefingComposer } from "./shared-briefing-composer.js";
+import type { UserRoleProfileService } from "./user-role-profile-service.js";
 import {
   AgentDirectRouteService,
   type AgentDirectRouteServiceDependencies,
@@ -641,6 +648,13 @@ export interface AgentDirectServiceComposerDependencies {
   pexelsMedia: PexelsMediaService;
   projectOps: ProjectOpsService;
   safeExec: SafeExecService;
+  accountLinking?: AccountLinkingService;
+  userRoleProfiles?: UserRoleProfileService;
+  professionPacks?: ProfessionPackService;
+  professionBootstrap?: ProfessionBootstrapService;
+  destinationRegistry?: DestinationRegistry;
+  sharedBriefingComposer?: SharedBriefingComposer;
+  commandCenter?: CommandCenterService;
   createWebResearchService: (logger: Logger) => Pick<WebResearchService, "search" | "fetchPageExcerpt">;
   executeToolDirect: (toolName: string, rawArguments: unknown) => Promise<{ requestId: string; content: string; rawResult: unknown }>;
   buildActiveGoalUserDataReply: (goal: ActivePlanningGoal, plan: CapabilityPlan) => string;
@@ -1177,6 +1191,11 @@ export class AgentDirectServiceComposer {
         preferences: this.deps.preferences ?? fallbackPreferencesStore,
         personalMemory: this.deps.personalMemory ?? fallbackPersonalMemory,
         goalStore: this.deps.goalStore ?? fallbackGoalStore,
+        professionBootstrap: this.deps.professionBootstrap,
+        accountLinking: this.deps.accountLinking,
+        destinationRegistry: this.deps.destinationRegistry,
+        sharedBriefingComposer: this.deps.sharedBriefingComposer,
+        commandCenter: this.deps.commandCenter,
         executeToolDirect: (toolName, rawArguments) =>
           this.deps.executeToolDirect ? this.deps.executeToolDirect(toolName, rawArguments) : fallbackExecuteToolDirect(),
         buildBaseMessages: (userPrompt, orchestration, preferences) =>

@@ -1,12 +1,18 @@
 import type { BriefingProfile } from "./briefing-profile.js";
+import type { AudiencePolicyProfile } from "./audience-policy.js";
+import type { UserRole } from "./user-role.js";
 
 export interface IdentityProfile {
   displayName: string;
   primaryRole: string;
+  userRole?: UserRole;
+  profession?: string;
+  professionPackId?: string;
   routineSummary: string[];
   timezone: string;
   preferredChannels: string[];
   preferredAlertChannel?: string;
+  audiencePolicy?: AudiencePolicyProfile;
   homeAddress?: string;
   homeLocationLabel?: string;
   defaultVehicle?: {
@@ -42,10 +48,14 @@ export interface IdentityProfile {
 export interface UpdateIdentityProfileInput {
   displayName?: string;
   primaryRole?: string;
+  userRole?: UserRole;
+  profession?: string;
+  professionPackId?: string;
   routineSummary?: string[];
   timezone?: string;
   preferredChannels?: string[];
   preferredAlertChannel?: string;
+  audiencePolicy?: AudiencePolicyProfile;
   homeAddress?: string;
   homeLocationLabel?: string;
   defaultVehicle?: Partial<IdentityProfile["defaultVehicle"]>;

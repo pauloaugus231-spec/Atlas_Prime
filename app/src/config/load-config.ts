@@ -813,6 +813,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       whatsappMessagesDbPath: path.join(workspaceDir, ".agent-state", "whatsapp-messages.sqlite"),
       userBehaviorModelDbPath: path.join(workspaceDir, ".agent-state", "user-behavior-model.sqlite"),
       autonomyDbPath: path.join(workspaceDir, ".agent-state", "autonomy.sqlite"),
+      accountLinkingDbPath: path.join(workspaceDir, ".agent-state", "account-linking.sqlite"),
+      destinationRegistryDbPath: path.join(workspaceDir, ".agent-state", "delivery-destinations.sqlite"),
     },
     llm: buildLlmConfig(env),
     telegram: {
@@ -895,6 +897,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       nodeEnv: env.NODE_ENV?.trim() || "development",
       logLevel: parseLogLevel(env.LOG_LEVEL),
       maxToolIterations: DEFAULT_MAX_TOOL_ITERATIONS,
+      tokenVaultSecret: env.ATLAS_TOKEN_VAULT_SECRET?.trim() || undefined,
     },
   };
 }

@@ -19,6 +19,9 @@ export function summarizeIdentityProfileForReasoning(profile: PersonalOperationa
   return {
     display_name: profile.displayName,
     primary_role: profile.primaryRole,
+    user_role: profile.userRole,
+    profession: profile.profession,
+    profession_pack_id: profile.professionPackId,
     timezone: profile.timezone,
     preferred_channels: profile.preferredChannels.slice(0, 4),
     preferred_alert_channel: profile.preferredAlertChannel,
@@ -44,6 +47,7 @@ export function summarizeIdentityProfileForReasoning(profile: PersonalOperationa
       style: item.style,
       sections: item.sections.slice(0, 8),
     })),
+    audience_policy: profile.audiencePolicy,
     detail_level: profile.detailLevel,
     tone_preference: profile.tonePreference,
     default_operational_mode: profile.defaultOperationalMode,

@@ -32,10 +32,18 @@ import { syncBriefingProfilesWithLegacyProfile } from "./briefing-profile-helper
 const DEFAULT_PROFILE: PersonalOperationalProfile = {
   displayName: "Operador",
   primaryRole: "rotina operacional pessoal",
+  userRole: "custom",
   routineSummary: [],
   timezone: "America/Sao_Paulo",
   preferredChannels: ["telegram"],
   preferredAlertChannel: "telegram",
+  audiencePolicy: {
+    mode: "mixed",
+    defaultAudience: "self",
+    allowSharedBriefings: false,
+    requireReviewForTeamDestinations: true,
+    allowedChannels: ["telegram", "email"],
+  },
   homeLocationLabel: "casa",
   priorityAreas: [],
   defaultAgendaScope: "both",
@@ -115,6 +123,38 @@ function normalizeOptionalString(value: string | undefined): string | undefined 
   }
   const normalized = value.trim();
   return normalized.length > 0 ? normalized : undefined;
+}
+
+function normalizeUserRole(
+  value: PersonalOperationalProfile["userRole"] | undefined,
+  fallback: PersonalOperationalProfile["userRole"],
+): PersonalOperationalProfile["userRole"] {
+  return value === "individual_contributor"
+    || value === "team_lead"
+    || value === "manager"
+    || value === "field_operator"
+    || value === "executive"
+    || value === "regulated_professional"
+    || value === "custom"
+    ? value
+    : fallback;
+}
+
+function normalizeAudiencePolicy(
+  value: PersonalOperationalProfile["audiencePolicy"] | undefined,
+  fallback: NonNullable<PersonalOperationalProfile["audiencePolicy"]>,
+): NonNullable<PersonalOperationalProfile["audiencePolicy"]> {
+  return {
+    mode: value?.mode === "self_only" || value?.mode === "team_briefer" || value?.mode === "mixed"
+      ? value.mode
+      : fallback.mode,
+    defaultAudience: value?.defaultAudience === "team" ? "team" : "self",
+    allowSharedBriefings: value?.allowSharedBriefings ?? fallback.allowSharedBriefings,
+    requireReviewForTeamDestinations: value?.requireReviewForTeamDestinations ?? fallback.requireReviewForTeamDestinations,
+    allowedChannels: Array.isArray(value?.allowedChannels) && value.allowedChannels.length > 0
+      ? [...new Set(value.allowedChannels.filter((item) => item === "telegram" || item === "whatsapp" || item === "email"))]
+      : [...fallback.allowedChannels],
+  };
 }
 
 function normalizePositiveNumber(value: number | undefined): number | undefined {
@@ -481,10 +521,20 @@ function mergeProfileWithItems(
     ...profile,
     displayName: normalizeString(profile.displayName, DEFAULT_PROFILE.displayName),
     primaryRole: normalizeString(profile.primaryRole, DEFAULT_PROFILE.primaryRole),
+    userRole: normalizeUserRole(profile.userRole, DEFAULT_PROFILE.userRole),
+    profession: normalizeOptionalString(profile.profession),
+    professionPackId: normalizeOptionalString(profile.professionPackId),
     routineSummary: normalizeStringList(profile.routineSummary, DEFAULT_PROFILE.routineSummary),
     timezone: normalizeString(profile.timezone, DEFAULT_PROFILE.timezone),
     preferredChannels: normalizeStringList(profile.preferredChannels, DEFAULT_PROFILE.preferredChannels),
     preferredAlertChannel: normalizeString(profile.preferredAlertChannel, DEFAULT_PROFILE.preferredAlertChannel ?? DEFAULT_PROFILE.preferredChannels[0]),
+    audiencePolicy: normalizeAudiencePolicy(profile.audiencePolicy, DEFAULT_PROFILE.audiencePolicy ?? {
+      mode: "mixed",
+      defaultAudience: "self",
+      allowSharedBriefings: false,
+      requireReviewForTeamDestinations: true,
+      allowedChannels: ["telegram", "email"],
+    }),
     homeAddress: normalizeOptionalString(profile.homeAddress),
     homeLocationLabel: normalizeString(profile.homeLocationLabel, DEFAULT_PROFILE.homeLocationLabel ?? "casa"),
     defaultVehicle: profile.defaultVehicle
@@ -617,10 +667,14 @@ export class PersonalOperationalMemoryStore {
     const next: PersonalOperationalProfile = {
       displayName: normalizeString(input.displayName, current.displayName),
       primaryRole: normalizeString(input.primaryRole, current.primaryRole),
+      userRole: normalizeUserRole(input.userRole, current.userRole),
+      profession: normalizeOptionalString(input.profession) ?? current.profession,
+      professionPackId: normalizeOptionalString(input.professionPackId) ?? current.professionPackId,
       routineSummary: normalizeStringList(input.routineSummary, current.routineSummary),
       timezone: normalizeString(input.timezone, current.timezone),
       preferredChannels: normalizeStringList(input.preferredChannels, current.preferredChannels),
       preferredAlertChannel: normalizeOptionalString(input.preferredAlertChannel) ?? current.preferredAlertChannel,
+      audiencePolicy: normalizeAudiencePolicy(input.audiencePolicy ?? current.audiencePolicy, current.audiencePolicy ?? DEFAULT_PROFILE.audiencePolicy!),
       homeAddress: normalizeOptionalString(input.homeAddress) ?? current.homeAddress,
       homeLocationLabel: normalizeOptionalString(input.homeLocationLabel) ?? current.homeLocationLabel,
       defaultVehicle: {
@@ -1252,10 +1306,14 @@ export class PersonalOperationalMemoryStore {
       return {
         displayName: normalizeString(parsed.displayName, DEFAULT_PROFILE.displayName),
         primaryRole: normalizeString(parsed.primaryRole, DEFAULT_PROFILE.primaryRole),
+        userRole: normalizeUserRole(parsed.userRole, DEFAULT_PROFILE.userRole),
+        profession: normalizeOptionalString(parsed.profession),
+        professionPackId: normalizeOptionalString(parsed.professionPackId),
         routineSummary: normalizeStringList(parsed.routineSummary, DEFAULT_PROFILE.routineSummary),
         timezone: normalizeString(parsed.timezone, DEFAULT_PROFILE.timezone),
         preferredChannels: normalizeStringList(parsed.preferredChannels, DEFAULT_PROFILE.preferredChannels),
         preferredAlertChannel: normalizeOptionalString(parsed.preferredAlertChannel) ?? DEFAULT_PROFILE.preferredAlertChannel,
+        audiencePolicy: normalizeAudiencePolicy(parsed.audiencePolicy, DEFAULT_PROFILE.audiencePolicy!),
         homeAddress: normalizeOptionalString(parsed.homeAddress),
         homeLocationLabel: normalizeOptionalString(parsed.homeLocationLabel) ?? DEFAULT_PROFILE.homeLocationLabel,
         defaultVehicle: parsed.defaultVehicle

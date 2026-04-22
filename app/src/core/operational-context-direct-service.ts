@@ -38,6 +38,63 @@ interface PersonalOsLike {
   getExecutiveMorningBrief: () => Promise<ExecutiveMorningBrief>;
 }
 
+interface ProfessionBootstrapLike {
+  buildBootstrapPatch: (profile: PersonalOperationalProfile) => UpdatePersonalOperationalProfileInput;
+  summarize: (profile: PersonalOperationalProfile) => string | undefined;
+}
+
+interface AccountLinkingLike {
+  renderOverview: () => string;
+  startConnection: (input?: {
+    provider?: "google";
+    channel?: "telegram" | "whatsapp" | "web" | "cli";
+    permissionKeys?: string[];
+  }) => { reply: string };
+  revokeConnection: (providerId: "google") => string;
+}
+
+interface DestinationRegistryLike {
+  renderList: () => string;
+  resolve: (query: string) => {
+    label: string;
+    channel: BriefingProfile["deliveryChannel"];
+    audience: "self" | "team" | "external";
+    address: string;
+    maxPrivacyLevel: "private" | "team_shareable" | "restricted" | "public";
+  } | undefined;
+  upsert: (input: {
+    label: string;
+    aliases?: string[];
+    kind: "telegram_chat" | "whatsapp_chat" | "email_recipient";
+    channel: BriefingProfile["deliveryChannel"];
+    address: string;
+    audience: "self" | "team" | "external";
+    maxPrivacyLevel: "private" | "team_shareable" | "restricted" | "public";
+  }) => {
+    label: string;
+    channel: BriefingProfile["deliveryChannel"];
+    address: string;
+    audience: "self" | "team" | "external";
+  };
+}
+
+interface SharedBriefingComposerLike {
+  compose: (input: {
+    profile: BriefingProfile;
+    brief: ExecutiveMorningBrief;
+    personalProfile: PersonalOperationalProfile;
+    maxPrivacyLevel?: "private" | "team_shareable" | "restricted" | "public";
+  }) => {
+    reply: string;
+    removedSections: string[];
+    blocked: boolean;
+  };
+}
+
+interface CommandCenterLike {
+  render: () => Promise<string>;
+}
+
 interface BriefingProfilesLike {
   resolveProfileForPrompt: (prompt: string) => BriefingProfile | undefined;
   render: (input?: { profileId?: string; prompt?: string }) => Promise<{
@@ -167,6 +224,11 @@ export interface OperationalContextDirectServiceDependencies {
   preferences: PreferencesLike;
   personalMemory: PersonalMemoryLike;
   goalStore: GoalStoreLike;
+  professionBootstrap?: ProfessionBootstrapLike;
+  accountLinking?: AccountLinkingLike;
+  destinationRegistry?: DestinationRegistryLike;
+  sharedBriefingComposer?: SharedBriefingComposerLike;
+  commandCenter?: CommandCenterLike;
   executeToolDirect: (toolName: string, rawArguments: unknown) => Promise<ToolExecutionResult>;
   buildBaseMessages: (
     userPrompt: string,
@@ -195,6 +257,151 @@ function normalizePrompt(value: string): string {
 
 function includesAny(value: string, tokens: string[]): boolean {
   return tokens.some((token) => value.includes(token));
+}
+
+function isCommandCenterPrompt(prompt: string): boolean {
+  const normalized = normalizePrompt(prompt);
+  return includesAny(normalized, [
+    "painel",
+    "meu painel",
+    "como esta minha operacao",
+    "como está minha operação",
+    "o que esta pegando",
+    "o que está pegando",
+    "status da operacao",
+    "status da operação",
+  ]);
+}
+
+function isConnectionOverviewPrompt(prompt: string): boolean {
+  const normalized = normalizePrompt(prompt);
+  return includesAny(normalized, [
+    "minhas permissoes",
+    "minhas permissões",
+    "quais contas estao conectadas",
+    "quais contas estão conectadas",
+    "conexoes",
+    "conexões",
+  ]);
+}
+
+function isConnectionStartPrompt(prompt: string): boolean {
+  const normalized = normalizePrompt(prompt);
+  return includesAny(normalized, [
+    "conectar google",
+    "ligar google",
+    "autorizar google",
+    "adicionar google",
+  ]);
+}
+
+function isConnectionRevokePrompt(prompt: string): boolean {
+  const normalized = normalizePrompt(prompt);
+  return includesAny(normalized, [
+    "desconectar google",
+    "remover google",
+    "revogar google",
+  ]);
+}
+
+function isDestinationListPrompt(prompt: string): boolean {
+  const normalized = normalizePrompt(prompt);
+  return includesAny(normalized, [
+    "quais destinos eu tenho",
+    "destinos cadastrados",
+    "canais de entrega",
+    "meus destinos",
+  ]);
+}
+
+function isSharedBriefingPreviewPrompt(prompt: string): boolean {
+  const normalized = normalizePrompt(prompt);
+  return includesAny(normalized, [
+    "briefing compartilhavel",
+    "briefing compartilhável",
+    "versao compartilhavel",
+    "versão compartilhável",
+    "preview da equipe",
+  ]);
+}
+
+function parseDestinationRegistration(prompt: string): {
+  label: string;
+  aliases?: string[];
+  kind: "telegram_chat" | "whatsapp_chat" | "email_recipient";
+  channel: BriefingProfile["deliveryChannel"];
+  address: string;
+  audience: "self" | "team" | "external";
+  maxPrivacyLevel: "private" | "team_shareable" | "restricted" | "public";
+} | undefined {
+  const normalized = normalizePrompt(prompt);
+  if (!includesAny(normalized, ["cadastre destino", "cadastrar destino", "cadastre minha equipe", "registre destino"])) {
+    return undefined;
+  }
+
+  const emailMatch = prompt.match(/(?:email|e-mail)\s+([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})/i);
+  if (emailMatch?.[1]) {
+    const labelMatch = prompt.match(/(?:destino|equipe|grupo)\s+(.+?)\s+(?:no|por)\s+e-?mail/i);
+    return {
+      label: labelMatch?.[1]?.trim() || "destino por email",
+      aliases: ["minha equipe"],
+      kind: "email_recipient",
+      channel: "email",
+      address: emailMatch[1].trim(),
+      audience: normalized.includes("equipe") ? "team" : "external",
+      maxPrivacyLevel: normalized.includes("restrito") ? "restricted" : normalized.includes("publico") || normalized.includes("público") ? "public" : "team_shareable",
+    };
+  }
+
+  const telegramMatch = prompt.match(/telegram\s+(-?\d{5,})/i);
+  if (telegramMatch?.[1]) {
+    const labelMatch = prompt.match(/(?:destino|equipe|grupo)\s+(.+?)\s+(?:no|por)\s+telegram/i);
+    return {
+      label: labelMatch?.[1]?.trim() || "destino no telegram",
+      aliases: ["minha equipe"],
+      kind: "telegram_chat",
+      channel: "telegram",
+      address: telegramMatch[1].trim(),
+      audience: normalized.includes("equipe") ? "team" : "self",
+      maxPrivacyLevel: normalized.includes("privado") ? "private" : "team_shareable",
+    };
+  }
+
+  const whatsappMatch = prompt.match(/whatsapp\s+(\+?\d{8,})/i);
+  if (whatsappMatch?.[1]) {
+    const labelMatch = prompt.match(/(?:destino|equipe|grupo)\s+(.+?)\s+(?:no|por)\s+whatsapp/i);
+    return {
+      label: labelMatch?.[1]?.trim() || "destino no whatsapp",
+      aliases: ["minha equipe"],
+      kind: "whatsapp_chat",
+      channel: "whatsapp",
+      address: whatsappMatch[1].trim(),
+      audience: normalized.includes("equipe") ? "team" : "self",
+      maxPrivacyLevel: normalized.includes("privado") ? "private" : "team_shareable",
+    };
+  }
+
+  return undefined;
+}
+
+function mergeProfileDraft(current: PersonalOperationalProfile, patch: UpdatePersonalOperationalProfileInput): PersonalOperationalProfile {
+  return {
+    ...current,
+    ...patch,
+    preferredChannels: patch.preferredChannels ?? current.preferredChannels,
+    priorityAreas: patch.priorityAreas ?? current.priorityAreas,
+    mobilityPreferences: patch.mobilityPreferences ?? current.mobilityPreferences,
+    autonomyPreferences: patch.autonomyPreferences ?? current.autonomyPreferences,
+    savedFocus: patch.savedFocus ?? current.savedFocus,
+    routineAnchors: patch.routineAnchors ?? current.routineAnchors,
+    operationalRules: patch.operationalRules ?? current.operationalRules,
+    workCalendarAliases: patch.workCalendarAliases ?? current.workCalendarAliases,
+    routineSummary: patch.routineSummary ?? current.routineSummary,
+    briefingProfiles: patch.briefingProfiles ?? current.briefingProfiles,
+    audiencePolicy: patch.audiencePolicy ?? current.audiencePolicy,
+    defaultVehicle: patch.defaultVehicle ? { ...current.defaultVehicle, ...patch.defaultVehicle } : current.defaultVehicle,
+    attire: patch.attire ? { ...current.attire, ...patch.attire } : current.attire,
+  };
 }
 
 function isGoalListPrompt(prompt: string): boolean {
@@ -388,10 +595,14 @@ function buildProfileUpdateToolArguments(profile: UpdatePersonalOperationalProfi
   return {
     ...(profile.displayName ? { displayName: profile.displayName } : {}),
     ...(profile.primaryRole ? { primaryRole: profile.primaryRole } : {}),
+    ...(profile.userRole ? { userRole: profile.userRole } : {}),
+    ...(profile.profession ? { profession: profile.profession } : {}),
+    ...(profile.professionPackId ? { professionPackId: profile.professionPackId } : {}),
     ...(profile.routineSummary ? { routineSummary: profile.routineSummary } : {}),
     ...(profile.timezone ? { timezone: profile.timezone } : {}),
     ...(profile.preferredChannels ? { preferredChannels: profile.preferredChannels } : {}),
     ...(profile.preferredAlertChannel ? { preferredAlertChannel: profile.preferredAlertChannel } : {}),
+    ...(profile.audiencePolicy ? { audiencePolicy: profile.audiencePolicy } : {}),
     ...(profile.homeAddress ? { homeAddress: profile.homeAddress } : {}),
     ...(profile.homeLocationLabel ? { homeLocationLabel: profile.homeLocationLabel } : {}),
     ...(profile.defaultVehicle ? { defaultVehicle: profile.defaultVehicle } : {}),
@@ -501,6 +712,134 @@ export class OperationalContextDirectService {
             null,
             2,
           ),
+        },
+      ],
+    };
+  }
+
+  async tryRunCommandCenter(input: OperationalContextDirectInput): Promise<AgentRunResult | null> {
+    if (!this.deps.commandCenter || !isCommandCenterPrompt(input.userPrompt)) {
+      return null;
+    }
+
+    const reply = await this.deps.commandCenter.render();
+    return {
+      requestId: input.requestId,
+      reply,
+      messages: this.deps.buildBaseMessages(input.userPrompt, input.orchestration, input.preferences),
+      toolExecutions: [
+        {
+          toolName: "command_center_snapshot",
+          resultPreview: reply.slice(0, 240),
+        },
+      ],
+    };
+  }
+
+  async tryRunConnectionOverview(input: OperationalContextDirectInput): Promise<AgentRunResult | null> {
+    if (!this.deps.accountLinking || !isConnectionOverviewPrompt(input.userPrompt)) {
+      return null;
+    }
+
+    return {
+      requestId: input.requestId,
+      reply: this.deps.accountLinking.renderOverview(),
+      messages: this.deps.buildBaseMessages(input.userPrompt, input.orchestration, input.preferences),
+      toolExecutions: [],
+    };
+  }
+
+  async tryRunConnectionStart(input: OperationalContextDirectInput): Promise<AgentRunResult | null> {
+    if (!this.deps.accountLinking || !isConnectionStartPrompt(input.userPrompt)) {
+      return null;
+    }
+
+    const result = this.deps.accountLinking.startConnection({
+      provider: "google",
+      channel: "telegram",
+    });
+    return {
+      requestId: input.requestId,
+      reply: result.reply,
+      messages: this.deps.buildBaseMessages(input.userPrompt, input.orchestration, input.preferences),
+      toolExecutions: [],
+    };
+  }
+
+  async tryRunConnectionRevoke(input: OperationalContextDirectInput): Promise<AgentRunResult | null> {
+    if (!this.deps.accountLinking || !isConnectionRevokePrompt(input.userPrompt)) {
+      return null;
+    }
+
+    return {
+      requestId: input.requestId,
+      reply: this.deps.accountLinking.revokeConnection("google"),
+      messages: this.deps.buildBaseMessages(input.userPrompt, input.orchestration, input.preferences),
+      toolExecutions: [],
+    };
+  }
+
+  async tryRunDestinationList(input: OperationalContextDirectInput): Promise<AgentRunResult | null> {
+    if (!this.deps.destinationRegistry || !isDestinationListPrompt(input.userPrompt)) {
+      return null;
+    }
+
+    return {
+      requestId: input.requestId,
+      reply: this.deps.destinationRegistry.renderList(),
+      messages: this.deps.buildBaseMessages(input.userPrompt, input.orchestration, input.preferences),
+      toolExecutions: [],
+    };
+  }
+
+  async tryRunDestinationSave(input: OperationalContextDirectInput): Promise<AgentRunResult | null> {
+    if (!this.deps.destinationRegistry) {
+      return null;
+    }
+    const parsed = parseDestinationRegistration(input.userPrompt);
+    if (!parsed) {
+      return null;
+    }
+
+    const destination = this.deps.destinationRegistry.upsert(parsed);
+    return {
+      requestId: input.requestId,
+      reply: `Destino salvo: ${destination.label} | ${destination.channel}/${destination.audience} | ${destination.address}`,
+      messages: this.deps.buildBaseMessages(input.userPrompt, input.orchestration, input.preferences),
+      toolExecutions: [],
+    };
+  }
+
+  async tryRunSharedBriefingPreview(input: OperationalContextDirectInput): Promise<AgentRunResult | null> {
+    if (!this.deps.sharedBriefingComposer || !isSharedBriefingPreviewPrompt(input.userPrompt)) {
+      return null;
+    }
+
+    const rendered = await this.deps.briefingProfiles.render({ prompt: input.userPrompt });
+    const personalProfile = this.deps.personalMemory.getProfile();
+    const destination = this.deps.destinationRegistry?.resolve(input.userPrompt);
+    const composed = this.deps.sharedBriefingComposer.compose({
+      profile: rendered.profile,
+      brief: rendered.brief,
+      personalProfile,
+      maxPrivacyLevel: destination?.maxPrivacyLevel,
+    });
+    const reply = composed.removedSections.length > 0
+      ? [
+          composed.reply,
+          "",
+          `Seções omitidas por privacidade: ${composed.removedSections.join(", ")}`,
+        ].join("\n")
+      : composed.reply;
+
+    return {
+      requestId: input.requestId,
+      reply,
+      messages: this.deps.buildBaseMessages(input.userPrompt, input.orchestration, input.preferences),
+      toolExecutions: [
+        {
+          toolName: "shared_briefing_preview",
+          resultPreview: reply.slice(0, 240),
         },
       ],
     };
@@ -856,9 +1195,45 @@ export class OperationalContextDirectService {
       };
     }
 
+    let profileUpdate = extracted.profile;
+    if (this.deps.destinationRegistry) {
+      const destination = this.deps.destinationRegistry.resolve(input.userPrompt);
+      if (destination && input.userPrompt.toLowerCase().includes("briefing")) {
+        const sourceProfiles = profileUpdate.briefingProfiles ?? currentProfile.briefingProfiles ?? [];
+        if (sourceProfiles.length > 0) {
+          const nextProfiles = sourceProfiles.map((item) => item.audience === "team"
+            ? {
+                ...item,
+                deliveryChannel: destination.channel,
+                targetRecipientIds: [destination.address],
+                targetLabel: destination.label,
+              }
+            : item);
+          profileUpdate = {
+            ...profileUpdate,
+            briefingProfiles: nextProfiles,
+          };
+          extracted.changeLabels.push(`destino do briefing: ${destination.label} | ${destination.channel}`);
+        }
+      }
+    }
+
+    if (this.deps.professionBootstrap) {
+      const bootstrapCandidate = mergeProfileDraft(currentProfile, profileUpdate);
+      const bootstrapPatch = this.deps.professionBootstrap.buildBootstrapPatch(bootstrapCandidate);
+      const bootstrapSummary = this.deps.professionBootstrap.summarize(mergeProfileDraft(bootstrapCandidate, bootstrapPatch));
+      profileUpdate = {
+        ...bootstrapPatch,
+        ...profileUpdate,
+      };
+      if (bootstrapSummary) {
+        extracted.changeLabels.push(`modelo base: ${bootstrapSummary}`);
+      }
+    }
+
     const execution = await this.deps.executeToolDirect(
       "update_personal_operational_profile",
-      buildProfileUpdateToolArguments(extracted.profile),
+      buildProfileUpdateToolArguments(profileUpdate),
     );
     if (extracted.preferenceUpdate) {
       this.deps.preferences.update(extracted.preferenceUpdate);

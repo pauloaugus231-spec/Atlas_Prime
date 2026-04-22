@@ -21,6 +21,8 @@ export interface AppPathsConfig {
   whatsappMessagesDbPath: string;
   userBehaviorModelDbPath: string;
   autonomyDbPath: string;
+  accountLinkingDbPath: string;
+  destinationRegistryDbPath: string;
 }
 
 export type LlmProvider = "ollama" | "openai";
@@ -254,6 +256,7 @@ export interface RuntimeConfig {
   nodeEnv: string;
   logLevel: LogLevel;
   maxToolIterations: number;
+  tokenVaultSecret?: string;
 }
 
 export interface AppConfig {

@@ -769,6 +769,48 @@ export class AgentDirectRouteHandlers {
         ),
       },
       operational: {
+        commandCenter: async (input) => this.tryRunDirectCommandCenter(
+          input.activeUserPrompt,
+          input.requestId,
+          input.orchestration,
+          input.preferences,
+        ),
+        connectionOverview: async (input) => this.tryRunDirectConnectionOverview(
+          input.activeUserPrompt,
+          input.requestId,
+          input.orchestration,
+          input.preferences,
+        ),
+        connectionStart: async (input) => this.tryRunDirectConnectionStart(
+          input.activeUserPrompt,
+          input.requestId,
+          input.orchestration,
+          input.preferences,
+        ),
+        connectionRevoke: async (input) => this.tryRunDirectConnectionRevoke(
+          input.activeUserPrompt,
+          input.requestId,
+          input.orchestration,
+          input.preferences,
+        ),
+        destinationList: async (input) => this.tryRunDirectDestinationList(
+          input.activeUserPrompt,
+          input.requestId,
+          input.orchestration,
+          input.preferences,
+        ),
+        destinationSave: async (input) => this.tryRunDirectDestinationSave(
+          input.activeUserPrompt,
+          input.requestId,
+          input.orchestration,
+          input.preferences,
+        ),
+        sharedBriefingPreview: async (input) => this.tryRunDirectSharedBriefingPreview(
+          input.activeUserPrompt,
+          input.requestId,
+          input.orchestration,
+          input.preferences,
+        ),
         morningBrief: async (input) => this.tryRunDirectMorningBrief(
           input.activeUserPrompt,
           input.requestId,
@@ -2136,6 +2178,104 @@ export class AgentDirectRouteHandlers {
     preferences: UserPreferences,
   ): Promise<AgentRunResult | null> {
     return this.deps.getOperationalContextDirectService().tryRunPersonalMemoryDelete({
+      userPrompt,
+      requestId,
+      orchestration,
+      preferences,
+    });
+  }
+
+  async tryRunDirectCommandCenter(
+    userPrompt: string,
+    requestId: string,
+    orchestration: OrchestrationContext,
+    preferences: UserPreferences,
+  ): Promise<AgentRunResult | null> {
+    return this.deps.getOperationalContextDirectService().tryRunCommandCenter({
+      userPrompt,
+      requestId,
+      orchestration,
+      preferences,
+    });
+  }
+
+  async tryRunDirectConnectionOverview(
+    userPrompt: string,
+    requestId: string,
+    orchestration: OrchestrationContext,
+    preferences: UserPreferences,
+  ): Promise<AgentRunResult | null> {
+    return this.deps.getOperationalContextDirectService().tryRunConnectionOverview({
+      userPrompt,
+      requestId,
+      orchestration,
+      preferences,
+    });
+  }
+
+  async tryRunDirectConnectionStart(
+    userPrompt: string,
+    requestId: string,
+    orchestration: OrchestrationContext,
+    preferences: UserPreferences,
+  ): Promise<AgentRunResult | null> {
+    return this.deps.getOperationalContextDirectService().tryRunConnectionStart({
+      userPrompt,
+      requestId,
+      orchestration,
+      preferences,
+    });
+  }
+
+  async tryRunDirectConnectionRevoke(
+    userPrompt: string,
+    requestId: string,
+    orchestration: OrchestrationContext,
+    preferences: UserPreferences,
+  ): Promise<AgentRunResult | null> {
+    return this.deps.getOperationalContextDirectService().tryRunConnectionRevoke({
+      userPrompt,
+      requestId,
+      orchestration,
+      preferences,
+    });
+  }
+
+  async tryRunDirectDestinationList(
+    userPrompt: string,
+    requestId: string,
+    orchestration: OrchestrationContext,
+    preferences: UserPreferences,
+  ): Promise<AgentRunResult | null> {
+    return this.deps.getOperationalContextDirectService().tryRunDestinationList({
+      userPrompt,
+      requestId,
+      orchestration,
+      preferences,
+    });
+  }
+
+  async tryRunDirectDestinationSave(
+    userPrompt: string,
+    requestId: string,
+    orchestration: OrchestrationContext,
+    preferences: UserPreferences,
+  ): Promise<AgentRunResult | null> {
+    return this.deps.getOperationalContextDirectService().tryRunDestinationSave({
+      userPrompt,
+      requestId,
+      orchestration,
+      preferences,
+    });
+  }
+
+  async tryRunDirectSharedBriefingPreview(
+    userPrompt: string,
+    requestId: string,
+    orchestration: OrchestrationContext,
+    preferences: UserPreferences,
+  ): Promise<AgentRunResult | null> {
+    return this.deps.getOperationalContextDirectService().tryRunSharedBriefingPreview({
       userPrompt,
       requestId,
       orchestration,

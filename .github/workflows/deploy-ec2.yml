@@ -23,6 +23,24 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22.14.0
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - name: Install app dependencies
+        working-directory: app
+        run: npm ci
+
+      - name: Validate app before deploy
+        working-directory: app
+        run: |
+          npm run typecheck
+          npm run build
+          npm run eval:release-gate
+
       - name: Install deploy dependencies
         run: |
           sudo apt-get update
