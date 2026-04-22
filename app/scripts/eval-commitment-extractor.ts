@@ -53,8 +53,8 @@ async function main(): Promise<void> {
     assert.equal(directCandidates[0]!.normalizedAction, "Mandar isso");
     assert.ok(directCandidates[0]!.dueAt);
     const dueAt = new Date(directCandidates[0]!.dueAt!);
-    assert.equal(dueAt.getUTCDate(), 22);
-    assert.equal(dueAt.getUTCHours(), 12);
+    assert.equal(directCandidates[0]!.dueAt!.slice(0, 10), "2026-04-22");
+    assert.equal(dueAt.getHours(), 9);
 
     const dispatcher = new AssistantActionDispatcher(
       {
