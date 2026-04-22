@@ -820,6 +820,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       missionDbPath: path.join(workspaceDir, ".agent-state", "missions.sqlite"),
       researchDbPath: path.join(workspaceDir, ".agent-state", "research.sqlite"),
       knowledgeGraphDbPath: path.join(workspaceDir, ".agent-state", "knowledge-graph.sqlite"),
+      deliveryAuditDbPath: path.join(workspaceDir, ".agent-state", "delivery-audit.sqlite"),
+      browserOpsDbPath: path.join(workspaceDir, ".agent-state", "browser-ops.sqlite"),
+      selfImprovementDbPath: path.join(workspaceDir, ".agent-state", "self-improvement.sqlite"),
     },
     llm: buildLlmConfig(env),
     telegram: {

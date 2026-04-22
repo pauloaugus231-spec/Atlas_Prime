@@ -89,6 +89,14 @@ import type { SupabaseMacCommandQueue } from "../../integrations/supabase/mac-co
 import type { WhatsAppMessageStore } from "../whatsapp-message-store.js";
 import type { DestinationRegistry } from "../destination-registry.js";
 import type { CommandCenterService } from "../command-center/command-center-service.js";
+import type { ChannelDeliveryService } from "../delivery/channel-delivery-service.js";
+import type { DeliveryAuditStore } from "../delivery/delivery-audit-store.js";
+import type { BrowserTaskStore } from "../operator-modes/browser-task-store.js";
+import type { OperatorModeService } from "../operator-modes/operator-mode-service.js";
+import type { FailedRequestStore } from "../self-improvement/failed-request-store.js";
+import type { ImprovementBacklogStore } from "../self-improvement/improvement-backlog.js";
+import type { ProductFeedbackStore } from "../self-improvement/product-feedback-store.js";
+import type { SelfImprovementService } from "../self-improvement/self-improvement-service.js";
 
 export interface BootstrapLayer {
   config: AppConfig;
@@ -119,6 +127,11 @@ export interface StorageLayer {
   researchMemory: ResearchMemoryStore;
   knowledgeEntities: EntityStore;
   knowledgeRelationships: KnowledgeRelationshipStore;
+  deliveryAudit: DeliveryAuditStore;
+  browserTasks: BrowserTaskStore;
+  failedRequests: FailedRequestStore;
+  productFeedback: ProductFeedbackStore;
+  improvementBacklog: ImprovementBacklogStore;
 }
 
 export interface AutonomyLayer {
@@ -198,6 +211,9 @@ export interface OsLayer {
   relationships: RelationshipService;
   missions: MissionService;
   missionReview: MissionReviewService;
+  deliveryService: ChannelDeliveryService;
+  operatorModes: OperatorModeService;
+  selfImprovement: SelfImprovementService;
 }
 
 export interface RuntimeLayer {

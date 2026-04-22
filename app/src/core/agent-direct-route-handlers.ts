@@ -174,8 +174,11 @@ import { WorkspaceMacDirectService } from "./workspace-mac-direct-service.js";
 import { WorkflowDirectService } from "./workflow-direct-service.js";
 import { ContentDirectService } from "./content-direct-service.js";
 import { ContentGenerationDirectService } from "./content-generation-direct-service.js";
+import { DeliveryDirectService } from "./delivery-direct-service.js";
 import { EmailDirectService } from "./email-direct-service.js";
 import { AutonomyDirectService } from "./autonomy/autonomy-direct-service.js";
+import { OperatorModeDirectService } from "./operator-mode-direct-service.js";
+import { SelfImprovementDirectService } from "./self-improvement-direct-service.js";
 import {
   AgentDirectRouteService,
   type AgentDirectRouteServiceDependencies,
@@ -628,6 +631,9 @@ export interface AgentDirectRouteHandlersDependencies {
   getEmailDirectService: () => EmailDirectService;
   getContentDirectService: () => ContentDirectService;
   getContentGenerationDirectService: () => ContentGenerationDirectService;
+  getDeliveryDirectService: () => DeliveryDirectService;
+  getOperatorModeDirectService: () => OperatorModeDirectService;
+  getSelfImprovementDirectService: () => SelfImprovementDirectService;
 }
 
 export class AgentDirectRouteHandlers {
@@ -812,6 +818,24 @@ export class AgentDirectRouteHandlers {
           input.preferences,
         ),
         sharedBriefingPreview: async (input) => this.tryRunDirectSharedBriefingPreview(
+          input.activeUserPrompt,
+          input.requestId,
+          input.orchestration,
+          input.preferences,
+        ),
+        deliveryManagement: async (input) => this.tryRunDirectDeliveryManagement(
+          input.activeUserPrompt,
+          input.requestId,
+          input.orchestration,
+          input.preferences,
+        ),
+        operatorModes: async (input) => this.tryRunDirectOperatorModes(
+          input.activeUserPrompt,
+          input.requestId,
+          input.orchestration,
+          input.preferences,
+        ),
+        selfImprovement: async (input) => this.tryRunDirectSelfImprovement(
           input.activeUserPrompt,
           input.requestId,
           input.orchestration,
@@ -2306,6 +2330,48 @@ export class AgentDirectRouteHandlers {
     preferences: UserPreferences,
   ): Promise<AgentRunResult | null> {
     return this.deps.getOperationalContextDirectService().tryRunSharedBriefingPreview({
+      userPrompt,
+      requestId,
+      orchestration,
+      preferences,
+    });
+  }
+
+  async tryRunDirectDeliveryManagement(
+    userPrompt: string,
+    requestId: string,
+    orchestration: OrchestrationContext,
+    preferences: UserPreferences,
+  ): Promise<AgentRunResult | null> {
+    return this.deps.getDeliveryDirectService().tryRun({
+      userPrompt,
+      requestId,
+      orchestration,
+      preferences,
+    });
+  }
+
+  async tryRunDirectOperatorModes(
+    userPrompt: string,
+    requestId: string,
+    orchestration: OrchestrationContext,
+    preferences: UserPreferences,
+  ): Promise<AgentRunResult | null> {
+    return this.deps.getOperatorModeDirectService().tryRun({
+      userPrompt,
+      requestId,
+      orchestration,
+      preferences,
+    });
+  }
+
+  async tryRunDirectSelfImprovement(
+    userPrompt: string,
+    requestId: string,
+    orchestration: OrchestrationContext,
+    preferences: UserPreferences,
+  ): Promise<AgentRunResult | null> {
+    return this.deps.getSelfImprovementDirectService().tryRun({
       userPrompt,
       requestId,
       orchestration,

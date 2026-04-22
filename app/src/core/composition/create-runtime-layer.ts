@@ -90,6 +90,9 @@ function buildAgentCoreDependencies(input: RuntimeLayerInput, contextPacks: Cont
     researchDesk: intelligence.researchDesk,
     graphIngestion: intelligence.graphIngestion,
     graphQuery: intelligence.graphQuery,
+    deliveryService: os.deliveryService,
+    operatorModes: os.operatorModes,
+    selfImprovement: os.selfImprovement,
     reasoningEngine: intelligence.reasoningEngine,
     userModelTracker: intelligence.userModelTracker,
     autonomyObservations: autonomy.autonomyObservations,
@@ -153,6 +156,9 @@ export function createRuntimeLayer(input: RuntimeLayerInput): RuntimeLayer {
     {
       extractor: autonomy.memoryCandidateExtractor,
       store: autonomy.memoryCandidates,
+    },
+    {
+      recordFailedRequest: (failedRequest) => os.selfImprovement.recordFailedRequest(failedRequest),
     },
   );
 

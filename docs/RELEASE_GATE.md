@@ -36,6 +36,9 @@ O gate executa uma suíte agregada com foco em:
 - mission system
 - research desk
 - knowledge graph incremental
+- delivery expansion
+- operator modes avançados
+- self-improvement controlado
 - fluxo e2e crítico
 
 ## Política operacional

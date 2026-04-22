@@ -142,6 +142,9 @@ import { UserRoleProfileService } from "./user-role-profile-service.js";
 import { SharedBriefingComposer } from "./shared-briefing-composer.js";
 import { BriefingPrivacyPolicy } from "./briefing-privacy-policy.js";
 import { CommandCenterService } from "./command-center/command-center-service.js";
+import { ChannelDeliveryService } from "./delivery/channel-delivery-service.js";
+import { OperatorModeService } from "./operator-modes/operator-mode-service.js";
+import { SelfImprovementService } from "./self-improvement/self-improvement-service.js";
 import {
   DirectRouteRunner,
 } from "./direct-route-runner.js";
@@ -195,12 +198,15 @@ import { WorkspaceMacDirectService } from "./workspace-mac-direct-service.js";
 import { WorkflowDirectService } from "./workflow-direct-service.js";
 import { ContentDirectService } from "./content-direct-service.js";
 import { ContentGenerationDirectService } from "./content-generation-direct-service.js";
+import { DeliveryDirectService } from "./delivery-direct-service.js";
 import { EmailDirectService } from "./email-direct-service.js";
 import {
   AgentDirectRouteService,
   type AgentDirectRouteServiceDependencies,
 } from "./agent-direct-route-service.js";
 import { AgentDirectServiceComposer } from "./agent-direct-service-composer.js";
+import { OperatorModeDirectService } from "./operator-mode-direct-service.js";
+import { SelfImprovementDirectService } from "./self-improvement-direct-service.js";
 import { ActivePlanningSessionService } from "./active-planning-session-service.js";
 import { ToolExecutionService } from "./tool-execution-service.js";
 import { ExternalReasoningRunner } from "./external-reasoning-runner.js";
@@ -680,6 +686,9 @@ export interface AgentCoreDependencies {
   researchDesk?: ResearchDeskService;
   graphIngestion?: GraphIngestionService;
   graphQuery?: GraphQueryService;
+  deliveryService?: ChannelDeliveryService;
+  operatorModes?: OperatorModeService;
+  selfImprovement?: SelfImprovementService;
   reasoningEngine?: ReasoningEngine;
   userModelTracker?: UserModelTracker;
   autonomyObservations?: ObservationStore;
@@ -746,6 +755,9 @@ export class AgentCore {
   private readonly researchDesk?: ResearchDeskService;
   private readonly graphIngestion?: GraphIngestionService;
   private readonly graphQuery?: GraphQueryService;
+  private readonly deliveryService?: ChannelDeliveryService;
+  private readonly operatorModes?: OperatorModeService;
+  private readonly selfImprovement?: SelfImprovementService;
   private readonly reasoningEngine?: ReasoningEngine;
   private readonly userModelTracker?: UserModelTracker;
   private readonly autonomyObservations?: ObservationStore;
@@ -826,6 +838,9 @@ export class AgentCore {
     this.researchDesk = deps.researchDesk;
     this.graphIngestion = deps.graphIngestion;
     this.graphQuery = deps.graphQuery;
+    this.deliveryService = deps.deliveryService;
+    this.operatorModes = deps.operatorModes;
+    this.selfImprovement = deps.selfImprovement;
     this.reasoningEngine = deps.reasoningEngine;
     this.userModelTracker = deps.userModelTracker;
     this.autonomyObservations = deps.autonomyObservations;
@@ -1010,6 +1025,9 @@ export class AgentCore {
       researchDesk: this.researchDesk,
       graphIngestion: this.graphIngestion,
       graphQuery: this.graphQuery,
+      deliveryService: this.deliveryService,
+      operatorModes: this.operatorModes,
+      selfImprovement: this.selfImprovement,
       createWebResearchService: this.createWebResearchService,
       executeToolDirect: (toolName, rawArguments) => this.toolExecutionService.executeToolDirect(toolName, rawArguments),
       buildActiveGoalUserDataReply: (goal, plan) => this.activePlanningSession.buildActiveGoalUserDataReply(goal, plan),
@@ -1061,6 +1079,9 @@ export class AgentCore {
       getEmailDirectService: () => this.getEmailDirectService(),
       getContentDirectService: () => this.getContentDirectService(),
       getContentGenerationDirectService: () => this.getContentGenerationDirectService(),
+      getDeliveryDirectService: () => this.getDeliveryDirectService(),
+      getOperatorModeDirectService: () => this.getOperatorModeDirectService(),
+      getSelfImprovementDirectService: () => this.getSelfImprovementDirectService(),
     });
     this.directRouteService = new AgentDirectRouteService(
       new DirectRouteRunner(
@@ -1151,6 +1172,9 @@ export class AgentCore {
         researchDesk: this.researchDesk,
         graphIngestion: this.graphIngestion,
         graphQuery: this.graphQuery,
+        deliveryService: this.deliveryService,
+        operatorModes: this.operatorModes,
+        selfImprovement: this.selfImprovement,
         createWebResearchService: this.createWebResearchService,
         executeToolDirect: (toolName, rawArguments) => this.toolExecutionService
           ? this.toolExecutionService.executeToolDirect(toolName, rawArguments)
@@ -1240,6 +1264,18 @@ export class AgentCore {
 
   private getContentGenerationDirectService(): ContentGenerationDirectService {
     return this.getDirectServiceComposer().getContentGenerationDirectService();
+  }
+
+  private getDeliveryDirectService(): DeliveryDirectService {
+    return this.getDirectServiceComposer().getDeliveryDirectService();
+  }
+
+  private getOperatorModeDirectService(): OperatorModeDirectService {
+    return this.getDirectServiceComposer().getOperatorModeDirectService();
+  }
+
+  private getSelfImprovementDirectService(): SelfImprovementDirectService {
+    return this.getDirectServiceComposer().getSelfImprovementDirectService();
   }
 
   private async tryRunDirectRoutes(input: {

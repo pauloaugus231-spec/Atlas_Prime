@@ -3,24 +3,28 @@ import type { Logger } from "../../types/logger.js";
 import { ApprovalEngine } from "../approval-engine.js";
 import { BriefingPrivacyPolicy } from "../briefing-privacy-policy.js";
 import { BriefingProfileService } from "../briefing-profile-service.js";
+import { ChannelDeliveryService } from "../delivery/channel-delivery-service.js";
 import { CommandCenterService } from "../command-center/command-center-service.js";
 import { DestinationRegistry } from "../destination-registry.js";
 import { FinanceReviewService } from "../finance/finance-review-service.js";
 import { MissionReviewService } from "../missions/mission-review.js";
 import { MissionService } from "../missions/mission-service.js";
+import { OperatorModeService } from "../operator-modes/operator-mode-service.js";
 import { PersonalOSService } from "../personal-os.js";
 import { ProfessionBootstrapService } from "../profession-bootstrap-service.js";
 import { ProfessionPackService } from "../profession-pack-service.js";
 import { RelationshipService } from "../relationship/relationship-service.js";
+import { SelfImprovementService } from "../self-improvement/self-improvement-service.js";
 import { SharedBriefingComposer } from "../shared-briefing-composer.js";
 import { TimeOsService } from "../time-os-service.js";
 import { UserRoleProfileService } from "../user-role-profile-service.js";
-import type { AutonomyLayer, IntegrationsLayer, IntelligenceLayer, OsLayer, StorageLayer } from "./types.js";
+import type { AutonomyLayer, BootstrapLayer, IntegrationsLayer, IntelligenceLayer, OsLayer, StorageLayer } from "./types.js";
 
 export function createOsLayer(
   config: AppConfig,
   logger: Logger,
-  storage: Pick<StorageLayer, "approvals" | "workflows" | "memory" | "memoryEntities" | "personalMemory" | "goalStore" | "growthOps" | "financeStore" | "relationshipStore" | "missionStore" | "contacts">,
+  bootstrap: Pick<BootstrapLayer, "safeExec" | "projectOps">,
+  storage: Pick<StorageLayer, "approvals" | "workflows" | "memory" | "memoryEntities" | "personalMemory" | "goalStore" | "growthOps" | "financeStore" | "relationshipStore" | "missionStore" | "contacts" | "deliveryAudit" | "browserTasks" | "failedRequests" | "productFeedback" | "improvementBacklog">,
   autonomy: Pick<AutonomyLayer, "autonomySuggestions" | "autonomyLoop" | "commitments">,
   intelligence: Pick<IntelligenceLayer, "approvalPolicy" | "entityLinker" | "contextMemory" | "graphIngestion">,
   integrations: Pick<IntegrationsLayer, "googleWorkspaces" | "emailAccounts" | "communicationRouter" | "founderOps" | "googleWorkspace" | "email" | "accountLinking">,
@@ -106,6 +110,24 @@ export function createOsLayer(
     storage.missionStore,
     logger.child({ scope: "mission-review" }),
   );
+  const deliveryService = new ChannelDeliveryService(
+    briefingProfiles,
+    storage.deliveryAudit,
+    logger.child({ scope: "channel-delivery" }),
+  );
+  const operatorModes = new OperatorModeService(
+    storage.browserTasks,
+    bootstrap.safeExec,
+    bootstrap.projectOps,
+    logger.child({ scope: "operator-modes" }),
+  );
+  const selfImprovement = new SelfImprovementService(
+    storage.personalMemory,
+    storage.failedRequests,
+    storage.productFeedback,
+    storage.improvementBacklog,
+    logger.child({ scope: "self-improvement" }),
+  );
 
   return {
     approvalEngine,
@@ -123,5 +145,8 @@ export function createOsLayer(
     relationships,
     missions,
     missionReview,
+    deliveryService,
+    operatorModes,
+    selfImprovement,
   };
 }

@@ -17,6 +17,9 @@ const checks = [
   "eval:missions",
   "eval:research-desk",
   "eval:knowledge-graph",
+  "eval:delivery-expansion",
+  "eval:operator-modes",
+  "eval:self-improvement",
   "e2e:critical",
 ];
 

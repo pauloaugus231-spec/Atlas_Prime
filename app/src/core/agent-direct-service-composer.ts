@@ -184,10 +184,14 @@ import { WorkspaceMacDirectService } from "./workspace-mac-direct-service.js";
 import { WorkflowDirectService } from "./workflow-direct-service.js";
 import { ContentDirectService } from "./content-direct-service.js";
 import { ContentGenerationDirectService } from "./content-generation-direct-service.js";
+import { DeliveryDirectService } from "./delivery-direct-service.js";
 import { EmailDirectService } from "./email-direct-service.js";
+import { OperatorModeDirectService } from "./operator-mode-direct-service.js";
+import { SelfImprovementDirectService } from "./self-improvement-direct-service.js";
 import { BriefingProfileService } from "./briefing-profile-service.js";
 import type { AccountLinkingService } from "./account-linking/account-linking-service.js";
 import type { CommandCenterService } from "./command-center/command-center-service.js";
+import type { ChannelDeliveryService } from "./delivery/channel-delivery-service.js";
 import type { DestinationRegistry } from "./destination-registry.js";
 import type { FinanceStore } from "./finance/finance-store.js";
 import type { FinanceReviewService } from "./finance/finance-review-service.js";
@@ -195,10 +199,12 @@ import type { GraphIngestionService } from "./knowledge-graph/graph-ingestion.js
 import type { GraphQueryService } from "./knowledge-graph/graph-query.js";
 import type { MissionReviewService } from "./missions/mission-review.js";
 import type { MissionService } from "./missions/mission-service.js";
+import type { OperatorModeService } from "./operator-modes/operator-mode-service.js";
 import type { ProfessionBootstrapService } from "./profession-bootstrap-service.js";
 import type { ProfessionPackService } from "./profession-pack-service.js";
 import type { RelationshipService } from "./relationship/relationship-service.js";
 import type { ResearchDeskService } from "./research/research-desk-service.js";
+import type { SelfImprovementService } from "./self-improvement/self-improvement-service.js";
 import type { SharedBriefingComposer } from "./shared-briefing-composer.js";
 import type { TimeOsService } from "./time-os-service.js";
 import type { UserRoleProfileService } from "./user-role-profile-service.js";
@@ -677,6 +683,9 @@ export interface AgentDirectServiceComposerDependencies {
   researchDesk?: ResearchDeskService;
   graphIngestion?: GraphIngestionService;
   graphQuery?: GraphQueryService;
+  deliveryService?: ChannelDeliveryService;
+  operatorModes?: OperatorModeService;
+  selfImprovement?: SelfImprovementService;
   createWebResearchService: (logger: Logger) => Pick<WebResearchService, "search" | "fetchPageExcerpt">;
   executeToolDirect: (toolName: string, rawArguments: unknown) => Promise<{ requestId: string; content: string; rawResult: unknown }>;
   buildActiveGoalUserDataReply: (goal: ActivePlanningGoal, plan: CapabilityPlan) => string;
@@ -807,6 +816,83 @@ export class AgentDirectServiceComposer {
         logger: baseLogger.child({ scope: "research-knowledge-direct-service" }),
         researchDesk: this.deps.researchDesk ?? fallbackResearchDesk,
         graphQuery: this.deps.graphQuery ?? fallbackGraphQuery,
+        buildBaseMessages: (userPrompt, orchestration, preferences) =>
+          buildBaseMessages(userPrompt, orchestration, preferences),
+      });
+  }
+
+  private createDeliveryDirectService(): DeliveryDirectService {
+      const fallbackLogger: Logger = {
+        debug: () => undefined,
+        info: () => undefined,
+        warn: () => undefined,
+        error: () => undefined,
+        child: () => fallbackLogger,
+      };
+      const baseLogger = this.deps.logger ?? fallbackLogger;
+      const fallbackDelivery = {
+        prepareBriefing: async () => ({
+          profileId: "fallback",
+          profileName: "Briefing",
+          channel: "web" as const,
+          audience: "self" as const,
+          recipients: ["self"],
+          body: "Entrega indisponível.",
+          disposition: "blocked" as const,
+          requiresApproval: false,
+          createdAt: new Date(0).toISOString(),
+        }),
+        renderChannelStatus: () => "Entrega multicanal indisponível.",
+      };
+      return new DeliveryDirectService({
+        logger: baseLogger.child({ scope: "delivery-direct-service" }),
+        delivery: this.deps.deliveryService ?? fallbackDelivery,
+        buildBaseMessages: (userPrompt, orchestration, preferences) =>
+          buildBaseMessages(userPrompt, orchestration, preferences),
+      });
+  }
+
+  private createOperatorModeDirectService(): OperatorModeDirectService {
+      const fallbackLogger: Logger = {
+        debug: () => undefined,
+        info: () => undefined,
+        warn: () => undefined,
+        error: () => undefined,
+        child: () => fallbackLogger,
+      };
+      const baseLogger = this.deps.logger ?? fallbackLogger;
+      const fallbackOperatorModes = {
+        renderOverview: async () => "Modo operador indisponível.",
+        createBrowserTask: () => ({ intent: "revisar página", mode: "read", requiresApproval: false }),
+        renderBrowserTasks: () => "Nenhuma tarefa de navegador foi preparada ainda.",
+        parseVoiceConfirmation: () => "Confirmação de voz indisponível.",
+        renderProjectOverview: async () => "Projeto indisponível.",
+      };
+      return new OperatorModeDirectService({
+        logger: baseLogger.child({ scope: "operator-mode-direct-service" }),
+        operatorModes: this.deps.operatorModes ?? fallbackOperatorModes,
+        buildBaseMessages: (userPrompt, orchestration, preferences) =>
+          buildBaseMessages(userPrompt, orchestration, preferences),
+      });
+  }
+
+  private createSelfImprovementDirectService(): SelfImprovementDirectService {
+      const fallbackLogger: Logger = {
+        debug: () => undefined,
+        info: () => undefined,
+        warn: () => undefined,
+        error: () => undefined,
+        child: () => fallbackLogger,
+      };
+      const baseLogger = this.deps.logger ?? fallbackLogger;
+      const fallbackSelfImprovement = {
+        renderBacklog: () => "Backlog de melhorias indisponível.",
+        renderRecentFailures: () => "Falhas recentes indisponíveis.",
+        recordFeedback: (input: { channel: string; feedback: string }) => ({ id: 0, feedback: input.feedback }),
+      };
+      return new SelfImprovementDirectService({
+        logger: baseLogger.child({ scope: "self-improvement-direct-service" }),
+        selfImprovement: this.deps.selfImprovement ?? fallbackSelfImprovement,
         buildBaseMessages: (userPrompt, orchestration, preferences) =>
           buildBaseMessages(userPrompt, orchestration, preferences),
       });
@@ -2010,6 +2096,9 @@ export class AgentDirectServiceComposer {
         emailDirectService: () => this.createEmailDirectService(),
         contentDirectService: () => this.createContentDirectService(),
         contentGenerationDirectService: () => this.createContentGenerationDirectService(),
+        deliveryDirectService: () => this.createDeliveryDirectService(),
+        operatorModeDirectService: () => this.createOperatorModeDirectService(),
+        selfImprovementDirectService: () => this.createSelfImprovementDirectService(),
       });
     }
 
@@ -2022,6 +2111,18 @@ export class AgentDirectServiceComposer {
 
   getAutonomyDirectService(): AutonomyDirectService {
     return this.getDirectServiceRegistry().getAutonomyDirectService();
+  }
+
+  getDeliveryDirectService(): DeliveryDirectService {
+    return this.getDirectServiceRegistry().getDeliveryDirectService();
+  }
+
+  getOperatorModeDirectService(): OperatorModeDirectService {
+    return this.getDirectServiceRegistry().getOperatorModeDirectService();
+  }
+
+  getSelfImprovementDirectService(): SelfImprovementDirectService {
+    return this.getDirectServiceRegistry().getSelfImprovementDirectService();
   }
 
   getExternalIntelligenceDirectService(): ExternalIntelligenceDirectService {

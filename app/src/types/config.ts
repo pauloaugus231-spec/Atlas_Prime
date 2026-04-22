@@ -28,6 +28,9 @@ export interface AppPathsConfig {
   missionDbPath: string;
   researchDbPath: string;
   knowledgeGraphDbPath: string;
+  deliveryAuditDbPath: string;
+  browserOpsDbPath: string;
+  selfImprovementDbPath: string;
 }
 
 export type LlmProvider = "ollama" | "openai";

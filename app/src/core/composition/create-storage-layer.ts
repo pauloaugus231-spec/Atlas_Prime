@@ -4,6 +4,7 @@ import { ApprovalInboxStore } from "../approval-inbox.js";
 import { ClarificationInboxStore } from "../clarification-inbox.js";
 import { ContactIntelligenceStore } from "../contact-intelligence.js";
 import { ContentOpsStore } from "../content-ops.js";
+import { DeliveryAuditStore } from "../delivery/delivery-audit-store.js";
 import { FinanceStore } from "../finance/finance-store.js";
 import { GoalStore } from "../goal-store.js";
 import { GrowthOpsStore } from "../growth-ops.js";
@@ -12,9 +13,13 @@ import { RelationshipStore as KnowledgeRelationshipStore } from "../knowledge-gr
 import { MemoryEntityStore } from "../memory-entity-store.js";
 import { MissionStore } from "../missions/mission-store.js";
 import { OperationalMemoryStore } from "../operational-memory.js";
+import { BrowserTaskStore } from "../operator-modes/browser-task-store.js";
 import { PersonalOperationalMemoryStore } from "../personal-operational-memory.js";
 import { RelationshipStore } from "../relationship/relationship-store.js";
 import { ResearchMemoryStore } from "../research/research-memory-store.js";
+import { FailedRequestStore } from "../self-improvement/failed-request-store.js";
+import { ImprovementBacklogStore } from "../self-improvement/improvement-backlog.js";
+import { ProductFeedbackStore } from "../self-improvement/product-feedback-store.js";
 import { SocialAssistantStore } from "../social-assistant.js";
 import { UserPreferencesStore } from "../user-preferences.js";
 import { WhatsAppMessageStore } from "../whatsapp-message-store.js";
@@ -98,6 +103,26 @@ export function createStorageLayer(config: AppConfig, logger: Logger): StorageLa
     knowledgeRelationships: new KnowledgeRelationshipStore(
       config.paths.knowledgeGraphDbPath,
       logger.child({ scope: "knowledge-relationships" }),
+    ),
+    deliveryAudit: new DeliveryAuditStore(
+      config.paths.deliveryAuditDbPath,
+      logger.child({ scope: "delivery-audit" }),
+    ),
+    browserTasks: new BrowserTaskStore(
+      config.paths.browserOpsDbPath,
+      logger.child({ scope: "browser-tasks" }),
+    ),
+    failedRequests: new FailedRequestStore(
+      config.paths.selfImprovementDbPath,
+      logger.child({ scope: "failed-requests" }),
+    ),
+    productFeedback: new ProductFeedbackStore(
+      config.paths.selfImprovementDbPath,
+      logger.child({ scope: "product-feedback" }),
+    ),
+    improvementBacklog: new ImprovementBacklogStore(
+      config.paths.selfImprovementDbPath,
+      logger.child({ scope: "improvement-backlog" }),
     ),
   };
 }

@@ -16,7 +16,7 @@ export async function createAgentCore(): Promise<CreateAgentCoreResult> {
   const intelligence = createIntelligenceLayer(bootstrap, storage);
   const integrations = createIntegrationsLayer(bootstrap.config, bootstrap.logger, storage, intelligence);
   const llm = createLlmLayer(bootstrap.config, bootstrap.logger);
-  const os = createOsLayer(bootstrap.config, bootstrap.logger, storage, autonomy, intelligence, integrations);
+  const os = createOsLayer(bootstrap.config, bootstrap.logger, bootstrap, storage, autonomy, intelligence, integrations);
   const plugins = await createPluginLayer(bootstrap.config, bootstrap.logger, bootstrap.pluginLogger);
   const runtime = createRuntimeLayer({
     bootstrap,

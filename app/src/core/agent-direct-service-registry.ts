@@ -3,6 +3,7 @@ import type { CapabilityActionService } from "./capability-action-service.js";
 import type { CapabilityInspectionService } from "./capability-inspection-service.js";
 import type { ContentDirectService } from "./content-direct-service.js";
 import type { ContentGenerationDirectService } from "./content-generation-direct-service.js";
+import type { DeliveryDirectService } from "./delivery-direct-service.js";
 import type { EmailDirectService } from "./email-direct-service.js";
 import type { ExternalIntelligenceDirectService } from "./external-intelligence-direct-service.js";
 import type { GoogleWorkspaceDirectService } from "./google-workspace-direct-service.js";
@@ -10,9 +11,11 @@ import type { KnowledgeProjectDirectService } from "./knowledge-project-direct-s
 import type { LifeManagementDirectService } from "./life-management-direct-service.js";
 import type { MemoryContactDirectService } from "./memory-contact-direct-service.js";
 import type { MissionDirectService } from "./mission-direct-service.js";
+import type { OperatorModeDirectService } from "./operator-mode-direct-service.js";
 import type { OperationalContextDirectService } from "./operational-context-direct-service.js";
 import type { OperationalReviewDirectService } from "./operational-review-direct-service.js";
 import type { ResearchKnowledgeDirectService } from "./research-knowledge-direct-service.js";
+import type { SelfImprovementDirectService } from "./self-improvement-direct-service.js";
 import type { WorkflowDirectService } from "./workflow-direct-service.js";
 import type { WorkspaceMacDirectService } from "./workspace-mac-direct-service.js";
 
@@ -34,6 +37,9 @@ export interface AgentDirectServiceRegistryFactories {
   emailDirectService: () => EmailDirectService;
   contentDirectService: () => ContentDirectService;
   contentGenerationDirectService: () => ContentGenerationDirectService;
+  deliveryDirectService: () => DeliveryDirectService;
+  operatorModeDirectService: () => OperatorModeDirectService;
+  selfImprovementDirectService: () => SelfImprovementDirectService;
 }
 
 type ServiceKey = keyof AgentDirectServiceRegistryFactories;
@@ -121,5 +127,17 @@ export class AgentDirectServiceRegistry {
 
   getContentGenerationDirectService(): ContentGenerationDirectService {
     return this.resolve("contentGenerationDirectService");
+  }
+
+  getDeliveryDirectService(): DeliveryDirectService {
+    return this.resolve("deliveryDirectService");
+  }
+
+  getOperatorModeDirectService(): OperatorModeDirectService {
+    return this.resolve("operatorModeDirectService");
+  }
+
+  getSelfImprovementDirectService(): SelfImprovementDirectService {
+    return this.resolve("selfImprovementDirectService");
   }
 }

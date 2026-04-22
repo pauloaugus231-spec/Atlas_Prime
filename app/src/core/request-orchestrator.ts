@@ -38,6 +38,15 @@ interface MemoryCandidateCaptureDependencies {
   store: Pick<MemoryCandidateStore, "upsert">;
 }
 
+interface FailedRequestCaptureDependencies {
+  recordFailedRequest(input: {
+    channel: string;
+    prompt: string;
+    errorMessage: string;
+    errorKind: string;
+  }): unknown;
+}
+
 export class RequestOrchestrator {
   constructor(
     private readonly core: AgentCoreRequestRuntime,
@@ -45,6 +54,7 @@ export class RequestOrchestrator {
     private readonly logger: Logger,
     private readonly commitmentCapture?: CommitmentCaptureDependencies,
     private readonly memoryCandidateCapture?: MemoryCandidateCaptureDependencies,
+    private readonly failedRequestCapture?: FailedRequestCaptureDependencies,
   ) {}
 
   private captureCommitments(input: OrchestratedRequestInput): void {
@@ -112,7 +122,27 @@ export class RequestOrchestrator {
   }
 
   async run(input: OrchestratedRequestInput): Promise<OrchestratedRequestOutput> {
-    const result = await this.core.runUserPrompt(input.agentPrompt, input.options);
+    let result: AgentRunResult;
+    try {
+      result = await this.core.runUserPrompt(input.agentPrompt, input.options);
+    } catch (error) {
+      if (this.failedRequestCapture) {
+        try {
+          this.failedRequestCapture.recordFailedRequest({
+            channel: input.channel,
+            prompt: input.agentPrompt,
+            errorMessage: error instanceof Error ? error.message : String(error),
+            errorKind: error instanceof Error ? error.name : "run_user_prompt_failure",
+          });
+        } catch (captureError) {
+          this.logger.warn("Failed request capture also failed; continuing with original error", {
+            channel: input.channel,
+            error: captureError instanceof Error ? captureError.message : String(captureError),
+          });
+        }
+      }
+      throw error;
+    }
     this.captureCommitments(input);
     this.captureMemoryCandidates(input);
     const structuredReply = await this.dispatcher.resolveStructuredReply(result.reply, {
