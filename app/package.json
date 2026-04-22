@@ -46,6 +46,7 @@
     "eval:system-prompt-upgrade": "npx tsx scripts/eval-system-prompt-upgrade.ts",
     "eval:goal-runtime": "npx tsx scripts/eval-goal-runtime.ts",
     "eval:morning-brief": "tsx scripts/eval-morning-brief-format.ts",
+    "eval:morning-brief-policy": "tsx scripts/eval-morning-brief-policy.ts",
     "eval:brief-renderer": "tsx scripts/eval-brief-renderer.ts",
     "eval:briefing-profiles": "tsx scripts/eval-briefing-profiles.ts",
     "eval:telegram-typing": "tsx scripts/eval-telegram-typing-session.ts",
