@@ -64,6 +64,7 @@ import type { ResearchMemoryStore } from "../research/research-memory-store.js";
 import type { SourcePolicy } from "../research/source-policy.js";
 import type { RequestOrchestrator } from "../request-orchestrator.js";
 import type { ResponseOS } from "../response-os.js";
+import type { RouteDecisionAuditStore } from "../routing/route-decision-audit-store.js";
 import type { SafeExecService } from "../safe-exec.js";
 import type { SharedBriefingComposer } from "../shared-briefing-composer.js";
 import type { SocialAssistantStore } from "../social-assistant.js";
@@ -132,6 +133,7 @@ export interface StorageLayer {
   failedRequests: FailedRequestStore;
   productFeedback: ProductFeedbackStore;
   improvementBacklog: ImprovementBacklogStore;
+  routingAudit: RouteDecisionAuditStore;
 }
 
 export interface AutonomyLayer {

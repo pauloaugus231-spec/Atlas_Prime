@@ -17,6 +17,7 @@ import { BrowserTaskStore } from "../operator-modes/browser-task-store.js";
 import { PersonalOperationalMemoryStore } from "../personal-operational-memory.js";
 import { RelationshipStore } from "../relationship/relationship-store.js";
 import { ResearchMemoryStore } from "../research/research-memory-store.js";
+import { RouteDecisionAuditStore } from "../routing/route-decision-audit-store.js";
 import { FailedRequestStore } from "../self-improvement/failed-request-store.js";
 import { ImprovementBacklogStore } from "../self-improvement/improvement-backlog.js";
 import { ProductFeedbackStore } from "../self-improvement/product-feedback-store.js";
@@ -123,6 +124,10 @@ export function createStorageLayer(config: AppConfig, logger: Logger): StorageLa
     improvementBacklog: new ImprovementBacklogStore(
       config.paths.selfImprovementDbPath,
       logger.child({ scope: "improvement-backlog" }),
+    ),
+    routingAudit: new RouteDecisionAuditStore(
+      config.paths.routingAuditDbPath,
+      logger.child({ scope: "routing-audit" }),
     ),
   };
 }

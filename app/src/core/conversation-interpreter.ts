@@ -50,6 +50,11 @@ export interface ConversationInterpreterInput {
   attachments?: ConversationAttachmentSignal[];
   recentMessages?: string[];
   operationalMode?: "normal" | "field";
+  turnFrame?: {
+    primaryIntent?: string;
+    requestedObject?: string;
+    requestedOperation?: string;
+  };
 }
 
 export interface ConversationInterpreterResult {
@@ -756,6 +761,9 @@ export function interpretConversationTurn(input: ConversationInterpreterInput): 
   const entities = {
     ...topLevel.entities,
     ...baseEntities,
+    ...(input.turnFrame?.primaryIntent ? { turn_primary_intent: input.turnFrame.primaryIntent } : {}),
+    ...(input.turnFrame?.requestedObject ? { turn_object: input.turnFrame.requestedObject } : {}),
+    ...(input.turnFrame?.requestedOperation ? { turn_operation: input.turnFrame.requestedOperation } : {}),
   };
 
   if (pendingFlow) {

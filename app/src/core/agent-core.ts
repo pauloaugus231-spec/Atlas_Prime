@@ -144,6 +144,7 @@ import { BriefingPrivacyPolicy } from "./briefing-privacy-policy.js";
 import { CommandCenterService } from "./command-center/command-center-service.js";
 import { ChannelDeliveryService } from "./delivery/channel-delivery-service.js";
 import { OperatorModeService } from "./operator-modes/operator-mode-service.js";
+import { RouteDecisionAuditStore } from "./routing/route-decision-audit-store.js";
 import { SelfImprovementService } from "./self-improvement/self-improvement-service.js";
 import {
   DirectRouteRunner,
@@ -689,6 +690,7 @@ export interface AgentCoreDependencies {
   deliveryService?: ChannelDeliveryService;
   operatorModes?: OperatorModeService;
   selfImprovement?: SelfImprovementService;
+  routingAudit?: RouteDecisionAuditStore;
   reasoningEngine?: ReasoningEngine;
   userModelTracker?: UserModelTracker;
   autonomyObservations?: ObservationStore;
@@ -758,6 +760,7 @@ export class AgentCore {
   private readonly deliveryService?: ChannelDeliveryService;
   private readonly operatorModes?: OperatorModeService;
   private readonly selfImprovement?: SelfImprovementService;
+  private readonly routingAudit?: RouteDecisionAuditStore;
   private readonly reasoningEngine?: ReasoningEngine;
   private readonly userModelTracker?: UserModelTracker;
   private readonly autonomyObservations?: ObservationStore;
@@ -841,6 +844,7 @@ export class AgentCore {
     this.deliveryService = deps.deliveryService;
     this.operatorModes = deps.operatorModes;
     this.selfImprovement = deps.selfImprovement;
+    this.routingAudit = deps.routingAudit;
     this.reasoningEngine = deps.reasoningEngine;
     this.userModelTracker = deps.userModelTracker;
     this.autonomyObservations = deps.autonomyObservations;
@@ -1086,6 +1090,7 @@ export class AgentCore {
     this.directRouteService = new AgentDirectRouteService(
       new DirectRouteRunner(
         this.logger.child({ scope: "direct-route-runner" }),
+        this.routingAudit,
       ),
       this.directRouteHandlers.buildDirectRouteServiceDependencies(),
       async (fallbackInput) => this.externalReasoningRunner.tryRun({

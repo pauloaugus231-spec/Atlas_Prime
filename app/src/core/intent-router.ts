@@ -1,5 +1,7 @@
 import { buildOrchestrationContext } from "./orchestration.js";
 import type { OrchestrationContext, AgentDomain } from "../types/orchestration.js";
+import type { TurnFrame } from "../types/turn-frame.js";
+import { buildTurnFrame } from "./routing/turn-understanding-service.js";
 
 function normalize(value: string): string {
   return value
@@ -97,6 +99,7 @@ export interface IntentResolution {
   orchestration: OrchestrationContext;
   mentionedDomains: AgentDomain[];
   compoundIntent: boolean;
+  turnFrame?: TurnFrame;
 }
 
 export class IntentRouter {
@@ -113,6 +116,11 @@ export class IntentRouter {
       orchestration,
       mentionedDomains,
       compoundIntent: detectCompoundIntent(activeUserPrompt, mentionedDomains),
+      turnFrame: buildTurnFrame({
+        text: activeUserPrompt,
+        source: "unknown",
+        recentMessages: historyUserTurns,
+      }),
     };
   }
 }

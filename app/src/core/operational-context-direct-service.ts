@@ -12,6 +12,7 @@ import type {
   UpdatePersonalOperationalProfileInput,
 } from "../types/personal-operational-memory.js";
 import type { OperationalState } from "../types/operational-state.js";
+import type { TurnFrame, TurnPrimaryIntent } from "../types/turn-frame.js";
 import type { UpdateUserPreferencesInput, UserPreferences } from "../types/user-preferences.js";
 import type { ActiveGoal } from "./goal-store.js";
 import type { BriefingProfile } from "../types/briefing-profile.js";
@@ -244,6 +245,7 @@ interface OperationalContextDirectInput {
   orchestration: OrchestrationContext;
   preferences?: UserPreferences;
   requestLogger?: Logger;
+  turnFrame?: TurnFrame;
 }
 
 function normalizePrompt(value: string): string {
@@ -257,6 +259,13 @@ function normalizePrompt(value: string): string {
 
 function includesAny(value: string, tokens: string[]): boolean {
   return tokens.some((token) => value.includes(token));
+}
+
+function hasTurnIntent(
+  input: OperationalContextDirectInput,
+  intents: TurnPrimaryIntent[],
+): boolean {
+  return Boolean(input.turnFrame?.primaryIntent && intents.includes(input.turnFrame.primaryIntent));
 }
 
 function isCommandCenterPrompt(prompt: string): boolean {
@@ -681,7 +690,12 @@ export class OperationalContextDirectService {
   }
 
   async tryRunMorningBrief(input: OperationalContextDirectInput): Promise<AgentRunResult | null> {
-    if (!this.deps.helpers.isMorningBriefPrompt(input.userPrompt) && !this.deps.briefingProfiles.resolveProfileForPrompt(input.userPrompt)) {
+    const intentMatched = hasTurnIntent(input, ["briefing.show"]);
+    if (
+      !intentMatched
+      && !this.deps.helpers.isMorningBriefPrompt(input.userPrompt)
+      && !this.deps.briefingProfiles.resolveProfileForPrompt(input.userPrompt)
+    ) {
       return null;
     }
 
@@ -718,7 +732,8 @@ export class OperationalContextDirectService {
   }
 
   async tryRunCommandCenter(input: OperationalContextDirectInput): Promise<AgentRunResult | null> {
-    if (!this.deps.commandCenter || !isCommandCenterPrompt(input.userPrompt)) {
+    const intentMatched = hasTurnIntent(input, ["command_center.show"]);
+    if (!this.deps.commandCenter || (!intentMatched && !isCommandCenterPrompt(input.userPrompt))) {
       return null;
     }
 
@@ -737,7 +752,8 @@ export class OperationalContextDirectService {
   }
 
   async tryRunConnectionOverview(input: OperationalContextDirectInput): Promise<AgentRunResult | null> {
-    if (!this.deps.accountLinking || !isConnectionOverviewPrompt(input.userPrompt)) {
+    const intentMatched = hasTurnIntent(input, ["connection.overview"]);
+    if (!this.deps.accountLinking || (!intentMatched && !isConnectionOverviewPrompt(input.userPrompt))) {
       return null;
     }
 
@@ -750,7 +766,8 @@ export class OperationalContextDirectService {
   }
 
   async tryRunConnectionStart(input: OperationalContextDirectInput): Promise<AgentRunResult | null> {
-    if (!this.deps.accountLinking || !isConnectionStartPrompt(input.userPrompt)) {
+    const intentMatched = hasTurnIntent(input, ["connection.start"]);
+    if (!this.deps.accountLinking || (!intentMatched && !isConnectionStartPrompt(input.userPrompt))) {
       return null;
     }
 
@@ -767,7 +784,8 @@ export class OperationalContextDirectService {
   }
 
   async tryRunConnectionRevoke(input: OperationalContextDirectInput): Promise<AgentRunResult | null> {
-    if (!this.deps.accountLinking || !isConnectionRevokePrompt(input.userPrompt)) {
+    const intentMatched = hasTurnIntent(input, ["connection.revoke"]);
+    if (!this.deps.accountLinking || (!intentMatched && !isConnectionRevokePrompt(input.userPrompt))) {
       return null;
     }
 
@@ -780,7 +798,8 @@ export class OperationalContextDirectService {
   }
 
   async tryRunDestinationList(input: OperationalContextDirectInput): Promise<AgentRunResult | null> {
-    if (!this.deps.destinationRegistry || !isDestinationListPrompt(input.userPrompt)) {
+    const intentMatched = hasTurnIntent(input, ["destination.list"]);
+    if (!this.deps.destinationRegistry || (!intentMatched && !isDestinationListPrompt(input.userPrompt))) {
       return null;
     }
 
@@ -796,9 +815,18 @@ export class OperationalContextDirectService {
     if (!this.deps.destinationRegistry) {
       return null;
     }
+    const intentMatched = hasTurnIntent(input, ["destination.save"]);
     const parsed = parseDestinationRegistration(input.userPrompt);
-    if (!parsed) {
+    if (!parsed && !intentMatched) {
       return null;
+    }
+    if (!parsed) {
+      return {
+        requestId: input.requestId,
+        reply: "Para cadastrar um destino, diga o canal e o identificador. Ex.: `cadastre minha equipe no telegram 123456`.",
+        messages: this.deps.buildBaseMessages(input.userPrompt, input.orchestration, input.preferences),
+        toolExecutions: [],
+      };
     }
 
     const destination = this.deps.destinationRegistry.upsert(parsed);
@@ -811,7 +839,8 @@ export class OperationalContextDirectService {
   }
 
   async tryRunSharedBriefingPreview(input: OperationalContextDirectInput): Promise<AgentRunResult | null> {
-    if (!this.deps.sharedBriefingComposer || !isSharedBriefingPreviewPrompt(input.userPrompt)) {
+    const intentMatched = hasTurnIntent(input, ["briefing.shared_preview"]);
+    if (!this.deps.sharedBriefingComposer || (!intentMatched && !isSharedBriefingPreviewPrompt(input.userPrompt))) {
       return null;
     }
 
@@ -1027,7 +1056,8 @@ export class OperationalContextDirectService {
   }
 
   async tryRunProfileShow(input: OperationalContextDirectInput): Promise<AgentRunResult | null> {
-    if (!this.deps.helpers.isPersonalOperationalProfileShowPrompt(input.userPrompt)) {
+    const intentMatched = hasTurnIntent(input, ["profile.show"]);
+    if (!intentMatched && !this.deps.helpers.isPersonalOperationalProfileShowPrompt(input.userPrompt)) {
       return null;
     }
 
@@ -1050,7 +1080,8 @@ export class OperationalContextDirectService {
   }
 
   async tryRunOperationalStateShow(input: OperationalContextDirectInput): Promise<AgentRunResult | null> {
-    if (!this.deps.helpers.isOperationalStateShowPrompt(input.userPrompt)) {
+    const intentMatched = hasTurnIntent(input, ["operational_state.show"]);
+    if (!intentMatched && !this.deps.helpers.isOperationalStateShowPrompt(input.userPrompt)) {
       return null;
     }
 
@@ -1170,7 +1201,8 @@ export class OperationalContextDirectService {
   }
 
   async tryRunProfileUpdate(input: OperationalContextDirectInput): Promise<AgentRunResult | null> {
-    if (!this.deps.helpers.isPersonalOperationalProfileUpdatePrompt(input.userPrompt)) {
+    const intentMatched = hasTurnIntent(input, ["briefing.update", "profile.update"]);
+    if (!intentMatched && !this.deps.helpers.isPersonalOperationalProfileUpdatePrompt(input.userPrompt)) {
       return null;
     }
 
@@ -1260,7 +1292,8 @@ export class OperationalContextDirectService {
   }
 
   async tryRunProfileDelete(input: OperationalContextDirectInput): Promise<AgentRunResult | null> {
-    if (!this.deps.helpers.isPersonalOperationalProfileDeletePrompt(input.userPrompt)) {
+    const intentMatched = hasTurnIntent(input, ["profile.delete"]);
+    if (!intentMatched && !this.deps.helpers.isPersonalOperationalProfileDeletePrompt(input.userPrompt)) {
       return null;
     }
 

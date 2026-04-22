@@ -46,9 +46,9 @@
     "eval:system-prompt-upgrade": "npx tsx scripts/eval-system-prompt-upgrade.ts",
     "eval:goal-runtime": "npx tsx scripts/eval-goal-runtime.ts",
     "eval:morning-brief": "tsx scripts/eval-morning-brief-format.ts",
-  "eval:brief-renderer": "tsx scripts/eval-brief-renderer.ts",
-  "eval:briefing-profiles": "tsx scripts/eval-briefing-profiles.ts",
-  "eval:telegram-typing": "tsx scripts/eval-telegram-typing-session.ts",
+    "eval:brief-renderer": "tsx scripts/eval-brief-renderer.ts",
+    "eval:briefing-profiles": "tsx scripts/eval-briefing-profiles.ts",
+    "eval:telegram-typing": "tsx scripts/eval-telegram-typing-session.ts",
     "eval:telegram-phase2": "tsx scripts/eval-telegram-phase2.ts",
     "eval:telegram-phase3": "tsx scripts/eval-telegram-phase3.ts",
     "eval:agent-core-phase4": "tsx scripts/eval-agent-core-phase4.ts",
@@ -99,7 +99,11 @@
     "eval:commitment-extractor": "tsx scripts/eval-commitment-extractor.ts",
     "eval:memory-candidates": "tsx scripts/eval-memory-candidates.ts",
     "eval:autonomy-review": "tsx scripts/eval-autonomy-review.ts",
-    "eval:release-gate": "tsx scripts/eval-release-gate.ts"
+    "eval:release-gate": "tsx scripts/eval-release-gate.ts",
+    "eval:routing-turn-frame": "tsx scripts/eval-routing-turn-frame.ts",
+    "eval:routing-selector": "tsx scripts/eval-routing-selector.ts",
+    "eval:routing-shadow": "tsx scripts/eval-routing-shadow.ts",
+    "eval:routing-briefing": "tsx scripts/eval-routing-briefing.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.101.1",

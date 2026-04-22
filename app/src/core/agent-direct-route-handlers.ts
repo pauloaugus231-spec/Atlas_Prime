@@ -671,12 +671,14 @@ export class AgentDirectRouteHandlers {
           input.requestId,
           input.orchestration,
           input.preferences,
+          input.intent.turnFrame,
         ),
         operationalStateShow: async (input) => this.tryRunDirectOperationalStateShow(
           input.activeUserPrompt,
           input.requestId,
           input.orchestration,
           input.preferences,
+          input.intent.turnFrame,
         ),
         learnedPreferencesList: async (input) => this.tryRunDirectLearnedPreferencesList(
           input.activeUserPrompt,
@@ -719,12 +721,14 @@ export class AgentDirectRouteHandlers {
           input.requestId,
           input.orchestration,
           input.preferences,
+          input.intent.turnFrame,
         ),
         personalProfileDelete: async (input) => this.tryRunDirectPersonalOperationalProfileDelete(
           input.activeUserPrompt,
           input.requestId,
           input.orchestration,
           input.preferences,
+          input.intent.turnFrame,
         ),
         userPreferences: async (input) => this.tryRunDirectUserPreferences(
           input.activeUserPrompt,
@@ -786,42 +790,49 @@ export class AgentDirectRouteHandlers {
           input.requestId,
           input.orchestration,
           input.preferences,
+          input.intent.turnFrame,
         ),
         connectionOverview: async (input) => this.tryRunDirectConnectionOverview(
           input.activeUserPrompt,
           input.requestId,
           input.orchestration,
           input.preferences,
+          input.intent.turnFrame,
         ),
         connectionStart: async (input) => this.tryRunDirectConnectionStart(
           input.activeUserPrompt,
           input.requestId,
           input.orchestration,
           input.preferences,
+          input.intent.turnFrame,
         ),
         connectionRevoke: async (input) => this.tryRunDirectConnectionRevoke(
           input.activeUserPrompt,
           input.requestId,
           input.orchestration,
           input.preferences,
+          input.intent.turnFrame,
         ),
         destinationList: async (input) => this.tryRunDirectDestinationList(
           input.activeUserPrompt,
           input.requestId,
           input.orchestration,
           input.preferences,
+          input.intent.turnFrame,
         ),
         destinationSave: async (input) => this.tryRunDirectDestinationSave(
           input.activeUserPrompt,
           input.requestId,
           input.orchestration,
           input.preferences,
+          input.intent.turnFrame,
         ),
         sharedBriefingPreview: async (input) => this.tryRunDirectSharedBriefingPreview(
           input.activeUserPrompt,
           input.requestId,
           input.orchestration,
           input.preferences,
+          input.intent.turnFrame,
         ),
         deliveryManagement: async (input) => this.tryRunDirectDeliveryManagement(
           input.activeUserPrompt,
@@ -858,6 +869,7 @@ export class AgentDirectRouteHandlers {
           input.requestId,
           input.requestLogger,
           input.orchestration,
+          input.intent.turnFrame,
         ),
         operationalPlanning: async (input) => this.tryRunDirectOperationalPlanning(
           input.activeUserPrompt,
@@ -1422,12 +1434,14 @@ export class AgentDirectRouteHandlers {
     requestId: string,
     requestLogger: Logger,
     orchestration: OrchestrationContext,
+    turnFrame?: IntentResolution["turnFrame"],
   ): Promise<AgentRunResult | null> {
     return this.deps.getOperationalContextDirectService().tryRunMorningBrief({
       userPrompt,
       requestId,
       requestLogger,
       orchestration,
+      turnFrame,
     });
   }
 
@@ -2034,12 +2048,14 @@ export class AgentDirectRouteHandlers {
     requestId: string,
     orchestration: OrchestrationContext,
     preferences: UserPreferences,
+    turnFrame?: IntentResolution["turnFrame"],
   ): Promise<AgentRunResult | null> {
     return this.deps.getOperationalContextDirectService().tryRunProfileShow({
       userPrompt,
       requestId,
       orchestration,
       preferences,
+      turnFrame,
     });
   }
 
@@ -2048,12 +2064,14 @@ export class AgentDirectRouteHandlers {
     requestId: string,
     orchestration: OrchestrationContext,
     preferences: UserPreferences,
+    turnFrame?: IntentResolution["turnFrame"],
   ): Promise<AgentRunResult | null> {
     return this.deps.getOperationalContextDirectService().tryRunOperationalStateShow({
       userPrompt,
       requestId,
       orchestration,
       preferences,
+      turnFrame,
     });
   }
 
@@ -2104,12 +2122,14 @@ export class AgentDirectRouteHandlers {
     requestId: string,
     orchestration: OrchestrationContext,
     preferences: UserPreferences,
+    turnFrame?: IntentResolution["turnFrame"],
   ): Promise<AgentRunResult | null> {
     return this.deps.getOperationalContextDirectService().tryRunProfileUpdate({
       userPrompt,
       requestId,
       orchestration,
       preferences,
+      turnFrame,
     });
   }
 
@@ -2174,12 +2194,14 @@ export class AgentDirectRouteHandlers {
     requestId: string,
     orchestration: OrchestrationContext,
     preferences: UserPreferences,
+    turnFrame?: IntentResolution["turnFrame"],
   ): Promise<AgentRunResult | null> {
     return this.deps.getOperationalContextDirectService().tryRunProfileDelete({
       userPrompt,
       requestId,
       orchestration,
       preferences,
+      turnFrame,
     });
   }
 
@@ -2244,12 +2266,14 @@ export class AgentDirectRouteHandlers {
     requestId: string,
     orchestration: OrchestrationContext,
     preferences: UserPreferences,
+    turnFrame?: IntentResolution["turnFrame"],
   ): Promise<AgentRunResult | null> {
     return this.deps.getOperationalContextDirectService().tryRunCommandCenter({
       userPrompt,
       requestId,
       orchestration,
       preferences,
+      turnFrame,
     });
   }
 
@@ -2258,12 +2282,14 @@ export class AgentDirectRouteHandlers {
     requestId: string,
     orchestration: OrchestrationContext,
     preferences: UserPreferences,
+    turnFrame?: IntentResolution["turnFrame"],
   ): Promise<AgentRunResult | null> {
     return this.deps.getOperationalContextDirectService().tryRunConnectionOverview({
       userPrompt,
       requestId,
       orchestration,
       preferences,
+      turnFrame,
     });
   }
 
@@ -2272,12 +2298,14 @@ export class AgentDirectRouteHandlers {
     requestId: string,
     orchestration: OrchestrationContext,
     preferences: UserPreferences,
+    turnFrame?: IntentResolution["turnFrame"],
   ): Promise<AgentRunResult | null> {
     return this.deps.getOperationalContextDirectService().tryRunConnectionStart({
       userPrompt,
       requestId,
       orchestration,
       preferences,
+      turnFrame,
     });
   }
 
@@ -2286,12 +2314,14 @@ export class AgentDirectRouteHandlers {
     requestId: string,
     orchestration: OrchestrationContext,
     preferences: UserPreferences,
+    turnFrame?: IntentResolution["turnFrame"],
   ): Promise<AgentRunResult | null> {
     return this.deps.getOperationalContextDirectService().tryRunConnectionRevoke({
       userPrompt,
       requestId,
       orchestration,
       preferences,
+      turnFrame,
     });
   }
 
@@ -2300,12 +2330,14 @@ export class AgentDirectRouteHandlers {
     requestId: string,
     orchestration: OrchestrationContext,
     preferences: UserPreferences,
+    turnFrame?: IntentResolution["turnFrame"],
   ): Promise<AgentRunResult | null> {
     return this.deps.getOperationalContextDirectService().tryRunDestinationList({
       userPrompt,
       requestId,
       orchestration,
       preferences,
+      turnFrame,
     });
   }
 
@@ -2314,12 +2346,14 @@ export class AgentDirectRouteHandlers {
     requestId: string,
     orchestration: OrchestrationContext,
     preferences: UserPreferences,
+    turnFrame?: IntentResolution["turnFrame"],
   ): Promise<AgentRunResult | null> {
     return this.deps.getOperationalContextDirectService().tryRunDestinationSave({
       userPrompt,
       requestId,
       orchestration,
       preferences,
+      turnFrame,
     });
   }
 
@@ -2328,12 +2362,14 @@ export class AgentDirectRouteHandlers {
     requestId: string,
     orchestration: OrchestrationContext,
     preferences: UserPreferences,
+    turnFrame?: IntentResolution["turnFrame"],
   ): Promise<AgentRunResult | null> {
     return this.deps.getOperationalContextDirectService().tryRunSharedBriefingPreview({
       userPrompt,
       requestId,
       orchestration,
       preferences,
+      turnFrame,
     });
   }
 

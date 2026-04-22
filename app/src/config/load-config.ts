@@ -823,6 +823,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       deliveryAuditDbPath: path.join(workspaceDir, ".agent-state", "delivery-audit.sqlite"),
       browserOpsDbPath: path.join(workspaceDir, ".agent-state", "browser-ops.sqlite"),
       selfImprovementDbPath: path.join(workspaceDir, ".agent-state", "self-improvement.sqlite"),
+      routingAuditDbPath: path.join(workspaceDir, ".agent-state", "routing-audit.sqlite"),
     },
     llm: buildLlmConfig(env),
     telegram: {

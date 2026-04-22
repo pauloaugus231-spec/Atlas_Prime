@@ -93,6 +93,7 @@ function buildAgentCoreDependencies(input: RuntimeLayerInput, contextPacks: Cont
     deliveryService: os.deliveryService,
     operatorModes: os.operatorModes,
     selfImprovement: os.selfImprovement,
+    routingAudit: storage.routingAudit,
     reasoningEngine: intelligence.reasoningEngine,
     userModelTracker: intelligence.userModelTracker,
     autonomyObservations: autonomy.autonomyObservations,

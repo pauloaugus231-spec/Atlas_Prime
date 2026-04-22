@@ -31,6 +31,7 @@ export interface AppPathsConfig {
   deliveryAuditDbPath: string;
   browserOpsDbPath: string;
   selfImprovementDbPath: string;
+  routingAuditDbPath: string;
 }
 
 export type LlmProvider = "ollama" | "openai";

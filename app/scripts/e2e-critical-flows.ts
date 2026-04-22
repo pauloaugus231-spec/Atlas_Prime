@@ -704,7 +704,7 @@ async function run(): Promise<void> {
       const result = await harness.core.runUserPrompt("briefing da manhã");
       results.push(assert(
         "e2e_morning_brief_uses_direct_route_and_goal_context",
-        result.reply.includes("Bom dia")
+        /Boa (?:dia|tarde|noite)/.test(result.reply)
           && result.reply.includes("*Objetivos ativos*")
           && result.reply.includes("Fechar 2 clientes SaaS"),
         result.reply,

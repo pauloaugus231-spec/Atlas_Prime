@@ -54,8 +54,18 @@ export function buildCapabilityDirectRoutes(
   deps: CapabilityDirectRouteDependencies,
 ): DirectRouteDefinition[] {
   return [
-    defineDirectRoute("personal_profile_show", "capability", deps.personalProfileShow),
-    defineDirectRoute("operational_state_show", "capability", deps.operationalStateShow),
+    defineDirectRoute("personal_profile_show", "capability", deps.personalProfileShow, {
+      intents: ["profile.show"],
+      objects: ["profile"],
+      operations: ["show"],
+      priority: 35,
+    }),
+    defineDirectRoute("operational_state_show", "capability", deps.operationalStateShow, {
+      intents: ["operational_state.show"],
+      objects: ["operational_state"],
+      operations: ["show"],
+      priority: 30,
+    }),
     defineDirectRoute("learned_preferences_list", "capability", deps.learnedPreferencesList),
     defineDirectRoute(
       "learned_preferences_delete",
@@ -76,11 +86,23 @@ export function buildMemoryAndPreferenceDirectRoutes(
       "personal_profile_update",
       "memory-preferences",
       deps.personalProfileUpdate,
+      {
+        intents: ["briefing.update", "profile.update"],
+        objects: ["briefing", "profile"],
+        operations: ["update"],
+        priority: 55,
+      },
     ),
     defineDirectRoute(
       "personal_profile_delete",
       "memory-preferences",
       deps.personalProfileDelete,
+      {
+        intents: ["profile.delete"],
+        objects: ["profile"],
+        operations: ["delete"],
+        priority: 35,
+      },
     ),
     defineDirectRoute("user_preferences", "memory-preferences", deps.userPreferences),
     defineDirectRoute("active_goals_list", "memory-preferences", deps.activeGoalsList),

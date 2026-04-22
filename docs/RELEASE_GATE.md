@@ -32,6 +32,7 @@ O gate executa uma suíte agregada com foco em:
 - account linking foundation
 - destination registry e privacy/sharing
 - command center
+- roteamento por intenção com `turn frame`, selector, shadow mode e execution intent-first nas rotas migradas
 - life domains core
 - mission system
 - research desk

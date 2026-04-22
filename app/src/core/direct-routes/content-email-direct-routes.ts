@@ -37,6 +37,13 @@ export function buildContentDirectRoutes(
       "content_script_generation",
       "content",
       deps.contentScriptGeneration,
+      {
+        intents: ["content.generate"],
+        objects: ["content"],
+        operations: ["create"],
+        priority: 20,
+        blockedByAmbiguities: ["summary_target"],
+      },
     ),
     defineDirectRoute("content_batch_planning", "content", deps.contentBatchPlanning),
     defineDirectRoute("content_batch_generation", "content", deps.contentBatchGeneration),
@@ -59,7 +66,12 @@ export function buildEmailDirectRoutes(
 ): DirectRouteDefinition[] {
   return [
     defineDirectRoute("email_draft", "email", deps.emailDraft),
-    defineDirectRoute("email_summary", "email", deps.emailSummary),
+    defineDirectRoute("email_summary", "email", deps.emailSummary, {
+      intents: ["email.summarize"],
+      objects: ["email"],
+      operations: ["summarize"],
+      priority: 25,
+    }),
     defineDirectRoute("email_lookup", "email", deps.emailLookup),
   ];
 }
