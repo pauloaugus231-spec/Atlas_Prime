@@ -4,11 +4,14 @@ import {
   BRIEFING_AUDIENCES,
   BRIEFING_DELIVERY_CHANNELS,
   BRIEFING_DELIVERY_MODES,
+  BRIEFING_PURPOSES,
   BRIEFING_PROFILE_STYLES,
   BRIEFING_SECTION_KEYS,
   type BriefingAudience,
   type BriefingDeliveryChannel,
   type BriefingDeliveryMode,
+  type BriefingPresentationConfig,
+  type BriefingPurpose,
   type BriefingProfile,
   type BriefingProfileStyle,
   type BriefingSectionKey,
@@ -109,6 +112,85 @@ function normalizeStyle(value: BriefingProfileStyle | undefined, fallback: Brief
   return BRIEFING_PROFILE_STYLES.includes(value ?? "auto") ? (value ?? fallback) : fallback;
 }
 
+function defaultPurposeForAudience(audience: BriefingAudience): BriefingPurpose {
+  return audience === "team" ? "team_update" : "daily_prep";
+}
+
+function normalizePurpose(value: BriefingPurpose | undefined, fallback: BriefingPurpose): BriefingPurpose {
+  return BRIEFING_PURPOSES.includes(value ?? fallback) ? (value ?? fallback) : fallback;
+}
+
+function defaultPresentationForPurpose(input: {
+  purpose: BriefingPurpose;
+  style: BriefingProfileStyle;
+  audience: BriefingAudience;
+}): BriefingPresentationConfig {
+  if (input.purpose === "daily_prep") {
+    return {
+      hierarchy: "daily_prep_v1",
+      tone: input.style === "compact" ? "compact_direct" : "human_firm",
+      maxPrimaryCommitments: 3,
+      weatherMode: input.audience === "team" ? "hidden" : "inline",
+      workflowMode: "if_priority",
+      emailMode: "if_critical",
+      approvalMode: "if_urgent",
+      watchpointMode: "operational_risk_first",
+      compactWhenFieldMode: true,
+    };
+  }
+
+  return {
+    hierarchy: "daily_prep_v1",
+    tone: input.style === "compact" ? "compact_direct" : "human_light",
+    maxPrimaryCommitments: input.audience === "team" ? 4 : 3,
+    weatherMode: input.audience === "team" ? "hidden" : "inline",
+    workflowMode: "normal",
+    emailMode: "normal",
+    approvalMode: "normal",
+    watchpointMode: "balanced",
+    compactWhenFieldMode: false,
+  };
+}
+
+function normalizePositiveInteger(value: number | undefined, fallback: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return fallback;
+  }
+  const normalized = Math.max(1, Math.floor(value));
+  return normalized;
+}
+
+function normalizePresentation(
+  value: BriefingPresentationConfig | undefined,
+  defaults: BriefingPresentationConfig,
+): BriefingPresentationConfig {
+  return {
+    hierarchy: value?.hierarchy === "daily_prep_v1" ? value.hierarchy : defaults.hierarchy,
+    tone: value?.tone === "human_firm" || value?.tone === "human_light" || value?.tone === "compact_direct"
+      ? value.tone
+      : defaults.tone,
+    maxPrimaryCommitments: normalizePositiveInteger(value?.maxPrimaryCommitments, defaults.maxPrimaryCommitments ?? 3),
+    weatherMode: value?.weatherMode === "inline" || value?.weatherMode === "field_only" || value?.weatherMode === "hidden"
+      ? value.weatherMode
+      : defaults.weatherMode,
+    workflowMode: value?.workflowMode === "hidden" || value?.workflowMode === "if_priority" || value?.workflowMode === "normal"
+      ? value.workflowMode
+      : defaults.workflowMode,
+    emailMode: value?.emailMode === "hidden" || value?.emailMode === "if_critical" || value?.emailMode === "normal"
+      ? value.emailMode
+      : defaults.emailMode,
+    approvalMode: value?.approvalMode === "hidden" || value?.approvalMode === "if_urgent" || value?.approvalMode === "normal"
+      ? value.approvalMode
+      : defaults.approvalMode,
+    watchpointMode: value?.watchpointMode === "operational_risk_first" || value?.watchpointMode === "balanced"
+      ? value.watchpointMode
+      : defaults.watchpointMode,
+    compactWhenFieldMode: typeof value?.compactWhenFieldMode === "boolean"
+      ? value.compactWhenFieldMode
+      : defaults.compactWhenFieldMode,
+  };
+}
+
 function normalizeDeliveryChannel(
   value: BriefingDeliveryChannel | undefined,
   fallback: BriefingDeliveryChannel,
@@ -188,6 +270,8 @@ export function createDefaultBriefingProfile(input: {
   name?: string;
 }): BriefingProfile {
   const audience = input.audience ?? "self";
+  const style = input.style ?? "executive";
+  const purpose = defaultPurposeForAudience(audience);
   const name = inferBriefingName({
     time: input.time,
     audience,
@@ -205,8 +289,14 @@ export function createDefaultBriefingProfile(input: {
     time: normalizeTime(input.time, "06:30"),
     weekdays: [...DEFAULT_BRIEFING_WEEKDAYS],
     timezone: input.timezone,
-    style: input.style ?? "executive",
+    style,
     sections: fallbackSectionsForAudience(audience),
+    purpose,
+    presentation: defaultPresentationForPurpose({
+      purpose,
+      style,
+      audience,
+    }),
   };
 }
 
@@ -216,6 +306,8 @@ export function normalizeBriefingProfile(
 ): BriefingProfile {
   const audience = normalizeAudience(value?.audience, "self");
   const time = normalizeTime(value?.time, defaults.time);
+  const style = normalizeStyle(value?.style, defaults.style);
+  const purpose = normalizePurpose(value?.purpose, defaultPurposeForAudience(audience));
   const name = inferBriefingName({
     time,
     audience,
@@ -234,8 +326,17 @@ export function normalizeBriefingProfile(
     time,
     weekdays: normalizeWeekdays(value?.weekdays),
     ...(normalizeOptionalString(value?.timezone) ? { timezone: normalizeOptionalString(value?.timezone) } : { timezone: defaults.timezone }),
-    style: normalizeStyle(value?.style, defaults.style),
+    style,
     sections: normalizeSections(value?.sections, fallbackSectionsForAudience(audience)),
+    purpose,
+    presentation: normalizePresentation(
+      value?.presentation,
+      defaultPresentationForPurpose({
+        purpose,
+        style,
+        audience,
+      }),
+    ),
   };
 }
 
@@ -357,6 +458,7 @@ export function formatBriefingProfileSummary(profile: BriefingProfile): string {
     `${profile.deliveryChannel}/${profile.audience}`,
     formatBriefingWeekdays(profile.weekdays),
     profile.style,
+    profile.purpose ?? defaultPurposeForAudience(profile.audience),
   ].join(" | ");
 }
 

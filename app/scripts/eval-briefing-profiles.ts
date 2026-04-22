@@ -162,6 +162,16 @@ async function run() {
       detail: JSON.stringify(updated.briefingProfiles, null, 2),
     });
     results.push({
+      name: "briefing_profiles_assign_default_purpose_and_presentation",
+      passed:
+        legacyProfiles.every((item) => item.purpose && item.presentation?.hierarchy === "daily_prep_v1")
+        && (updated.briefingProfiles ?? []).every((item) => item.purpose && item.presentation?.maxPrimaryCommitments),
+      detail: JSON.stringify({
+        legacyProfiles,
+        updatedBriefingProfiles: updated.briefingProfiles,
+      }, null, 2),
+    });
+    results.push({
       name: "briefing_profile_service_matches_custom_named_profile",
       passed: matched?.id === "team-lunch",
       detail: JSON.stringify(matched, null, 2),
