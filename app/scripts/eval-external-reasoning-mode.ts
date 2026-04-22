@@ -132,6 +132,26 @@ function run() {
   });
 
   results.push({
+    name: "pre_local_bypass_keeps_briefing_schedule_update_local",
+    passed: shouldBypassPreLocalExternalReasoningForPrompt(
+      "mude o briefing da manhã para 6h",
+      buildIntent({
+        activeUserPrompt: "mude o briefing da manhã para 6h",
+        orchestration: buildOrchestration({
+          route: {
+            actionMode: "communicate",
+            confidence: 0.9,
+          },
+          policy: {
+            riskLevel: "low",
+            autonomyLevel: "autonomous_low_risk",
+          },
+        }),
+      }),
+    ),
+  });
+
+  results.push({
     name: "pre_local_bypass_keeps_greeting_local",
     passed: shouldBypassPreLocalExternalReasoningForPrompt(
       "oi atlas",

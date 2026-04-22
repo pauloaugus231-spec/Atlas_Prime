@@ -2,6 +2,7 @@ import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { Logger } from "../types/logger.js";
+import type { BriefingProfile } from "../types/briefing-profile.js";
 import type {
   CreatePersonalOperationalMemoryItemInput,
   PersonalOperationalProfile,
@@ -26,6 +27,7 @@ import type {
   OperationalStateSignal,
   UpdateOperationalStateInput,
 } from "../types/operational-state.js";
+import { syncBriefingProfilesWithLegacyProfile } from "./briefing-profile-helpers.js";
 
 const DEFAULT_PROFILE: PersonalOperationalProfile = {
   displayName: "Operador",
@@ -40,6 +42,8 @@ const DEFAULT_PROFILE: PersonalOperationalProfile = {
   workCalendarAliases: ["abordagem"],
   responseStyle: "direto e objetivo",
   briefingPreference: "executivo",
+  morningBriefTime: "06:30",
+  briefingProfiles: [],
   detailLevel: "resumo",
   tonePreference: "executivo",
   defaultOperationalMode: "normal",
@@ -150,6 +154,38 @@ function normalizeBriefingPreference(
     : value === "executivo"
       ? value
       : fallback;
+}
+
+function normalizeMorningBriefTime(
+  value: string | undefined,
+  fallback: string,
+): string {
+  const normalized = normalizeOptionalString(value);
+  if (!normalized) {
+    return fallback;
+  }
+
+  const match = normalized.match(/^(\d{1,2}):(\d{2})$/);
+  if (!match?.[1] || !match[2]) {
+    return fallback;
+  }
+
+  const hour = Number.parseInt(match[1], 10);
+  const minute = Number.parseInt(match[2], 10);
+  if (!Number.isFinite(hour) || !Number.isFinite(minute) || hour < 0 || hour > 23 || minute < 0 || minute > 59) {
+    return fallback;
+  }
+
+  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+}
+
+function normalizeBriefingProfiles(
+  profile: Pick<
+    PersonalOperationalProfile,
+    "briefingProfiles" | "morningBriefTime" | "timezone" | "briefingPreference" | "detailLevel" | "preferredAlertChannel"
+  >,
+): BriefingProfile[] {
+  return syncBriefingProfilesWithLegacyProfile(profile);
 }
 
 function normalizeDetailLevel(
@@ -462,6 +498,15 @@ function mergeProfileWithItems(
     priorityAreas: normalizeStringList(profile.priorityAreas, DEFAULT_PROFILE.priorityAreas),
     responseStyle: normalizeResponseStyle(profile.responseStyle, DEFAULT_PROFILE.responseStyle),
     briefingPreference: normalizeBriefingPreference(profile.briefingPreference, DEFAULT_PROFILE.briefingPreference),
+    morningBriefTime: normalizeMorningBriefTime(profile.morningBriefTime, DEFAULT_PROFILE.morningBriefTime ?? "06:30"),
+    briefingProfiles: normalizeBriefingProfiles({
+      briefingProfiles: profile.briefingProfiles,
+      morningBriefTime: profile.morningBriefTime,
+      timezone: profile.timezone,
+      briefingPreference: profile.briefingPreference,
+      detailLevel: profile.detailLevel,
+      preferredAlertChannel: profile.preferredAlertChannel,
+    }),
     detailLevel: normalizeDetailLevel(profile.detailLevel, DEFAULT_PROFILE.detailLevel),
     tonePreference: normalizeTonePreference(profile.tonePreference, DEFAULT_PROFILE.tonePreference),
     defaultOperationalMode: normalizeOperationalMode(profile.defaultOperationalMode, DEFAULT_PROFILE.defaultOperationalMode),
@@ -590,6 +635,15 @@ export class PersonalOperationalMemoryStore {
       workCalendarAliases: normalizeStringList(input.workCalendarAliases, current.workCalendarAliases),
       responseStyle: normalizeResponseStyle(input.responseStyle, current.responseStyle),
       briefingPreference: normalizeBriefingPreference(input.briefingPreference, current.briefingPreference),
+      morningBriefTime: normalizeMorningBriefTime(input.morningBriefTime, current.morningBriefTime ?? DEFAULT_PROFILE.morningBriefTime ?? "06:30"),
+      briefingProfiles: normalizeBriefingProfiles({
+        briefingProfiles: input.briefingProfiles ?? current.briefingProfiles,
+        morningBriefTime: normalizeMorningBriefTime(input.morningBriefTime, current.morningBriefTime ?? DEFAULT_PROFILE.morningBriefTime ?? "06:30"),
+        timezone: normalizeString(input.timezone, current.timezone),
+        briefingPreference: normalizeBriefingPreference(input.briefingPreference, current.briefingPreference),
+        detailLevel: normalizeDetailLevel(input.detailLevel, current.detailLevel),
+        preferredAlertChannel: normalizeOptionalString(input.preferredAlertChannel) ?? current.preferredAlertChannel,
+      }),
       detailLevel: normalizeDetailLevel(input.detailLevel, current.detailLevel),
       tonePreference: normalizeTonePreference(input.tonePreference, current.tonePreference),
       defaultOperationalMode: normalizeOperationalMode(input.defaultOperationalMode, current.defaultOperationalMode),
@@ -1220,6 +1274,15 @@ export class PersonalOperationalMemoryStore {
         workCalendarAliases: normalizeStringList(parsed.workCalendarAliases, DEFAULT_PROFILE.workCalendarAliases),
         responseStyle: normalizeResponseStyle(parsed.responseStyle, DEFAULT_PROFILE.responseStyle),
         briefingPreference: normalizeBriefingPreference(parsed.briefingPreference, DEFAULT_PROFILE.briefingPreference),
+        morningBriefTime: normalizeMorningBriefTime(parsed.morningBriefTime, DEFAULT_PROFILE.morningBriefTime ?? "06:30"),
+        briefingProfiles: normalizeBriefingProfiles({
+          briefingProfiles: parsed.briefingProfiles,
+          morningBriefTime: normalizeMorningBriefTime(parsed.morningBriefTime, DEFAULT_PROFILE.morningBriefTime ?? "06:30"),
+          timezone: normalizeString(parsed.timezone, DEFAULT_PROFILE.timezone),
+          briefingPreference: normalizeBriefingPreference(parsed.briefingPreference, DEFAULT_PROFILE.briefingPreference),
+          detailLevel: normalizeDetailLevel(parsed.detailLevel, DEFAULT_PROFILE.detailLevel),
+          preferredAlertChannel: normalizeOptionalString(parsed.preferredAlertChannel) ?? DEFAULT_PROFILE.preferredAlertChannel,
+        }),
         detailLevel: normalizeDetailLevel(parsed.detailLevel, DEFAULT_PROFILE.detailLevel),
         tonePreference: normalizeTonePreference(parsed.tonePreference, DEFAULT_PROFILE.tonePreference),
         defaultOperationalMode: normalizeOperationalMode(

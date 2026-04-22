@@ -1,9 +1,11 @@
+import { randomUUID } from "node:crypto";
 import { normalizeEmailAnalysisText } from "../integrations/email/email-analysis.js";
 import type {
   PersonalOperationalMemoryItemKind,
   PersonalOperationalProfile,
   UpdatePersonalOperationalProfileInput,
 } from "../types/personal-operational-memory.js";
+import type { BriefingProfile, BriefingSectionKey } from "../types/briefing-profile.js";
 import type { CreateLearnedPreferenceInput } from "../types/learned-preferences.js";
 import type { LearnedPreference } from "../types/learned-preferences.js";
 import {
@@ -14,6 +16,14 @@ import {
 import { looksLikeLowFrictionReadPrompt } from "./clarification-rules.js";
 import { interpretConversationTurn } from "./conversation-interpreter.js";
 import { isGoogleEventCreatePrompt, isGoogleTaskCreatePrompt } from "./google-draft-utils.js";
+import {
+  DEFAULT_BRIEFING_PROFILE_ID,
+  findDefaultBriefingProfile,
+  findMatchingBriefingProfile,
+  inferBriefingName,
+  syncBriefingProfilesWithLegacyProfile,
+  upsertBriefingProfile,
+} from "./briefing-profile-helpers.js";
 import type { IntentResolution } from "./intent-router.js";
 import type { ReasoningTrace } from "./reasoning-engine.js";
 import type { WebResearchMode } from "./web-research.js";
@@ -1158,6 +1168,18 @@ export function isPersonalOperationalProfileUpdatePrompt(prompt: string): boolea
   return includesAny(normalized, [
     "defina meu estilo de resposta",
     "quero briefing mais",
+    "horario do briefing",
+    "horário do briefing",
+    "briefing as",
+    "briefing às",
+    "briefing da manha as",
+    "briefing da manhã às",
+    "briefing matinal as",
+    "briefing matinal às",
+    "briefing passou de",
+    "briefing passa para",
+    "briefing agora as",
+    "briefing agora às",
     "salve que em plantao",
     "salve que em plantão",
     "salve que quando eu",
@@ -1332,6 +1354,263 @@ export function inferProfileResponseLength(
   return undefined;
 }
 
+function parseAllBriefingTimesFromPrompt(prompt: string): string[] {
+  const normalized = normalizeEmailAnalysisText(prompt);
+  if (!normalized.includes("briefing")) {
+    return [];
+  }
+
+  const values = new Set<string>();
+  for (const match of prompt.matchAll(/\b(?:às|as|para)?\s*(\d{1,2})(?:(?::|h)(\d{2}))?h?\b/gi)) {
+    const hour = Number.parseInt(match[1] ?? "", 10);
+    const minute = match[2] ? Number.parseInt(match[2], 10) : 0;
+    if (!Number.isFinite(hour) || !Number.isFinite(minute) || hour < 0 || hour > 23 || minute < 0 || minute > 59) {
+      continue;
+    }
+    values.add(`${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`);
+  }
+  return [...values];
+}
+
+function parseBriefingTimeFromPrompt(prompt: string): string | undefined {
+  const times = parseAllBriefingTimesFromPrompt(prompt);
+  return times.length > 0 ? times[times.length - 1] : undefined;
+}
+
+function extractBriefingNameFromPrompt(prompt: string): string | undefined {
+  const patterns = [
+    /(?:chamado|chamada|chame de|se chama|nome(?: do briefing)?(?: e| é)?)\s+["“]?(.+?)["”]?(?=(?:\s+com\s+|\s+às?\s+|[?.!,;:]|$))/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = prompt.match(pattern);
+    if (!match) {
+      continue;
+    }
+    const candidate = (match[2] ?? match[1] ?? "").trim();
+    if (candidate) {
+      return candidate;
+    }
+  }
+  return undefined;
+}
+
+function detectBriefingAudience(prompt: string, fallback: BriefingProfile["audience"]): BriefingProfile["audience"] {
+  const normalized = normalizeEmailAnalysisText(prompt);
+  if (includesAny(normalized, ["equipe", "time", "grupo"])) {
+    return "team";
+  }
+  return fallback;
+}
+
+function detectBriefingChannel(prompt: string, fallback: BriefingProfile["deliveryChannel"]): BriefingProfile["deliveryChannel"] {
+  const normalized = normalizeEmailAnalysisText(prompt);
+  if (normalized.includes("whatsapp")) {
+    return "whatsapp";
+  }
+  if (normalized.includes("email")) {
+    return "email";
+  }
+  if (normalized.includes("telegram")) {
+    return "telegram";
+  }
+  return fallback;
+}
+
+function detectBriefingWeekdays(prompt: string, fallback: number[]): number[] {
+  const normalized = normalizeEmailAnalysisText(prompt);
+  if (includesAny(normalized, ["todos os dias", "todo dia", "diario", "diário"])) {
+    return [0, 1, 2, 3, 4, 5, 6];
+  }
+  if (includesAny(normalized, ["dias uteis", "dias úteis", "semana"])) {
+    return [1, 2, 3, 4, 5];
+  }
+  return fallback;
+}
+
+function detectBriefingStyle(
+  prompt: string,
+  fallback: BriefingProfile["style"],
+): BriefingProfile["style"] {
+  const normalized = normalizeEmailAnalysisText(prompt);
+  if (includesAny(normalized, ["briefing curto", "mais curto", "compacto"])) {
+    return "compact";
+  }
+  if (includesAny(normalized, ["briefing detalhado", "mais detalhado"])) {
+    return "detailed";
+  }
+  if (includesAny(normalized, ["executivo", "direto"])) {
+    return "executive";
+  }
+  return fallback;
+}
+
+function detectBriefingSections(prompt: string): BriefingSectionKey[] {
+  const normalized = normalizeEmailAnalysisText(prompt);
+  const sections: BriefingSectionKey[] = [];
+  const sectionMap: Array<[BriefingSectionKey, string[]]> = [
+    ["weather", ["clima", "tempo"]],
+    ["focus", ["foco", "visao do dia", "visão do dia", "atencao principal", "atenção principal"]],
+    ["next_action", ["proxima acao", "próxima ação", "proximo passo", "próximo passo", "acao do dia", "ação do dia"]],
+    ["autonomy", ["pontos para revisar", "alertas", "revisar"]],
+    ["goals", ["objetivos", "metas"]],
+    ["agenda", ["agenda", "eventos", "compromissos"]],
+    ["emails", ["email", "emails", "inbox"]],
+    ["tasks", ["tarefas", "task", "to do", "todo"]],
+    ["approvals", ["aprovacoes", "aprovações", "aprovacao", "aprovação"]],
+    ["workflows", ["workflow", "workflows", "fluxos"]],
+    ["mobility", ["deslocamento", "rua", "mobilidade", "transito", "trânsito"]],
+    ["motivation", ["motivacao", "motivação", "frase final", "mensagem final"]],
+  ];
+
+  for (const [section, tokens] of sectionMap) {
+    if (includesAny(normalized, tokens)) {
+      sections.push(section);
+    }
+  }
+  return sections;
+}
+
+function buildBriefingProfileUpdateFromPrompt(
+  prompt: string,
+  current: PersonalOperationalProfile,
+): { briefingProfiles: BriefingProfile[]; changeLabels: string[] } | null {
+  const normalized = normalizeEmailAnalysisText(prompt);
+  if (!normalized.includes("briefing")) {
+    return null;
+  }
+
+  const profiles = syncBriefingProfilesWithLegacyProfile(current);
+  const defaultProfile = findDefaultBriefingProfile(profiles) ?? profiles[0];
+  if (!defaultProfile) {
+    return null;
+  }
+
+  const wantsMultiple = includesAny(normalized, [
+    "dois briefings",
+    "2 briefings",
+    "mais de um briefing",
+    "outro briefing",
+    "mais um briefing",
+    "segundo briefing",
+  ]);
+  const times = parseAllBriefingTimesFromPrompt(prompt);
+  const style = detectBriefingStyle(prompt, defaultProfile.style);
+  const sectionIntent = includesAny(normalized, [" com ", "inclua", "inclui", "so ", "só ", "apenas", "sem ", "tire ", "remova "]);
+  const sectionMentions = sectionIntent ? detectBriefingSections(prompt) : [];
+  const audience = detectBriefingAudience(prompt, defaultProfile.audience);
+  const deliveryChannel = detectBriefingChannel(prompt, defaultProfile.deliveryChannel);
+  const weekdays = detectBriefingWeekdays(prompt, defaultProfile.weekdays);
+  const explicitName = extractBriefingNameFromPrompt(prompt);
+  const wantsOnlySections = includesAny(normalized, ["so ", "só ", "apenas"]);
+  const wantsAddSections = includesAny(normalized, ["inclua", "inclui", "com "]);
+  const wantsRemoveSections = includesAny(normalized, ["sem ", "tire ", "tirar ", "remova ", "remover "]);
+  const matchedProfile = profiles.find((item) => {
+    const candidates = [item.name, ...item.aliases]
+      .map((entry) => normalizeEmailAnalysisText(entry))
+      .filter((entry) => entry && entry !== "briefing");
+    return candidates.some((entry) => entry && normalized.includes(entry));
+  }) ?? (normalized.includes("equipe") ? profiles.find((item) => item.audience === "team") : undefined);
+
+  if (wantsMultiple && times.length >= 2) {
+    const [firstTime, ...otherTimes] = times;
+    let nextProfiles = profiles.map((item) => item.id === defaultProfile.id
+      ? {
+          ...item,
+          time: firstTime,
+          style,
+          weekdays,
+          deliveryChannel,
+        }
+      : item);
+
+    for (const time of otherTimes) {
+      const name = inferBriefingName({ time, audience, explicitName: otherTimes.length === 1 ? explicitName : undefined });
+      nextProfiles = upsertBriefingProfile(nextProfiles, {
+        id: randomUUID(),
+        name,
+        aliases: [name],
+        enabled: true,
+        deliveryMode: "both",
+        deliveryChannel,
+        audience,
+        targetRecipientIds: [],
+        time,
+        weekdays,
+        timezone: current.timezone,
+        style,
+        sections: sectionMentions.length > 0 ? sectionMentions : defaultProfile.sections,
+      });
+    }
+
+    return {
+      briefingProfiles: nextProfiles,
+      changeLabels: [
+        `briefings automáticos: ${times.join(" | ")}`,
+      ],
+    };
+  }
+
+  if (
+    !matchedProfile
+    && (
+      wantsMultiple
+      || includesAny(normalized, ["novo briefing", "crie um briefing", "briefing da equipe", "briefing da tarde", "briefing da noite", "briefing do almoco", "briefing do almoço"])
+    )
+  ) {
+    const time = times[0] ?? defaultProfile.time;
+    const name = inferBriefingName({ time, audience, explicitName });
+    const next = upsertBriefingProfile(profiles, {
+      id: randomUUID(),
+      name,
+      aliases: [name],
+      enabled: true,
+      deliveryMode: "both",
+      deliveryChannel,
+      audience,
+      targetRecipientIds: [],
+      time,
+      weekdays,
+      timezone: current.timezone,
+      style,
+      sections: sectionMentions.length > 0 ? sectionMentions : defaultProfile.sections,
+    });
+    return {
+      briefingProfiles: next,
+      changeLabels: [`novo briefing: ${name} | ${time} | ${deliveryChannel}/${audience}`],
+    };
+  }
+
+  const target = matchedProfile ?? defaultProfile;
+  const updated: BriefingProfile = {
+    ...target,
+    ...(times[0] ? { time: times[0] } : {}),
+    weekdays,
+    deliveryChannel,
+    audience,
+    style,
+    ...(explicitName ? { name: explicitName, aliases: [explicitName, ...target.aliases] } : {}),
+  };
+
+  if (sectionMentions.length > 0) {
+    if (wantsOnlySections) {
+      updated.sections = sectionMentions;
+    } else if (wantsRemoveSections) {
+      updated.sections = target.sections.filter((item) => !sectionMentions.includes(item));
+    } else if (wantsAddSections || normalized.includes("briefing com")) {
+      updated.sections = uniqueAppend(target.sections, sectionMentions) as BriefingSectionKey[];
+    }
+  }
+
+  return {
+    briefingProfiles: upsertBriefingProfile(profiles, updated),
+    changeLabels: [
+      `briefing configurado: ${updated.name} | ${updated.time} | ${updated.deliveryChannel}/${updated.audience}`,
+      ...(sectionMentions.length > 0 ? [`seções: ${updated.sections.join(", ")}`] : []),
+    ],
+  };
+}
+
 export function extractPersonalOperationalProfileUpdate(
   prompt: string,
   current: PersonalOperationalProfile,
@@ -1463,6 +1742,18 @@ export function extractPersonalOperationalProfileUpdate(
     changeLabels.push("perfil: executivo");
   }
 
+  const morningBriefTime = parseBriefingTimeFromPrompt(prompt);
+  if (morningBriefTime) {
+    profile.morningBriefTime = morningBriefTime;
+    changeLabels.push(`horário do briefing automático: ${morningBriefTime}`);
+  }
+
+  const briefingProfileUpdate = buildBriefingProfileUpdateFromPrompt(prompt, current);
+  if (briefingProfileUpdate) {
+    profile.briefingProfiles = briefingProfileUpdate.briefingProfiles;
+    changeLabels.push(...briefingProfileUpdate.changeLabels);
+  }
+
   if (normalized.includes("mais detalhado") || normalized.includes("detalhado")) {
     profile.detailLevel = profile.detailLevel ?? "detalhado";
   }
@@ -1572,6 +1863,22 @@ export function removeFromPersonalOperationalProfile(
   const normalizedQuery = normalizeEmailAnalysisText(query);
   const removedLabels: string[] = [];
   const profileUpdate: UpdatePersonalOperationalProfileInput = {};
+  const briefingProfiles = syncBriefingProfilesWithLegacyProfile(profile);
+  const matchedBriefing = briefingProfiles.find((item) => {
+    const names = [item.name, ...item.aliases]
+      .map((entry) => normalizeEmailAnalysisText(entry))
+      .filter((entry) => entry && entry !== "briefing");
+    return names.some((entry) => entry && normalizedQuery.includes(entry));
+  }) ?? (normalizedQuery.includes("briefing") ? findMatchingBriefingProfile(briefingProfiles, query) : undefined);
+  if (matchedBriefing) {
+    if (matchedBriefing.id === DEFAULT_BRIEFING_PROFILE_ID) {
+      profileUpdate.briefingProfiles = briefingProfiles.map((item) => item.id === matchedBriefing.id ? { ...item, enabled: false } : item);
+      removedLabels.push(`briefing ${matchedBriefing.name} desativado`);
+    } else {
+      profileUpdate.briefingProfiles = briefingProfiles.filter((item) => item.id !== matchedBriefing.id);
+      removedLabels.push(`briefing ${matchedBriefing.name}`);
+    }
+  }
 
   const resetStyle = normalizedQuery.includes("estilo")
     || normalizeEmailAnalysisText(profile.responseStyle).includes(normalizedQuery);
@@ -1587,9 +1894,14 @@ export function removeFromPersonalOperationalProfile(
     removedLabels.push("tom personalizado");
   }
 
-  if (normalizedQuery.includes("briefing")) {
+  if (normalizedQuery.includes("briefing") && !profileUpdate.briefingProfiles) {
     profileUpdate.briefingPreference = "executivo";
     removedLabels.push("preferência de briefing");
+  }
+
+  if (includesAny(normalizedQuery, ["horario do briefing", "horário do briefing", "hora do briefing"])) {
+    profileUpdate.morningBriefTime = "06:30";
+    removedLabels.push("horário do briefing automático");
   }
 
   if (normalizedQuery.includes("detalhe")) {

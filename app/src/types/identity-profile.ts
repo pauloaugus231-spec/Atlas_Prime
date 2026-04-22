@@ -1,3 +1,5 @@
+import type { BriefingProfile } from "./briefing-profile.js";
+
 export interface IdentityProfile {
   displayName: string;
   primaryRole: string;
@@ -18,6 +20,8 @@ export interface IdentityProfile {
   workCalendarAliases: string[];
   responseStyle: string;
   briefingPreference: "curto" | "executivo" | "detalhado";
+  morningBriefTime?: string;
+  briefingProfiles?: BriefingProfile[];
   detailLevel: "resumo" | "equilibrado" | "detalhado";
   tonePreference: "objetivo" | "humano" | "firme" | "acolhedor" | "executivo";
   defaultOperationalMode: "normal" | "field";
@@ -51,6 +55,8 @@ export interface UpdateIdentityProfileInput {
   workCalendarAliases?: string[];
   responseStyle?: string;
   briefingPreference?: IdentityProfile["briefingPreference"];
+  morningBriefTime?: string;
+  briefingProfiles?: BriefingProfile[];
   detailLevel?: IdentityProfile["detailLevel"];
   tonePreference?: IdentityProfile["tonePreference"];
   defaultOperationalMode?: IdentityProfile["defaultOperationalMode"];

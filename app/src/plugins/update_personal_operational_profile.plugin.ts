@@ -16,6 +16,8 @@ interface UpdatePersonalOperationalProfileParameters {
   defaultAgendaScope?: PersonalOperationalProfile["defaultAgendaScope"];
   responseStyle?: string;
   briefingPreference?: PersonalOperationalProfile["briefingPreference"];
+  morningBriefTime?: string;
+  briefingProfiles?: PersonalOperationalProfile["briefingProfiles"];
   detailLevel?: PersonalOperationalProfile["detailLevel"];
   tonePreference?: PersonalOperationalProfile["tonePreference"];
   defaultOperationalMode?: PersonalOperationalProfile["defaultOperationalMode"];
@@ -98,6 +100,76 @@ export default defineToolPlugin<UpdatePersonalOperationalProfileParameters>({
         type: "string",
         enum: ["curto", "executivo", "detalhado"],
       },
+      morningBriefTime: {
+        type: "string",
+        pattern: "^\\d{2}:\\d{2}$",
+      },
+      briefingProfiles: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            id: { type: "string" },
+            name: { type: "string" },
+            aliases: {
+              type: "array",
+              items: { type: "string" },
+            },
+            enabled: { type: "boolean" },
+            deliveryMode: {
+              type: "string",
+              enum: ["scheduled", "manual", "both"],
+            },
+            deliveryChannel: {
+              type: "string",
+              enum: ["telegram", "whatsapp", "email"],
+            },
+            audience: {
+              type: "string",
+              enum: ["self", "team"],
+            },
+            targetRecipientIds: {
+              type: "array",
+              items: { type: "string" },
+            },
+            targetLabel: { type: "string" },
+            time: {
+              type: "string",
+              pattern: "^\\d{2}:\\d{2}$",
+            },
+            weekdays: {
+              type: "array",
+              items: { type: "integer", minimum: 0, maximum: 6 },
+            },
+            timezone: { type: "string" },
+            style: {
+              type: "string",
+              enum: ["auto", "compact", "executive", "detailed"],
+            },
+            sections: {
+              type: "array",
+              items: {
+                type: "string",
+                enum: [
+                  "weather",
+                  "focus",
+                  "next_action",
+                  "autonomy",
+                  "goals",
+                  "agenda",
+                  "emails",
+                  "tasks",
+                  "approvals",
+                  "workflows",
+                  "mobility",
+                  "motivation",
+                ],
+              },
+            },
+          },
+          additionalProperties: false,
+        },
+      },
       detailLevel: {
         type: "string",
         enum: ["resumo", "equilibrado", "detalhado"],
@@ -169,6 +241,8 @@ export default defineToolPlugin<UpdatePersonalOperationalProfileParameters>({
       defaultAgendaScope: parameters.defaultAgendaScope,
       responseStyle: parameters.responseStyle,
       briefingPreference: parameters.briefingPreference,
+      morningBriefTime: parameters.morningBriefTime,
+      briefingProfiles: parameters.briefingProfiles,
       detailLevel: parameters.detailLevel,
       tonePreference: parameters.tonePreference,
       defaultOperationalMode: parameters.defaultOperationalMode,

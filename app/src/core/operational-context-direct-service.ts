@@ -14,7 +14,7 @@ import type {
 import type { OperationalState } from "../types/operational-state.js";
 import type { UpdateUserPreferencesInput, UserPreferences } from "../types/user-preferences.js";
 import type { ActiveGoal } from "./goal-store.js";
-import { BriefRenderer } from "./brief-renderer.js";
+import type { BriefingProfile } from "../types/briefing-profile.js";
 
 interface GoogleWorkspaceStatusLike {
   ready: boolean;
@@ -36,6 +36,15 @@ interface OperationalMemoryLike {
 
 interface PersonalOsLike {
   getExecutiveMorningBrief: () => Promise<ExecutiveMorningBrief>;
+}
+
+interface BriefingProfilesLike {
+  resolveProfileForPrompt: (prompt: string) => BriefingProfile | undefined;
+  render: (input?: { profileId?: string; prompt?: string }) => Promise<{
+    profile: BriefingProfile;
+    brief: ExecutiveMorningBrief;
+    reply: string;
+  }>;
 }
 
 interface PreferencesLike {
@@ -154,6 +163,7 @@ export interface OperationalContextDirectServiceDependencies {
   googleWorkspace: GoogleWorkspaceLike;
   memory: OperationalMemoryLike;
   personalOs: PersonalOsLike;
+  briefingProfiles: BriefingProfilesLike;
   preferences: PreferencesLike;
   personalMemory: PersonalMemoryLike;
   goalStore: GoalStoreLike;
@@ -186,8 +196,6 @@ function normalizePrompt(value: string): string {
 function includesAny(value: string, tokens: string[]): boolean {
   return tokens.some((token) => value.includes(token));
 }
-
-const morningBriefRenderer = new BriefRenderer();
 
 function isGoalListPrompt(prompt: string): boolean {
   const normalized = normalizePrompt(prompt);
@@ -392,6 +400,8 @@ function buildProfileUpdateToolArguments(profile: UpdatePersonalOperationalProfi
     ...(profile.defaultAgendaScope ? { defaultAgendaScope: profile.defaultAgendaScope } : {}),
     ...(profile.responseStyle ? { responseStyle: profile.responseStyle } : {}),
     ...(profile.briefingPreference ? { briefingPreference: profile.briefingPreference } : {}),
+    ...(profile.morningBriefTime ? { morningBriefTime: profile.morningBriefTime } : {}),
+    ...(profile.briefingProfiles ? { briefingProfiles: profile.briefingProfiles } : {}),
     ...(profile.detailLevel ? { detailLevel: profile.detailLevel } : {}),
     ...(profile.tonePreference ? { tonePreference: profile.tonePreference } : {}),
     ...(profile.defaultOperationalMode ? { defaultOperationalMode: profile.defaultOperationalMode } : {}),
@@ -460,7 +470,7 @@ export class OperationalContextDirectService {
   }
 
   async tryRunMorningBrief(input: OperationalContextDirectInput): Promise<AgentRunResult | null> {
-    if (!this.deps.helpers.isMorningBriefPrompt(input.userPrompt)) {
+    if (!this.deps.helpers.isMorningBriefPrompt(input.userPrompt) && !this.deps.briefingProfiles.resolveProfileForPrompt(input.userPrompt)) {
       return null;
     }
 
@@ -469,24 +479,24 @@ export class OperationalContextDirectService {
       domain: input.orchestration.route.primaryDomain,
     });
 
-    const brief = await this.deps.personalOs.getExecutiveMorningBrief();
+    const rendered = await this.deps.briefingProfiles.render({ prompt: input.userPrompt });
     return {
       requestId: input.requestId,
-      reply: brief.overloadLevel === "pesado"
-        ? morningBriefRenderer.renderCompact(brief)
-        : morningBriefRenderer.render(brief),
+      reply: rendered.reply,
       messages: this.deps.buildBaseMessages(input.userPrompt, input.orchestration, input.preferences),
       toolExecutions: [
         {
           toolName: "morning_brief",
           resultPreview: JSON.stringify(
             {
-              events: brief.events.length,
-              tasks: brief.taskBuckets.actionableCount,
-              emails: brief.emails.length,
-              approvals: brief.approvals.length,
-              workflows: brief.workflows.length,
-              founderSections: brief.founderSnapshot.sections.length,
+              profileId: rendered.profile.id,
+              profileName: rendered.profile.name,
+              events: rendered.brief.events.length,
+              tasks: rendered.brief.taskBuckets.actionableCount,
+              emails: rendered.brief.emails.length,
+              approvals: rendered.brief.approvals.length,
+              workflows: rendered.brief.workflows.length,
+              founderSections: rendered.brief.founderSnapshot.sections.length,
             },
             null,
             2,

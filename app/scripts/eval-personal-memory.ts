@@ -9,6 +9,7 @@ import deletePersonalMemoryItemPlugin from "../src/plugins/delete_personal_memor
 import getPersonalOperationalProfilePlugin from "../src/plugins/get_personal_operational_profile.plugin.js";
 import updatePersonalOperationalProfilePlugin from "../src/plugins/update_personal_operational_profile.plugin.js";
 import { PersonalOperationalMemoryStore } from "../src/core/personal-operational-memory.js";
+import { extractPersonalOperationalProfileUpdate } from "../src/core/generic-prompt-helpers.js";
 import type { Logger } from "../src/types/logger.js";
 import type { ToolExecutionContext } from "../src/types/plugin.js";
 
@@ -108,6 +109,7 @@ async function run() {
       {
         responseStyle: "direto e objetivo",
         briefingPreference: "curto",
+        morningBriefTime: "06:00",
         detailLevel: "resumo",
         tonePreference: "objetivo",
         defaultOperationalMode: "field",
@@ -122,8 +124,34 @@ async function run() {
       passed:
         updatedProfile.ok === true
         && rawUpdatedProfile?.briefingPreference === "curto"
+        && rawUpdatedProfile?.morningBriefTime === "06:00"
+        && Array.isArray(rawUpdatedProfile?.briefingProfiles)
+        && (rawUpdatedProfile?.briefingProfiles as Array<Record<string, unknown>>).length >= 1
         && rawUpdatedProfile?.defaultOperationalMode === "field",
       detail: JSON.stringify(updatedProfile, null, 2),
+    });
+
+    const extractedProfileUpdate = extractPersonalOperationalProfileUpdate(
+      "mude o briefing da manhã de 6h30 para 6h",
+      store.getProfile(),
+    );
+    results.push({
+      name: "briefing_schedule_natural_language_update_is_parsed_locally",
+      passed: extractedProfileUpdate?.profile.morningBriefTime === "06:00",
+      detail: JSON.stringify(extractedProfileUpdate, null, 2),
+    });
+
+    const multiBriefingUpdate = extractPersonalOperationalProfileUpdate(
+      "quero outro briefing da equipe às 12h chamado radar do almoço com agenda e aprovações",
+      store.getProfile(),
+    );
+    const parsedBriefingProfiles = multiBriefingUpdate?.profile.briefingProfiles ?? [];
+    results.push({
+      name: "briefing_profile_natural_language_can_create_second_briefing",
+      passed:
+        parsedBriefingProfiles.length >= 2
+        && parsedBriefingProfiles.some((item) => item.time === "12:00" && item.audience === "team"),
+      detail: JSON.stringify(multiBriefingUpdate, null, 2),
     });
 
     const deleted = await deletePersonalMemoryItemPlugin.execute(

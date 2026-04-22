@@ -181,6 +181,7 @@ import { WorkflowDirectService } from "./workflow-direct-service.js";
 import { ContentDirectService } from "./content-direct-service.js";
 import { ContentGenerationDirectService } from "./content-generation-direct-service.js";
 import { EmailDirectService } from "./email-direct-service.js";
+import { BriefingProfileService } from "./briefing-profile-service.js";
 import {
   AgentDirectRouteService,
   type AgentDirectRouteServiceDependencies,
@@ -1138,6 +1139,11 @@ export class AgentDirectServiceComposer {
         findLearnedPreferences: () => [] as LearnedPreference[],
         findItems: () => [] as PersonalOperationalMemoryItem[],
       };
+      const briefingProfiles = new BriefingProfileService(
+        this.deps.personalMemory ?? fallbackPersonalMemory,
+        this.deps.personalOs ?? fallbackPersonalOs,
+        baseLogger.child({ scope: "briefing-profile-service" }),
+      );
       const fallbackGoalStore = {
         list: () => [] as import("./goal-store.js").ActiveGoal[],
         get: () => undefined as import("./goal-store.js").ActiveGoal | undefined,
@@ -1167,6 +1173,7 @@ export class AgentDirectServiceComposer {
         googleWorkspace: this.deps.googleWorkspace ?? fallbackGoogleWorkspace,
         memory: this.deps.memory ?? fallbackMemory,
         personalOs: this.deps.personalOs ?? fallbackPersonalOs,
+        briefingProfiles,
         preferences: this.deps.preferences ?? fallbackPreferencesStore,
         personalMemory: this.deps.personalMemory ?? fallbackPersonalMemory,
         goalStore: this.deps.goalStore ?? fallbackGoalStore,

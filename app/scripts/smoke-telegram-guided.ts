@@ -76,11 +76,13 @@ async function main(): Promise<void> {
     config,
     logger,
     core,
+    requestOrchestrator,
     contentOps,
-    approvalEngine,
+    draftApprovalService,
     clarificationEngine,
     whatsappMessages,
     googleAuth,
+    briefingProfiles,
   } = await createAgentCore();
 
   const fakeApi = new FakeTelegramApi();
@@ -88,10 +90,12 @@ async function main(): Promise<void> {
     config,
     logger.child({ scope: "telegram-smoke" }),
     core,
+    requestOrchestrator,
     contentOps,
+    briefingProfiles,
     googleAuth,
     fakeApi as unknown as TelegramApi,
-    approvalEngine,
+    draftApprovalService,
     clarificationEngine,
     whatsappMessages,
   );

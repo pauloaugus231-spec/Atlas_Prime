@@ -19,6 +19,7 @@ import type {
 } from "../types/contact-intelligence.js";
 import type { MemoryEntityKind, MemoryEntityRecord } from "../types/memory-entities.js";
 import { labelAgendaScope, truncateBriefText } from "./calendar-email-brief-helpers.js";
+import { formatBriefingProfileSummary } from "./briefing-profile-helpers.js";
 
 function includesAny(source: string, tokens: string[]): boolean {
   return tokens.some((token) => source.includes(token));
@@ -68,6 +69,7 @@ export function buildUserPreferencesReply(preferences: UserPreferences): string 
 }
 
 export function buildPersonalOperationalProfileReply(profile: PersonalOperationalProfile): string {
+  const briefingProfiles = (profile.briefingProfiles ?? []).slice(0, 4);
   return [
     "Perfil operacional base:",
     `- Nome: ${profile.displayName}`,
@@ -80,6 +82,8 @@ export function buildPersonalOperationalProfileReply(profile: PersonalOperationa
     `- Preço combustível padrão: ${profile.defaultFuelPricePerLiter ? `R$ ${profile.defaultFuelPricePerLiter.toFixed(2).replace(".", ",")}/l` : "não definido"}`,
     `- Estilo de resposta: ${profile.responseStyle}`,
     `- Briefing da manhã: ${profile.briefingPreference}`,
+    `- Horário do briefing automático: ${profile.morningBriefTime ?? "06:30"}`,
+    `- Perfis de briefing: ${briefingProfiles.length > 0 ? briefingProfiles.map((item) => formatBriefingProfileSummary(item)).join(" || ") : "padrão automático"}`,
     `- Nível de detalhe: ${profile.detailLevel}`,
     `- Tom: ${profile.tonePreference}`,
     `- Modo padrão: ${profile.defaultOperationalMode === "field" ? "plantão/rua" : "normal"}`,

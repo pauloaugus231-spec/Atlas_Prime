@@ -13,6 +13,7 @@ async function main(): Promise<void> {
     clarificationEngine,
     whatsappMessages,
     googleAuth,
+    briefingProfiles,
   } = await createAgentCore();
 
   if (!config.telegram.botToken) {
@@ -35,6 +36,7 @@ async function main(): Promise<void> {
     core,
     requestOrchestrator,
     contentOps,
+    briefingProfiles,
     googleAuth,
     api,
     draftApprovalService,

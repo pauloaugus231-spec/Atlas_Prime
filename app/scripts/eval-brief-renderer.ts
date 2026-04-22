@@ -1,6 +1,7 @@
 import process from "node:process";
 import { BriefRenderer } from "../src/core/brief-renderer.js";
 import type { ExecutiveMorningBrief } from "../src/core/personal-os.js";
+import type { BriefingProfile } from "../src/types/briefing-profile.js";
 
 interface EvalResult {
   name: string;
@@ -140,11 +141,28 @@ function run() {
   };
   const heavyRender = renderer.render(heavyBrief);
   const compact = renderer.renderCompact(heavyBrief);
+  const teamProfile: BriefingProfile = {
+    id: "team-midday",
+    name: "radar da equipe",
+    aliases: ["radar da equipe"],
+    enabled: true,
+    deliveryMode: "both",
+    deliveryChannel: "telegram",
+    audience: "team",
+    targetRecipientIds: [],
+    time: "12:00",
+    weekdays: [1, 2, 3, 4, 5],
+    timezone: "America/Sao_Paulo",
+    style: "executive",
+    sections: ["focus", "next_action", "agenda", "approvals", "motivation"],
+  };
+  const teamRender = renderer.renderForProfile(heavyBrief, teamProfile);
+  const openingOk = /Bom dia|Boa tarde|Boa noite/.test(normal);
 
   const results: EvalResult[] = [
     {
       name: "brief_renderer_render_with_empty_brief_does_not_throw",
-      passed: typeof normal === "string" && normal.includes("Bom dia"),
+      passed: typeof normal === "string" && openingOk,
       detail: normal,
     },
     {
@@ -171,6 +189,15 @@ function run() {
       name: "brief_renderer_compact_respects_15_line_limit",
       passed: compact.split("\n").length <= 15,
       detail: `lines=${compact.split("\\n").length}\n${compact}`,
+    },
+    {
+      name: "brief_renderer_profile_respects_custom_sections",
+      passed:
+        teamRender.includes("*Agenda*")
+        && teamRender.includes("*Próxima ação*")
+        && !teamRender.includes("*Emails críticos*")
+        && !teamRender.includes("*Tarefas*"),
+      detail: teamRender,
     },
   ];
 

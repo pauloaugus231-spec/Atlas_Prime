@@ -22,6 +22,7 @@ import { FallbackLlmClient } from "./fallback-llm-client.js";
 import { SmartRoutingLlmClient } from "./smart-routing-llm-client.js";
 import { OperationalMemoryStore } from "./operational-memory.js";
 import { PersonalOSService } from "./personal-os.js";
+import { BriefingProfileService } from "./briefing-profile-service.js";
 import { loadToolPlugins } from "./plugin-loader.js";
 import { ToolPluginRegistry } from "./plugin-registry.js";
 import { ProjectOpsService } from "./project-ops.js";
@@ -365,6 +366,11 @@ export async function createAgentCore() {
     autonomySuggestions,
     autonomyLoop,
   );
+  const briefingProfiles = new BriefingProfileService(
+    personalMemory,
+    personalOs,
+    logger.child({ scope: "briefing-profile-service" }),
+  );
   const email = emailAccounts.getReader("primary");
   const emailWriter = emailAccounts.getWriter("primary");
   const fileAccess = new FileAccessPolicy(
@@ -553,6 +559,7 @@ export async function createAgentCore() {
     externalReasoning,
     founderOps,
     personalOs,
+    briefingProfiles,
     intentRouter,
     planBuilder,
     pexelsMedia,

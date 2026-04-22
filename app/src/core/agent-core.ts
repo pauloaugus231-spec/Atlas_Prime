@@ -1241,7 +1241,6 @@ export class AgentCore {
     return tools.filter((tool) => allowedEmailTools.has(tool.function.name));
   }
 
-
 }
 
 export interface AgentCoreRequestRuntime extends Pick<

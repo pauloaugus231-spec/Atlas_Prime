@@ -1,5 +1,6 @@
 import { setTimeout as delay } from "node:timers/promises";
 import type { AgentCore } from "../../core/agent-core.js";
+import type { BriefingProfileService } from "../../core/briefing-profile-service.js";
 import { buildTelegramChannelPrompt, type ChannelConversationTurn } from "../../core/channel-message-adapter.js";
 import {
   stripPendingDraftMarkers,
@@ -228,6 +229,25 @@ function buildWelcomeMessage(bot: TelegramUser, userId: number, allowlisted: boo
   lines.push("Acesso liberado. Pode enviar mensagens em texto, links e áudio.");
   lines.push("Outros arquivos seguem em ativação gradual.");
   return lines.join("\n");
+}
+
+function parseClockTime(value: string | undefined, fallbackHour: number, fallbackMinute: number): { hour: number; minute: number } {
+  const match = value?.match(/^(\d{2}):(\d{2})$/);
+  if (!match?.[1] || !match[2]) {
+    return { hour: fallbackHour, minute: fallbackMinute };
+  }
+  const hour = Number.parseInt(match[1], 10);
+  const minute = Number.parseInt(match[2], 10);
+  if (!Number.isFinite(hour) || !Number.isFinite(minute) || hour < 0 || hour > 23 || minute < 0 || minute > 59) {
+    return { hour: fallbackHour, minute: fallbackMinute };
+  }
+  return { hour, minute };
+}
+
+function parseTelegramChatIds(values: string[]): number[] {
+  return values
+    .map((item) => Number.parseInt(item, 10))
+    .filter((item) => Number.isFinite(item));
 }
 
 function buildAgentFailureMessage(error: unknown): string {
@@ -1129,7 +1149,7 @@ export class TelegramService {
   private readonly approvalUi: TelegramApprovalUi;
   private readonly mediaFlow: TelegramMediaFlow;
   private backgroundJobsStarted = false;
-  private lastMorningBriefRunKey?: string;
+  private readonly lastMorningBriefRunKeys = new Map<string, string>();
   private lastEditorialCutoffRunKey?: string;
 
   constructor(
@@ -1138,6 +1158,7 @@ export class TelegramService {
     private readonly core: AgentCore,
     private readonly requestOrchestrator: RequestOrchestrator,
     private readonly contentOps: ContentOpsStore,
+    private readonly briefingProfiles: BriefingProfileService,
     googleAuth: GoogleWorkspaceAuthService,
     private readonly api: TelegramApi,
     private readonly draftApprovalService: DraftApprovalService,
@@ -1403,31 +1424,60 @@ export class TelegramService {
   }
 
   private async runWeekdayMorningBriefLoop(signal: AbortSignal): Promise<void> {
-    const timezone = this.config.google.defaultTimezone || "America/Sao_Paulo";
     while (!signal.aborted) {
       try {
         const now = new Date();
-        const local = new Date(now.toLocaleString("en-US", { timeZone: timezone }));
-        const weekday = local.getDay();
-        const hour = local.getHours();
-        const minute = local.getMinutes();
-        const runKey = `${local.getFullYear()}-${String(local.getMonth() + 1).padStart(2, "0")}-${String(local.getDate()).padStart(2, "0")}`;
+        const schedules = this.briefingProfiles.listScheduledProfiles("telegram");
+        for (const schedule of schedules) {
+          const timezone = schedule.timezone || this.config.google.defaultTimezone || "America/Sao_Paulo";
+          const { hour: briefingHour, minute: briefingMinute } = parseClockTime(
+            schedule.time,
+            6,
+            30,
+          );
+          const local = new Date(now.toLocaleString("en-US", { timeZone: timezone }));
+          const weekday = local.getDay();
+          const hour = local.getHours();
+          const minute = local.getMinutes();
+          const runKey = `${local.getFullYear()}-${String(local.getMonth() + 1).padStart(2, "0")}-${String(local.getDate()).padStart(2, "0")}`;
+          const lastRunKey = this.lastMorningBriefRunKeys.get(schedule.id);
+          const recipients = schedule.audience === "self"
+            ? this.config.telegram.allowedUserIds
+            : parseTelegramChatIds(schedule.targetRecipientIds);
 
-        if (weekday >= 1 && weekday <= 5 && hour === 6 && minute >= 30 && minute < 35 && this.lastMorningBriefRunKey !== runKey) {
-          const result = await this.core.runUserPrompt("gere meu briefing da manhã");
-          for (const chatId of this.config.telegram.allowedUserIds) {
-            try {
-              await this.sendText(chatId, result.reply, {
-                disable_web_page_preview: true,
+          if (
+            schedule.weekdays.includes(weekday)
+            && hour === briefingHour
+            && minute >= briefingMinute
+            && minute < briefingMinute + 5
+            && lastRunKey !== runKey
+          ) {
+            if (recipients.length === 0) {
+              this.logger.warn("Skipping scheduled briefing without Telegram recipients", {
+                profileId: schedule.id,
+                name: schedule.name,
+                audience: schedule.audience,
               });
-            } catch (error) {
-              this.logger.warn("Failed to send weekday morning brief", {
-                chatId,
-                error: error instanceof Error ? error.message : String(error),
-              });
+              this.lastMorningBriefRunKeys.set(schedule.id, runKey);
+              continue;
             }
+
+            const result = await this.briefingProfiles.render({ profileId: schedule.id });
+            for (const chatId of recipients) {
+              try {
+                await this.sendText(chatId, result.reply, {
+                  disable_web_page_preview: true,
+                });
+              } catch (error) {
+                this.logger.warn("Failed to send scheduled briefing", {
+                  chatId,
+                  profileId: schedule.id,
+                  error: error instanceof Error ? error.message : String(error),
+                });
+              }
+            }
+            this.lastMorningBriefRunKeys.set(schedule.id, runKey);
           }
-          this.lastMorningBriefRunKey = runKey;
         }
       } catch (error) {
         this.logger.error("Weekday morning brief loop failed", {

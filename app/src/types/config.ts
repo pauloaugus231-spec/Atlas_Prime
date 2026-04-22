@@ -93,6 +93,7 @@ export interface BriefingConfig {
   weatherEnabled: boolean;
   weatherLocation: string;
   weatherDays: number;
+  morningBriefTime: string;
 }
 
 export type ExternalReasoningMode = "off" | "smart" | "always";

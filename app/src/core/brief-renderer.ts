@@ -1,4 +1,5 @@
 import type { ApprovalInboxItemRecord } from "../types/approval-inbox.js";
+import type { BriefingProfile, BriefingSectionKey } from "../types/briefing-profile.js";
 import type {
   ExecutiveBriefAutonomySuggestion,
   ExecutiveBriefEmail,
@@ -7,6 +8,7 @@ import type {
   ExecutiveBriefWorkflow,
   ExecutiveMorningBrief,
 } from "./personal-os.js";
+import { DEFAULT_SELF_BRIEFING_SECTIONS } from "./briefing-profile-helpers.js";
 
 const INSTITUTIONAL_TERMS = ["cras", "creas", "caps", "domiciliados"];
 const HIGH_PRIORITIES = new Set(["alta", "urgent", "urgente"]);
@@ -178,12 +180,17 @@ function renderMotivationLine(brief: ExecutiveMorningBrief): string | undefined 
   return `_${truncate(brief.motivation.text, 120)}${author ? ` — ${truncate(author, 28)}` : ""}_`;
 }
 
-function openingLine(brief: ExecutiveMorningBrief): string {
+function openingLine(brief: ExecutiveMorningBrief, sections: Set<BriefingSectionKey>): string {
+  const localNow = new Date(new Date().toLocaleString("en-US", { timeZone: brief.timezone }));
+  const greeting = localNow.getHours() >= 18 ? "Boa noite" : localNow.getHours() >= 12 ? "Boa tarde" : "Bom dia";
   const dateLabel = formatDateLabel(brief);
-  const weatherDescription = brief.weather?.current?.description?.trim() ?? "sem clima do momento";
-  const tempLabel = formatTemperature(brief.weather?.current?.temperatureC);
+  const includeWeather = sections.has("weather");
+  const weatherDescription = includeWeather
+    ? brief.weather?.current?.description?.trim() ?? "sem clima do momento"
+    : "sem leitura climática";
+  const tempLabel = includeWeather ? formatTemperature(brief.weather?.current?.temperatureC) : "sem clima";
   const fieldTag = hasInstitutionalFieldDay(brief) ? " — 🏢 Dia de campo" : "";
-  return `Bom dia — ${dateLabel} — ${tempLabel}, ${truncate(weatherDescription, 48)}${fieldTag}`;
+  return `${greeting} — ${dateLabel} — ${tempLabel}, ${truncate(weatherDescription, 48)}${fieldTag}`;
 }
 
 function addSection(lines: string[], title: string, content: string[], maxLines: number): void {
@@ -204,97 +211,112 @@ function addSection(lines: string[], title: string, content: string[], maxLines:
 
 export class BriefRenderer {
   render(brief: ExecutiveMorningBrief): string {
-    if (brief.overloadLevel === "pesado") {
-      return this.renderCompact(brief);
-    }
-
-    const maxLines = 35;
-    const lines: string[] = [openingLine(brief)];
-
-    addSection(lines, "Foco do dia", brief.dayRecommendation ? [`- ${truncate(brief.dayRecommendation, 110)}`] : [], maxLines);
-    addSection(lines, "Próxima ação", brief.nextAction ? [`- ${truncate(brief.nextAction, 110)}`] : [], maxLines);
-    addSection(lines, "Pontos para revisar", (brief.autonomySuggestions ?? []).slice(0, 2).map(formatAutonomySuggestionLine), maxLines);
-    addSection(lines, "Objetivos ativos", formatGoalLines(brief.goalSummary, 2), maxLines);
-
-    addSection(
-      lines,
-      "Agenda",
-      sortEvents(brief.events).slice(0, 4).map((event) => formatEventLine(event, brief.timezone)),
-      maxLines,
-    );
-
-    const criticalEmails = [...brief.emails]
-      .filter((item) => HIGH_PRIORITIES.has(normalize(item.priority)))
-      .sort((left, right) => priorityWeight(left.priority) - priorityWeight(right.priority))
-      .slice(0, 3)
-      .map(formatEmailLine);
-    addSection(lines, "Emails críticos", criticalEmails, maxLines);
-
-    const tasks = [
-      ...sortTasks(brief.taskBuckets.overdue).slice(0, 2).map((task) => formatTaskLine(task, "Atrasada", brief.timezone)),
-      ...sortTasks(brief.taskBuckets.today).slice(0, 2).map((task) => formatTaskLine(task, "Hoje", brief.timezone)),
-    ];
-    addSection(lines, "Tarefas", tasks, maxLines);
-
-    const pendingApprovals = brief.approvals
-      .filter((item) => item.status === "pending")
-      .slice(0, 3)
-      .map(formatApprovalLine);
-    addSection(lines, "Aprovações pendentes", pendingApprovals, maxLines);
-
-    const activeWorkflows = brief.workflows
-      .filter((item) => !COMPLETED_WORKFLOW_STATUSES.has(normalize(item.status)))
-      .slice(0, 2)
-      .map(formatWorkflowLine);
-    addSection(lines, "Workflows", activeWorkflows, maxLines);
-
-    addSection(lines, "Motivação", renderMotivationLine(brief) ? [renderMotivationLine(brief)!] : [], maxLines);
-
-    return lines.slice(0, maxLines).join("\n");
+    return this.renderInternal(brief, {
+      sections: DEFAULT_SELF_BRIEFING_SECTIONS,
+      compact: brief.overloadLevel === "pesado",
+    });
   }
 
   renderCompact(brief: ExecutiveMorningBrief): string {
-    const maxLines = 15;
-    const lines: string[] = [openingLine(brief)];
+    return this.renderInternal(brief, {
+      sections: DEFAULT_SELF_BRIEFING_SECTIONS,
+      compact: true,
+    });
+  }
 
-    if (brief.overloadLevel === "pesado") {
+  renderForProfile(brief: ExecutiveMorningBrief, profile: BriefingProfile): string {
+    return this.renderInternal(brief, {
+      sections: profile.sections,
+      compact: profile.style === "compact" || (profile.style === "auto" && brief.overloadLevel === "pesado"),
+      preferDetailed: profile.style === "detailed",
+    });
+  }
+
+  private renderInternal(
+    brief: ExecutiveMorningBrief,
+    options: {
+      sections: BriefingSectionKey[];
+      compact: boolean;
+      preferDetailed?: boolean;
+    },
+  ): string {
+    const sections = new Set(options.sections);
+    const maxLines = options.compact ? 15 : options.preferDetailed ? 35 : 28;
+    const lines: string[] = [openingLine(brief, sections)];
+
+    if (options.compact && brief.overloadLevel === "pesado") {
       lines.push("⚡ Dia intenso — foco no essencial");
     }
 
-    addSection(lines, "Foco do dia", brief.dayRecommendation ? [`- ${truncate(brief.dayRecommendation, 92)}`] : [], maxLines);
-    addSection(lines, "Próxima ação", brief.nextAction ? [`- ${truncate(brief.nextAction, 92)}`] : [], maxLines);
-    addSection(lines, "Pontos para revisar", (brief.autonomySuggestions ?? []).slice(0, 1).map(formatAutonomySuggestionLine), maxLines);
-    addSection(lines, "Objetivos ativos", formatGoalLines(brief.goalSummary, 1), maxLines);
-
-    addSection(
-      lines,
-      "Agenda",
-      sortEvents(brief.events).slice(0, 2).map((event) => formatEventLine(event, brief.timezone)),
-      maxLines,
-    );
-
-    const criticalEmail = [...brief.emails]
-      .filter((item) => HIGH_PRIORITIES.has(normalize(item.priority)))
-      .sort((left, right) => priorityWeight(left.priority) - priorityWeight(right.priority))
-      .slice(0, 1)
-      .map(formatEmailLine);
-    addSection(lines, "Emails críticos", criticalEmail, maxLines);
-
-    const compactTasks = [
-      ...sortTasks(brief.taskBuckets.overdue).slice(0, 1).map((task) => formatTaskLine(task, "Atrasada", brief.timezone)),
-      ...sortTasks(brief.taskBuckets.today).slice(0, 1).map((task) => formatTaskLine(task, "Hoje", brief.timezone)),
-    ].slice(0, 1);
-    addSection(lines, "Tarefas", compactTasks, maxLines);
-
-    const pendingApprovals = brief.approvals
-      .filter((item) => item.status === "pending")
-      .slice(0, 1)
-      .map(formatApprovalLine);
-    addSection(lines, "Aprovações pendentes", pendingApprovals, maxLines);
-
-    const motivation = renderMotivationLine(brief);
-    if (motivation && lines.length < maxLines) {
-      lines.push(motivation);
+    if (sections.has("focus")) {
+      addSection(lines, "Foco do dia", brief.dayRecommendation ? [`- ${truncate(brief.dayRecommendation, options.compact ? 92 : 110)}`] : [], maxLines);
+    }
+    if (sections.has("next_action")) {
+      addSection(lines, "Próxima ação", brief.nextAction ? [`- ${truncate(brief.nextAction, options.compact ? 92 : 110)}`] : [], maxLines);
+    }
+    if (sections.has("autonomy")) {
+      addSection(
+        lines,
+        "Pontos para revisar",
+        (brief.autonomySuggestions ?? []).slice(0, options.compact ? 1 : 2).map(formatAutonomySuggestionLine),
+        maxLines,
+      );
+    }
+    if (sections.has("goals")) {
+      addSection(lines, "Objetivos ativos", formatGoalLines(brief.goalSummary, options.compact ? 1 : 2), maxLines);
+    }
+    if (sections.has("agenda")) {
+      addSection(
+        lines,
+        "Agenda",
+        sortEvents(brief.events).slice(0, options.compact ? 2 : 4).map((event) => formatEventLine(event, brief.timezone)),
+        maxLines,
+      );
+    }
+    if (sections.has("emails")) {
+      const criticalEmails = [...brief.emails]
+        .filter((item) => HIGH_PRIORITIES.has(normalize(item.priority)))
+        .sort((left, right) => priorityWeight(left.priority) - priorityWeight(right.priority))
+        .slice(0, options.compact ? 1 : 3)
+        .map(formatEmailLine);
+      addSection(lines, "Emails críticos", criticalEmails, maxLines);
+    }
+    if (sections.has("tasks")) {
+      const tasks = options.compact
+        ? [
+            ...sortTasks(brief.taskBuckets.overdue).slice(0, 1).map((task) => formatTaskLine(task, "Atrasada", brief.timezone)),
+            ...sortTasks(brief.taskBuckets.today).slice(0, 1).map((task) => formatTaskLine(task, "Hoje", brief.timezone)),
+          ].slice(0, 1)
+        : [
+            ...sortTasks(brief.taskBuckets.overdue).slice(0, 2).map((task) => formatTaskLine(task, "Atrasada", brief.timezone)),
+            ...sortTasks(brief.taskBuckets.today).slice(0, 2).map((task) => formatTaskLine(task, "Hoje", brief.timezone)),
+          ];
+      addSection(lines, "Tarefas", tasks, maxLines);
+    }
+    if (sections.has("approvals")) {
+      const pendingApprovals = brief.approvals
+        .filter((item) => item.status === "pending")
+        .slice(0, options.compact ? 1 : 3)
+        .map(formatApprovalLine);
+      addSection(lines, "Aprovações pendentes", pendingApprovals, maxLines);
+    }
+    if (sections.has("workflows")) {
+      const activeWorkflows = brief.workflows
+        .filter((item) => !COMPLETED_WORKFLOW_STATUSES.has(normalize(item.status)))
+        .slice(0, options.compact ? 1 : 2)
+        .map(formatWorkflowLine);
+      addSection(lines, "Workflows", activeWorkflows, maxLines);
+    }
+    if (sections.has("mobility")) {
+      addSection(
+        lines,
+        "Rua e deslocamento",
+        brief.mobilityAlerts.slice(0, options.compact ? 1 : 2).map((item) => `- ${truncate(item, options.compact ? 92 : 110)}`),
+        maxLines,
+      );
+    }
+    if (sections.has("motivation")) {
+      addSection(lines, "Motivação", renderMotivationLine(brief) ? [renderMotivationLine(brief)!] : [], maxLines);
     }
 
     return lines.slice(0, maxLines).join("\n");

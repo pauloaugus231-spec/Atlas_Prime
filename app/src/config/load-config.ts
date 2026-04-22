@@ -535,10 +535,15 @@ function buildAltivaConfig(env: NodeJS.ProcessEnv, fallbackTimezone: string): Al
 
 function buildBriefingConfig(env: NodeJS.ProcessEnv): BriefingConfig {
   const weatherLocation = env.BRIEFING_WEATHER_LOCATION?.trim() || "Porto Alegre, RS, Brasil";
+  const rawMorningBriefTime = env.BRIEFING_MORNING_TIME?.trim();
+  const morningBriefTime = /^\d{2}:\d{2}$/.test(rawMorningBriefTime ?? "")
+    ? rawMorningBriefTime!
+    : "06:30";
   return {
     weatherEnabled: parseBoolean(env.BRIEFING_WEATHER_ENABLED, true),
     weatherLocation,
     weatherDays: Math.min(Math.max(parsePositiveInteger(env.BRIEFING_WEATHER_DAYS, 2), 1), 3),
+    morningBriefTime,
   };
 }
 
