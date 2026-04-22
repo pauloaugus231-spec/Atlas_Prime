@@ -122,6 +122,15 @@ import {
 } from "./personal-context-summary.js";
 import { ProfessionBootstrapService } from "./profession-bootstrap-service.js";
 import { ProfessionPackService } from "./profession-pack-service.js";
+import { TimeOsService } from "./time-os-service.js";
+import { FinanceStore } from "./finance/finance-store.js";
+import { FinanceReviewService } from "./finance/finance-review-service.js";
+import { RelationshipService } from "./relationship/relationship-service.js";
+import { MissionService } from "./missions/mission-service.js";
+import { MissionReviewService } from "./missions/mission-review.js";
+import { ResearchDeskService } from "./research/research-desk-service.js";
+import { GraphIngestionService } from "./knowledge-graph/graph-ingestion.js";
+import { GraphQueryService } from "./knowledge-graph/graph-query.js";
 import {
   TurnPlanner,
 } from "./turn-planner.js";
@@ -176,9 +185,12 @@ import { ExternalIntelligenceDirectService } from "./external-intelligence-direc
 import { CapabilityActionService } from "./capability-action-service.js";
 import { CapabilityInspectionService } from "./capability-inspection-service.js";
 import { KnowledgeProjectDirectService } from "./knowledge-project-direct-service.js";
+import { LifeManagementDirectService } from "./life-management-direct-service.js";
 import { MemoryContactDirectService } from "./memory-contact-direct-service.js";
+import { MissionDirectService } from "./mission-direct-service.js";
 import { OperationalReviewDirectService } from "./operational-review-direct-service.js";
 import { OperationalContextDirectService } from "./operational-context-direct-service.js";
+import { ResearchKnowledgeDirectService } from "./research-knowledge-direct-service.js";
 import { WorkspaceMacDirectService } from "./workspace-mac-direct-service.js";
 import { WorkflowDirectService } from "./workflow-direct-service.js";
 import { ContentDirectService } from "./content-direct-service.js";
@@ -659,6 +671,15 @@ export interface AgentCoreDependencies {
   briefingPrivacyPolicy?: BriefingPrivacyPolicy;
   sharedBriefingComposer?: SharedBriefingComposer;
   commandCenter?: CommandCenterService;
+  timeOs?: TimeOsService;
+  financeStore?: FinanceStore;
+  financeReview?: FinanceReviewService;
+  relationships?: RelationshipService;
+  missions?: MissionService;
+  missionReview?: MissionReviewService;
+  researchDesk?: ResearchDeskService;
+  graphIngestion?: GraphIngestionService;
+  graphQuery?: GraphQueryService;
   reasoningEngine?: ReasoningEngine;
   userModelTracker?: UserModelTracker;
   autonomyObservations?: ObservationStore;
@@ -716,6 +737,15 @@ export class AgentCore {
   private readonly briefingPrivacyPolicy?: BriefingPrivacyPolicy;
   private readonly sharedBriefingComposer?: SharedBriefingComposer;
   private readonly commandCenter?: CommandCenterService;
+  private readonly timeOs?: TimeOsService;
+  private readonly financeStore?: FinanceStore;
+  private readonly financeReview?: FinanceReviewService;
+  private readonly relationships?: RelationshipService;
+  private readonly missions?: MissionService;
+  private readonly missionReview?: MissionReviewService;
+  private readonly researchDesk?: ResearchDeskService;
+  private readonly graphIngestion?: GraphIngestionService;
+  private readonly graphQuery?: GraphQueryService;
   private readonly reasoningEngine?: ReasoningEngine;
   private readonly userModelTracker?: UserModelTracker;
   private readonly autonomyObservations?: ObservationStore;
@@ -787,6 +817,15 @@ export class AgentCore {
     this.briefingPrivacyPolicy = deps.briefingPrivacyPolicy;
     this.sharedBriefingComposer = deps.sharedBriefingComposer;
     this.commandCenter = deps.commandCenter;
+    this.timeOs = deps.timeOs;
+    this.financeStore = deps.financeStore;
+    this.financeReview = deps.financeReview;
+    this.relationships = deps.relationships;
+    this.missions = deps.missions;
+    this.missionReview = deps.missionReview;
+    this.researchDesk = deps.researchDesk;
+    this.graphIngestion = deps.graphIngestion;
+    this.graphQuery = deps.graphQuery;
     this.reasoningEngine = deps.reasoningEngine;
     this.userModelTracker = deps.userModelTracker;
     this.autonomyObservations = deps.autonomyObservations;
@@ -962,6 +1001,15 @@ export class AgentCore {
       destinationRegistry: this.destinationRegistry,
       sharedBriefingComposer: this.sharedBriefingComposer,
       commandCenter: this.commandCenter,
+      timeOs: this.timeOs,
+      financeStore: this.financeStore,
+      financeReview: this.financeReview,
+      relationships: this.relationships,
+      missions: this.missions,
+      missionReview: this.missionReview,
+      researchDesk: this.researchDesk,
+      graphIngestion: this.graphIngestion,
+      graphQuery: this.graphQuery,
       createWebResearchService: this.createWebResearchService,
       executeToolDirect: (toolName, rawArguments) => this.toolExecutionService.executeToolDirect(toolName, rawArguments),
       buildActiveGoalUserDataReply: (goal, plan) => this.activePlanningSession.buildActiveGoalUserDataReply(goal, plan),
@@ -1001,6 +1049,9 @@ export class AgentCore {
       getExternalIntelligenceDirectService: () => this.getExternalIntelligenceDirectService(),
       getCapabilityInspectionService: () => this.getCapabilityInspectionService(),
       getKnowledgeProjectDirectService: () => this.getKnowledgeProjectDirectService(),
+      getLifeManagementDirectService: () => this.getLifeManagementDirectService(),
+      getMissionDirectService: () => this.getMissionDirectService(),
+      getResearchKnowledgeDirectService: () => this.getResearchKnowledgeDirectService(),
       getOperationalContextDirectService: () => this.getOperationalContextDirectService(),
       getAutonomyDirectService: () => this.getAutonomyDirectService(),
       getMemoryContactDirectService: () => this.getMemoryContactDirectService(),
@@ -1091,6 +1142,15 @@ export class AgentCore {
         destinationRegistry: this.destinationRegistry,
         sharedBriefingComposer: this.sharedBriefingComposer,
         commandCenter: this.commandCenter,
+        timeOs: this.timeOs,
+        financeStore: this.financeStore,
+        financeReview: this.financeReview,
+        relationships: this.relationships,
+        missions: this.missions,
+        missionReview: this.missionReview,
+        researchDesk: this.researchDesk,
+        graphIngestion: this.graphIngestion,
+        graphQuery: this.graphQuery,
         createWebResearchService: this.createWebResearchService,
         executeToolDirect: (toolName, rawArguments) => this.toolExecutionService
           ? this.toolExecutionService.executeToolDirect(toolName, rawArguments)
@@ -1132,6 +1192,18 @@ export class AgentCore {
 
   private getKnowledgeProjectDirectService(): KnowledgeProjectDirectService {
     return this.getDirectServiceComposer().getKnowledgeProjectDirectService();
+  }
+
+  private getLifeManagementDirectService(): LifeManagementDirectService {
+    return this.getDirectServiceComposer().getLifeManagementDirectService();
+  }
+
+  private getMissionDirectService(): MissionDirectService {
+    return this.getDirectServiceComposer().getMissionDirectService();
+  }
+
+  private getResearchKnowledgeDirectService(): ResearchKnowledgeDirectService {
+    return this.getDirectServiceComposer().getResearchKnowledgeDirectService();
   }
 
   private getOperationalContextDirectService(): OperationalContextDirectService {

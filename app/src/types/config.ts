@@ -23,6 +23,11 @@ export interface AppPathsConfig {
   autonomyDbPath: string;
   accountLinkingDbPath: string;
   destinationRegistryDbPath: string;
+  financeDbPath: string;
+  relationshipDbPath: string;
+  missionDbPath: string;
+  researchDbPath: string;
+  knowledgeGraphDbPath: string;
 }
 
 export type LlmProvider = "ollama" | "openai";

@@ -75,14 +75,25 @@ function makeConfig(dbPath: string): AppConfig {
   };
 }
 
-function makeGoogleAuth(status: GoogleAuthStatus, authUrl = "https://accounts.google.com/o/oauth2/v2/auth?fake=1"): GoogleWorkspaceAuthService {
+function makeGoogleAuth(
+  status: GoogleAuthStatus,
+  grantedScopes: string[],
+  authUrl = "https://accounts.google.com/o/oauth2/v2/auth?fake=1",
+): GoogleWorkspaceAuthService {
   return {
     getStatus: () => status,
     createAuthUrl: () => authUrl,
+    exchangeCodeForTokens: async (code: string) => ({
+      access_token: `access-${code}`,
+      refresh_token: `refresh-${code}`,
+      scope: grantedScopes.join(" "),
+      token_type: "Bearer",
+      expiry_date: Date.now() + 3600_000,
+    }),
   } as unknown as GoogleWorkspaceAuthService;
 }
 
-function run(): void {
+async function run(): Promise<void> {
   const logger = new SilentLogger();
   const sandboxDir = mkdtempSync(path.join(tmpdir(), "atlas-account-linking-"));
   const dbPath = path.join(sandboxDir, "account-linking.sqlite");
@@ -90,6 +101,7 @@ function run(): void {
   const sessions = new ConnectionSessionStore(dbPath, logger);
   const connections = new AccountConnectionStore(dbPath, logger);
   const permissions = new ProviderPermissions();
+  const vault = new TokenVault(dbPath, "secret-test", logger);
   const results: EvalResult[] = [];
 
   try {
@@ -102,7 +114,7 @@ function run(): void {
         credentialsPath: "/tmp/creds.json",
         tokenPath: "/tmp/token.json",
         message: "Google precisa ser autorizado.",
-      }),
+      }, permissions.resolveScopes("google", ["calendar_tasks_read"])),
       permissions,
     );
     const pendingService = new AccountLinkingService(
@@ -111,7 +123,7 @@ function run(): void {
       connections,
       pendingRegistry,
       permissions,
-      new TokenVault(dbPath, "secret-test", logger),
+      vault,
       logger,
     );
     const started = pendingService.startConnection({ provider: "google" });
@@ -119,6 +131,24 @@ function run(): void {
       name: "account_linking_start_creates_pending_session",
       passed: started.session?.provider === "google" && started.reply.includes("https://accounts.google.com"),
       detail: JSON.stringify(started, null, 2),
+    });
+    const completed = started.session
+      ? await pendingService.completeConnection({
+          sessionId: started.session.id,
+          code: "auth-code-1",
+        })
+      : undefined;
+    const completedSession = started.session ? sessions.getById(started.session.id) : undefined;
+    const completedConnection = connections.getByProvider(config.operator.operatorId, "google");
+    const storedToken = completedConnection?.tokenVaultRef ? vault.readSecret<Record<string, unknown>>(completedConnection.tokenVaultRef) : undefined;
+    results.push({
+      name: "account_linking_complete_authorizes_session_and_stores_token",
+      passed:
+        completed?.connection?.status === "active"
+        && completedSession?.status === "authorized"
+        && Boolean(storedToken?.access_token)
+        && completed?.reply.includes("conexão autorizada"),
+      detail: JSON.stringify({ completed, completedSession, completedConnection, storedToken }, null, 2),
     });
 
     const readyRegistry = new OauthProviderRegistry(
@@ -132,7 +162,7 @@ function run(): void {
         credentialsPath: "/tmp/creds.json",
         tokenPath: "/tmp/token.json",
         message: "Google pronto.",
-      }),
+      }, permissions.resolveScopes("google", ["calendar_tasks_read", "calendar_tasks_write"])),
       permissions,
     );
     const readyService = new AccountLinkingService(
@@ -141,7 +171,7 @@ function run(): void {
       connections,
       readyRegistry,
       permissions,
-      new TokenVault(dbPath, "secret-test", logger),
+      vault,
       logger,
     );
     const overview = readyService.renderOverview();
@@ -154,10 +184,11 @@ function run(): void {
 
     const revoked = readyService.revokeConnection("google");
     const revokedStatus = connections.getByProvider(config.operator.operatorId, "google")?.status;
+    const revokedToken = completedConnection?.tokenVaultRef ? vault.readSecret<Record<string, unknown>>(completedConnection.tokenVaultRef) : undefined;
     results.push({
-      name: "account_linking_revoke_marks_connection_revoked",
-      passed: revokedStatus === "revoked" && revoked.includes("desconectado"),
-      detail: JSON.stringify({ revoked, revokedStatus }, null, 2),
+      name: "account_linking_revoke_marks_connection_revoked_and_removes_token",
+      passed: revokedStatus === "revoked" && revoked.includes("desconectado") && revokedToken === undefined,
+      detail: JSON.stringify({ revoked, revokedStatus, revokedToken }, null, 2),
     });
   } finally {
     rmSync(sandboxDir, { recursive: true, force: true });
@@ -182,4 +213,7 @@ function run(): void {
   console.log(`\nAccount linking evals ok: ${results.length}/${results.length}`);
 }
 
-run();
+run().catch((error) => {
+  console.error(error instanceof Error ? error.stack ?? error.message : String(error));
+  process.exitCode = 1;
+});

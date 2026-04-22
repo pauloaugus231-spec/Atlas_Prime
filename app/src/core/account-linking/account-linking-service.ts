@@ -30,18 +30,22 @@ export class AccountLinkingService {
 
   private syncGoogleConnection(userId: string): AccountConnection | undefined {
     const status = this.providers.getStatus("google");
+    const existing = this.connections.getByProvider(userId, "google");
     if (!status.authenticated) {
-      return this.connections.getByProvider(userId, "google");
+      return existing;
     }
     return this.connections.upsert({
-      id: randomUUID(),
+      id: existing?.id ?? randomUUID(),
       userId,
       provider: "google",
-      providerAccountId: "google-primary",
+      providerAccountId: existing?.providerAccountId ?? "google-primary",
+      ...(existing?.providerEmail ? { providerEmail: existing.providerEmail } : {}),
       scopes: status.grantedScopes,
+      ...(existing?.tokenVaultRef ? { tokenVaultRef: existing.tokenVaultRef } : {}),
       status: "active",
-      connectedAt: new Date().toISOString(),
+      connectedAt: existing?.connectedAt ?? new Date().toISOString(),
       metadata: {
+        ...(existing?.metadata ?? {}),
         mode: status.ready ? "ready" : "partial",
       },
     });
@@ -127,7 +131,58 @@ export class AccountLinkingService {
     if (!provider) {
       return "Provider de conexão não suportado.";
     }
+    const existing = this.connections.getByProvider(userId, providerId);
+    if (existing?.tokenVaultRef) {
+      this.tokenVault.deleteSecret(existing.tokenVaultRef);
+    }
     const updated = this.connections.setStatus(userId, providerId, "revoked");
     return this.renderer.renderRevoke(provider, Boolean(updated));
+  }
+
+  async completeConnection(input: {
+    sessionId: string;
+    code: string;
+  }): Promise<{ reply: string; connection?: AccountConnection }> {
+    const session = this.sessions.getById(input.sessionId);
+    if (!session) {
+      return { reply: "Sessão de conexão não encontrada." };
+    }
+    const provider = this.providers.getProvider(session.provider);
+    if (!provider) {
+      return { reply: "Provider de conexão não suportado." };
+    }
+    this.sessions.markStatus(session.id, "opened");
+    const authorization = await this.providers.exchangeCode(session.provider, input.code);
+    const tokenVaultRef = this.tokenVault.storeSecret(authorization.tokenPayload);
+    const connection = this.connections.upsert({
+      id: randomUUID(),
+      userId: session.userId,
+      provider: session.provider,
+      providerAccountId: authorization.providerAccountId,
+      ...(authorization.providerEmail ? { providerEmail: authorization.providerEmail } : {}),
+      scopes: authorization.grantedScopes,
+      tokenVaultRef,
+      status: "active",
+      connectedAt: new Date().toISOString(),
+      metadata: {
+        source: "oauth_session",
+        sessionId: session.id,
+      },
+    });
+    this.sessions.markStatus(session.id, "authorized");
+    this.logger.info("Completed account connection", {
+      provider: session.provider,
+      sessionId: session.id,
+      userId: session.userId,
+      scopes: authorization.grantedScopes.length,
+    });
+    return {
+      reply: this.renderer.renderAuthorized({
+        provider,
+        providerAccountId: connection.providerAccountId,
+        grantedScopes: connection.scopes,
+      }),
+      connection,
+    };
   }
 }

@@ -87,6 +87,7 @@ import { PexelsMediaService, type PexelsVideoSuggestion } from "../integrations/
 import { SupabaseMacCommandQueue } from "../integrations/supabase/mac-command-queue.js";
 import type { OrchestrationContext } from "../types/orchestration.js";
 import type { MemoryEntityKind, MemoryEntityRecord } from "../types/memory-entities.js";
+import type { RelationshipProfile } from "../types/relationship-profile.js";
 import type { UserPreferences } from "../types/user-preferences.js";
 import type {
   CreateWorkflowPlanInput,
@@ -173,9 +174,12 @@ import { ExternalIntelligenceDirectService } from "./external-intelligence-direc
 import { CapabilityActionService } from "./capability-action-service.js";
 import { CapabilityInspectionService } from "./capability-inspection-service.js";
 import { KnowledgeProjectDirectService } from "./knowledge-project-direct-service.js";
+import { LifeManagementDirectService } from "./life-management-direct-service.js";
 import { MemoryContactDirectService } from "./memory-contact-direct-service.js";
+import { MissionDirectService } from "./mission-direct-service.js";
 import { OperationalReviewDirectService } from "./operational-review-direct-service.js";
 import { OperationalContextDirectService } from "./operational-context-direct-service.js";
+import { ResearchKnowledgeDirectService } from "./research-knowledge-direct-service.js";
 import { WorkspaceMacDirectService } from "./workspace-mac-direct-service.js";
 import { WorkflowDirectService } from "./workflow-direct-service.js";
 import { ContentDirectService } from "./content-direct-service.js";
@@ -185,9 +189,18 @@ import { BriefingProfileService } from "./briefing-profile-service.js";
 import type { AccountLinkingService } from "./account-linking/account-linking-service.js";
 import type { CommandCenterService } from "./command-center/command-center-service.js";
 import type { DestinationRegistry } from "./destination-registry.js";
+import type { FinanceStore } from "./finance/finance-store.js";
+import type { FinanceReviewService } from "./finance/finance-review-service.js";
+import type { GraphIngestionService } from "./knowledge-graph/graph-ingestion.js";
+import type { GraphQueryService } from "./knowledge-graph/graph-query.js";
+import type { MissionReviewService } from "./missions/mission-review.js";
+import type { MissionService } from "./missions/mission-service.js";
 import type { ProfessionBootstrapService } from "./profession-bootstrap-service.js";
 import type { ProfessionPackService } from "./profession-pack-service.js";
+import type { RelationshipService } from "./relationship/relationship-service.js";
+import type { ResearchDeskService } from "./research/research-desk-service.js";
 import type { SharedBriefingComposer } from "./shared-briefing-composer.js";
+import type { TimeOsService } from "./time-os-service.js";
 import type { UserRoleProfileService } from "./user-role-profile-service.js";
 import {
   AgentDirectRouteService,
@@ -655,6 +668,15 @@ export interface AgentDirectServiceComposerDependencies {
   destinationRegistry?: DestinationRegistry;
   sharedBriefingComposer?: SharedBriefingComposer;
   commandCenter?: CommandCenterService;
+  timeOs?: TimeOsService;
+  financeStore?: FinanceStore;
+  financeReview?: FinanceReviewService;
+  relationships?: RelationshipService;
+  missions?: MissionService;
+  missionReview?: MissionReviewService;
+  researchDesk?: ResearchDeskService;
+  graphIngestion?: GraphIngestionService;
+  graphQuery?: GraphQueryService;
   createWebResearchService: (logger: Logger) => Pick<WebResearchService, "search" | "fetchPageExcerpt">;
   executeToolDirect: (toolName: string, rawArguments: unknown) => Promise<{ requestId: string; content: string; rawResult: unknown }>;
   buildActiveGoalUserDataReply: (goal: ActivePlanningGoal, plan: CapabilityPlan) => string;
@@ -688,6 +710,107 @@ export class AgentDirectServiceComposer {
   private directServiceRegistry?: AgentDirectServiceRegistry;
 
   constructor(private readonly deps: AgentDirectServiceComposerDependencies) {}
+
+  private createLifeManagementDirectService(): LifeManagementDirectService {
+      const fallbackLogger: Logger = {
+        debug: () => undefined,
+        info: () => undefined,
+        warn: () => undefined,
+        error: () => undefined,
+        child: () => fallbackLogger,
+      };
+      const baseLogger = this.deps.logger ?? fallbackLogger;
+      const fallbackTimeOs = { renderOverview: async () => "Tempo e agenda indisponíveis." };
+      const fallbackFinanceStore = {
+        createEntry: (input: { title: string; amount: number; kind?: "income" | "expense" | "bill"; status?: "planned" | "due" | "paid" | "overdue"; category?: string; dueAt?: string; sourceKind?: "manual" | "email" | "document" | "message" | "system"; notes?: string; }) => ({
+          id: 0,
+          title: input.title,
+          amount: input.amount,
+          kind: input.kind ?? "expense",
+          status: input.status ?? "planned",
+          ...(input.category ? { category: input.category } : {}),
+          ...(input.dueAt ? { dueAt: input.dueAt } : {}),
+          sourceKind: input.sourceKind ?? "manual",
+          createdAt: new Date(0).toISOString(),
+          updatedAt: new Date(0).toISOString(),
+        }),
+      };
+      const fallbackFinanceReview = { renderOverview: () => "Finanças indisponíveis." };
+      const fallbackRelationships = {
+        renderFollowUpList: () => "Relacionamentos indisponíveis.",
+        renderProfile: () => undefined as string | undefined,
+        saveManual: (input: { displayName: string; kind?: RelationshipProfile["kind"]; notes?: string[]; nextFollowUpAt?: string; }) => ({
+          id: "fallback",
+          displayName: input.displayName,
+          kind: input.kind ?? "unknown",
+          channels: [],
+          openCommitments: [],
+          notes: input.notes ?? [],
+          trustLevel: "known" as const,
+          createdAt: new Date(0).toISOString(),
+          updatedAt: new Date(0).toISOString(),
+        }),
+      };
+      return new LifeManagementDirectService({
+        logger: baseLogger.child({ scope: "life-management-direct-service" }),
+        timeOs: this.deps.timeOs ?? fallbackTimeOs,
+        financeStore: this.deps.financeStore ?? fallbackFinanceStore,
+        financeReview: this.deps.financeReview ?? fallbackFinanceReview,
+        relationships: this.deps.relationships ?? fallbackRelationships,
+        buildBaseMessages: (userPrompt, orchestration, preferences) =>
+          buildBaseMessages(userPrompt, orchestration, preferences),
+      });
+  }
+
+  private createMissionDirectService(): MissionDirectService {
+      const fallbackLogger: Logger = {
+        debug: () => undefined,
+        info: () => undefined,
+        warn: () => undefined,
+        error: () => undefined,
+        child: () => fallbackLogger,
+      };
+      const baseLogger = this.deps.logger ?? fallbackLogger;
+      const fallbackMissions = {
+        create: () => ({}),
+        renderStatus: () => "Nenhuma missão disponível.",
+        renderNextAction: () => "Nenhuma missão disponível.",
+        renderRisks: () => "Nenhuma missão disponível.",
+      };
+      const fallbackReview = { renderReview: () => "Nenhuma missão disponível." };
+      return new MissionDirectService({
+        logger: baseLogger.child({ scope: "mission-direct-service" }),
+        missions: this.deps.missions ?? fallbackMissions,
+        missionReview: this.deps.missionReview ?? fallbackReview,
+        buildBaseMessages: (userPrompt, orchestration, preferences) =>
+          buildBaseMessages(userPrompt, orchestration, preferences),
+      });
+  }
+
+  private createResearchKnowledgeDirectService(): ResearchKnowledgeDirectService {
+      const fallbackLogger: Logger = {
+        debug: () => undefined,
+        info: () => undefined,
+        warn: () => undefined,
+        error: () => undefined,
+        child: () => fallbackLogger,
+      };
+      const baseLogger = this.deps.logger ?? fallbackLogger;
+      const fallbackResearchDesk = {
+        researchAndSave: async () => ({}),
+        renderSaved: () => "Ainda não há pesquisa salva.",
+      };
+      const fallbackGraphQuery = {
+        explain: () => "Grafo de conhecimento indisponível.",
+      };
+      return new ResearchKnowledgeDirectService({
+        logger: baseLogger.child({ scope: "research-knowledge-direct-service" }),
+        researchDesk: this.deps.researchDesk ?? fallbackResearchDesk,
+        graphQuery: this.deps.graphQuery ?? fallbackGraphQuery,
+        buildBaseMessages: (userPrompt, orchestration, preferences) =>
+          buildBaseMessages(userPrompt, orchestration, preferences),
+      });
+  }
 
   private createAutonomyDirectService(): AutonomyDirectService {
       const fallbackLogger: Logger = {
@@ -1876,6 +1999,9 @@ export class AgentDirectServiceComposer {
         capabilityActionService: () => this.createCapabilityActionService(),
         capabilityInspectionService: () => this.createCapabilityInspectionService(),
         knowledgeProjectDirectService: () => this.createKnowledgeProjectDirectService(),
+        lifeManagementDirectService: () => this.createLifeManagementDirectService(),
+        missionDirectService: () => this.createMissionDirectService(),
+        researchKnowledgeDirectService: () => this.createResearchKnowledgeDirectService(),
         operationalContextDirectService: () => this.createOperationalContextDirectService(),
         memoryContactDirectService: () => this.createMemoryContactDirectService(),
         workflowDirectService: () => this.createWorkflowDirectService(),
@@ -1912,6 +2038,18 @@ export class AgentDirectServiceComposer {
 
   getKnowledgeProjectDirectService(): KnowledgeProjectDirectService {
     return this.getDirectServiceRegistry().getKnowledgeProjectDirectService();
+  }
+
+  getLifeManagementDirectService(): LifeManagementDirectService {
+    return this.getDirectServiceRegistry().getLifeManagementDirectService();
+  }
+
+  getMissionDirectService(): MissionDirectService {
+    return this.getDirectServiceRegistry().getMissionDirectService();
+  }
+
+  getResearchKnowledgeDirectService(): ResearchKnowledgeDirectService {
+    return this.getDirectServiceRegistry().getResearchKnowledgeDirectService();
   }
 
   getOperationalContextDirectService(): OperationalContextDirectService {

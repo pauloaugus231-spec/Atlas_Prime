@@ -12,6 +12,8 @@ export interface OperationalDirectRouteDependencies {
   destinationList: DirectRouteHandler;
   destinationSave: DirectRouteHandler;
   sharedBriefingPreview: DirectRouteHandler;
+  lifeManagement: DirectRouteHandler;
+  missionOs: DirectRouteHandler;
   morningBrief: DirectRouteHandler;
   operationalPlanning: DirectRouteHandler;
   macQueueStatus: DirectRouteHandler;
@@ -54,6 +56,8 @@ export function buildOperationalDirectRoutes(
     defineDirectRoute("destination_list", "operational", deps.destinationList),
     defineDirectRoute("destination_save", "operational", deps.destinationSave),
     defineDirectRoute("shared_briefing_preview", "operational", deps.sharedBriefingPreview),
+    defineDirectRoute("life_management", "operational", deps.lifeManagement),
+    defineDirectRoute("mission_os", "operational", deps.missionOs),
     defineDirectRoute("morning_brief", "operational", deps.morningBrief),
     defineDirectRoute("operational_planning", "operational", deps.operationalPlanning),
     defineDirectRoute("mac_queue_status", "operational", deps.macQueueStatus),

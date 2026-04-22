@@ -10,6 +10,7 @@ import type {
   DeliveryDestinationPrivacyLevel,
 } from "../types/delivery-destination.js";
 import type { Logger } from "../types/logger.js";
+import { DestinationAliasResolver } from "./destination-alias-resolver.js";
 
 interface DestinationRow {
   id: string;
@@ -24,15 +25,6 @@ interface DestinationRow {
   enabled: number;
   created_at: string;
   updated_at: string;
-}
-
-function normalize(value: string): string {
-  return value
-    .normalize("NFD")
-    .replace(/\p{Diacritic}/gu, "")
-    .toLowerCase()
-    .replace(/\s+/g, " ")
-    .trim();
 }
 
 function parseAliases(value: string): string[] {
@@ -66,6 +58,7 @@ function mapRow(row: DestinationRow | undefined): DeliveryDestination | undefine
 
 export class DestinationRegistry {
   private readonly db: DatabaseSync;
+  private readonly aliasResolver = new DestinationAliasResolver();
 
   constructor(
     dbPath: string,
@@ -194,11 +187,7 @@ export class DestinationRegistry {
   }
 
   resolve(query: string, userId = this.getCurrentUserId()): DeliveryDestination | undefined {
-    const normalized = normalize(query);
-    return this.list(userId).find((item) => {
-      const candidates = [item.label, ...item.aliases].map((entry) => normalize(entry));
-      return candidates.some((entry) => entry === normalized || normalized.includes(entry) || entry.includes(normalized));
-    });
+    return this.aliasResolver.resolve(query, this.list(userId));
   }
 
   renderList(userId = this.getCurrentUserId()): string {

@@ -5,19 +5,24 @@ import { BriefingPrivacyPolicy } from "../briefing-privacy-policy.js";
 import { BriefingProfileService } from "../briefing-profile-service.js";
 import { CommandCenterService } from "../command-center/command-center-service.js";
 import { DestinationRegistry } from "../destination-registry.js";
+import { FinanceReviewService } from "../finance/finance-review-service.js";
+import { MissionReviewService } from "../missions/mission-review.js";
+import { MissionService } from "../missions/mission-service.js";
 import { PersonalOSService } from "../personal-os.js";
 import { ProfessionBootstrapService } from "../profession-bootstrap-service.js";
 import { ProfessionPackService } from "../profession-pack-service.js";
+import { RelationshipService } from "../relationship/relationship-service.js";
 import { SharedBriefingComposer } from "../shared-briefing-composer.js";
+import { TimeOsService } from "../time-os-service.js";
 import { UserRoleProfileService } from "../user-role-profile-service.js";
 import type { AutonomyLayer, IntegrationsLayer, IntelligenceLayer, OsLayer, StorageLayer } from "./types.js";
 
 export function createOsLayer(
   config: AppConfig,
   logger: Logger,
-  storage: Pick<StorageLayer, "approvals" | "workflows" | "memory" | "memoryEntities" | "personalMemory" | "goalStore" | "growthOps">,
+  storage: Pick<StorageLayer, "approvals" | "workflows" | "memory" | "memoryEntities" | "personalMemory" | "goalStore" | "growthOps" | "financeStore" | "relationshipStore" | "missionStore" | "contacts">,
   autonomy: Pick<AutonomyLayer, "autonomySuggestions" | "autonomyLoop" | "commitments">,
-  intelligence: Pick<IntelligenceLayer, "approvalPolicy" | "entityLinker" | "contextMemory">,
+  intelligence: Pick<IntelligenceLayer, "approvalPolicy" | "entityLinker" | "contextMemory" | "graphIngestion">,
   integrations: Pick<IntegrationsLayer, "googleWorkspaces" | "emailAccounts" | "communicationRouter" | "founderOps" | "googleWorkspace" | "email" | "accountLinking">,
 ): OsLayer {
   const approvalEngine = new ApprovalEngine(
@@ -75,6 +80,32 @@ export function createOsLayer(
     email: integrations.email,
     whatsappConfig: config.whatsapp,
   }, logger.child({ scope: "command-center" }));
+  const timeOs = new TimeOsService(
+    personalOs,
+    logger.child({ scope: "time-os" }),
+  );
+  const financeReview = new FinanceReviewService(
+    storage.financeStore,
+    logger.child({ scope: "finance-review" }),
+  );
+  const relationships = new RelationshipService(
+    storage.relationshipStore,
+    storage.growthOps,
+    storage.contacts,
+    autonomy.commitments,
+    logger.child({ scope: "relationships" }),
+    intelligence.graphIngestion,
+  );
+  const missions = new MissionService(
+    storage.missionStore,
+    autonomy.commitments,
+    logger.child({ scope: "missions" }),
+    intelligence.graphIngestion,
+  );
+  const missionReview = new MissionReviewService(
+    storage.missionStore,
+    logger.child({ scope: "mission-review" }),
+  );
 
   return {
     approvalEngine,
@@ -87,5 +118,10 @@ export function createOsLayer(
     briefingPrivacyPolicy,
     sharedBriefingComposer,
     commandCenter,
+    timeOs,
+    financeReview,
+    relationships,
+    missions,
+    missionReview,
   };
 }

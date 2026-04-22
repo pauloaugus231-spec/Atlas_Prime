@@ -7,9 +7,12 @@ import type { EmailDirectService } from "./email-direct-service.js";
 import type { ExternalIntelligenceDirectService } from "./external-intelligence-direct-service.js";
 import type { GoogleWorkspaceDirectService } from "./google-workspace-direct-service.js";
 import type { KnowledgeProjectDirectService } from "./knowledge-project-direct-service.js";
+import type { LifeManagementDirectService } from "./life-management-direct-service.js";
 import type { MemoryContactDirectService } from "./memory-contact-direct-service.js";
+import type { MissionDirectService } from "./mission-direct-service.js";
 import type { OperationalContextDirectService } from "./operational-context-direct-service.js";
 import type { OperationalReviewDirectService } from "./operational-review-direct-service.js";
+import type { ResearchKnowledgeDirectService } from "./research-knowledge-direct-service.js";
 import type { WorkflowDirectService } from "./workflow-direct-service.js";
 import type { WorkspaceMacDirectService } from "./workspace-mac-direct-service.js";
 
@@ -20,6 +23,9 @@ export interface AgentDirectServiceRegistryFactories {
   capabilityActionService: () => CapabilityActionService;
   capabilityInspectionService: () => CapabilityInspectionService;
   knowledgeProjectDirectService: () => KnowledgeProjectDirectService;
+  lifeManagementDirectService: () => LifeManagementDirectService;
+  missionDirectService: () => MissionDirectService;
+  researchKnowledgeDirectService: () => ResearchKnowledgeDirectService;
   operationalContextDirectService: () => OperationalContextDirectService;
   memoryContactDirectService: () => MemoryContactDirectService;
   workflowDirectService: () => WorkflowDirectService;
@@ -71,6 +77,18 @@ export class AgentDirectServiceRegistry {
 
   getKnowledgeProjectDirectService(): KnowledgeProjectDirectService {
     return this.resolve("knowledgeProjectDirectService");
+  }
+
+  getLifeManagementDirectService(): LifeManagementDirectService {
+    return this.resolve("lifeManagementDirectService");
+  }
+
+  getMissionDirectService(): MissionDirectService {
+    return this.resolve("missionDirectService");
+  }
+
+  getResearchKnowledgeDirectService(): ResearchKnowledgeDirectService {
+    return this.resolve("researchKnowledgeDirectService");
   }
 
   getOperationalContextDirectService(): OperationalContextDirectService {

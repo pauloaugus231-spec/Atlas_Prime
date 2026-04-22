@@ -28,6 +28,8 @@ export interface KnowledgeAndProjectDirectRouteDependencies {
   weather: DirectRouteHandler;
   internalKnowledgeLookup: DirectRouteHandler;
   webResearch: DirectRouteHandler;
+  researchDesk: DirectRouteHandler;
+  knowledgeGraph: DirectRouteHandler;
   revenueScoreboard: DirectRouteHandler;
   allowedSpaces: DirectRouteHandler;
   projectScan: DirectRouteHandler;
@@ -86,6 +88,8 @@ export function buildKnowledgeAndProjectDirectRoutes(
       deps.internalKnowledgeLookup,
     ),
     defineDirectRoute("web_research", "knowledge-project", deps.webResearch),
+    defineDirectRoute("research_desk", "knowledge-project", deps.researchDesk),
+    defineDirectRoute("knowledge_graph", "knowledge-project", deps.knowledgeGraph),
     defineDirectRoute(
       "revenue_scoreboard",
       "knowledge-project",

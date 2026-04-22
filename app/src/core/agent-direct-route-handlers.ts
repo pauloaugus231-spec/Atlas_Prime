@@ -164,9 +164,12 @@ import { ExternalIntelligenceDirectService } from "./external-intelligence-direc
 import { CapabilityActionService } from "./capability-action-service.js";
 import { CapabilityInspectionService } from "./capability-inspection-service.js";
 import { KnowledgeProjectDirectService } from "./knowledge-project-direct-service.js";
+import { LifeManagementDirectService } from "./life-management-direct-service.js";
 import { MemoryContactDirectService } from "./memory-contact-direct-service.js";
+import { MissionDirectService } from "./mission-direct-service.js";
 import { OperationalReviewDirectService } from "./operational-review-direct-service.js";
 import { OperationalContextDirectService } from "./operational-context-direct-service.js";
+import { ResearchKnowledgeDirectService } from "./research-knowledge-direct-service.js";
 import { WorkspaceMacDirectService } from "./workspace-mac-direct-service.js";
 import { WorkflowDirectService } from "./workflow-direct-service.js";
 import { ContentDirectService } from "./content-direct-service.js";
@@ -613,6 +616,9 @@ export interface AgentDirectRouteHandlersDependencies {
   getExternalIntelligenceDirectService: () => ExternalIntelligenceDirectService;
   getCapabilityInspectionService: () => CapabilityInspectionService;
   getKnowledgeProjectDirectService: () => KnowledgeProjectDirectService;
+  getLifeManagementDirectService: () => LifeManagementDirectService;
+  getMissionDirectService: () => MissionDirectService;
+  getResearchKnowledgeDirectService: () => ResearchKnowledgeDirectService;
   getOperationalContextDirectService: () => OperationalContextDirectService;
   getAutonomyDirectService: () => AutonomyDirectService;
   getMemoryContactDirectService: () => MemoryContactDirectService;
@@ -806,6 +812,18 @@ export class AgentDirectRouteHandlers {
           input.preferences,
         ),
         sharedBriefingPreview: async (input) => this.tryRunDirectSharedBriefingPreview(
+          input.activeUserPrompt,
+          input.requestId,
+          input.orchestration,
+          input.preferences,
+        ),
+        lifeManagement: async (input) => this.tryRunDirectLifeManagement(
+          input.activeUserPrompt,
+          input.requestId,
+          input.orchestration,
+          input.preferences,
+        ),
+        missionOs: async (input) => this.tryRunDirectMissionOs(
           input.activeUserPrompt,
           input.requestId,
           input.orchestration,
@@ -1059,6 +1077,18 @@ export class AgentDirectRouteHandlers {
           input.requestId,
           input.requestLogger,
           input.orchestration,
+        ),
+        researchDesk: async (input) => this.tryRunDirectResearchDesk(
+          input.activeUserPrompt,
+          input.requestId,
+          input.orchestration,
+          input.preferences,
+        ),
+        knowledgeGraph: async (input) => this.tryRunDirectKnowledgeGraph(
+          input.activeUserPrompt,
+          input.requestId,
+          input.orchestration,
+          input.preferences,
         ),
         revenueScoreboard: async (input) => this.tryRunDirectRevenueScoreboard(
           input.activeUserPrompt,
@@ -2276,6 +2306,62 @@ export class AgentDirectRouteHandlers {
     preferences: UserPreferences,
   ): Promise<AgentRunResult | null> {
     return this.deps.getOperationalContextDirectService().tryRunSharedBriefingPreview({
+      userPrompt,
+      requestId,
+      orchestration,
+      preferences,
+    });
+  }
+
+  async tryRunDirectLifeManagement(
+    userPrompt: string,
+    requestId: string,
+    orchestration: OrchestrationContext,
+    preferences: UserPreferences,
+  ): Promise<AgentRunResult | null> {
+    return this.deps.getLifeManagementDirectService().tryRun({
+      userPrompt,
+      requestId,
+      orchestration,
+      preferences,
+    });
+  }
+
+  tryRunDirectMissionOs(
+    userPrompt: string,
+    requestId: string,
+    orchestration: OrchestrationContext,
+    preferences: UserPreferences,
+  ): AgentRunResult | null {
+    return this.deps.getMissionDirectService().tryRun({
+      userPrompt,
+      requestId,
+      orchestration,
+      preferences,
+    });
+  }
+
+  async tryRunDirectResearchDesk(
+    userPrompt: string,
+    requestId: string,
+    orchestration: OrchestrationContext,
+    preferences: UserPreferences,
+  ): Promise<AgentRunResult | null> {
+    return this.deps.getResearchKnowledgeDirectService().tryRunResearch({
+      userPrompt,
+      requestId,
+      orchestration,
+      preferences,
+    });
+  }
+
+  tryRunDirectKnowledgeGraph(
+    userPrompt: string,
+    requestId: string,
+    orchestration: OrchestrationContext,
+    preferences: UserPreferences,
+  ): AgentRunResult | null {
+    return this.deps.getResearchKnowledgeDirectService().tryRunKnowledge({
       userPrompt,
       requestId,
       orchestration,

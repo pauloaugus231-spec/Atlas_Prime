@@ -65,4 +65,16 @@ export class AccountLinkingRenderer {
       ? `${provider.displayName} foi marcado como desconectado neste Atlas.`
       : `Não encontrei uma conexão ativa de ${provider.displayName}.`;
   }
+
+  renderAuthorized(result: {
+    provider: IntegrationProvider;
+    providerAccountId: string;
+    grantedScopes: string[];
+  }): string {
+    return [
+      `${result.provider.displayName}: conexão autorizada.`,
+      `Conta vinculada: ${result.providerAccountId}`,
+      `Escopos ativos: ${result.grantedScopes.length}`,
+    ].join("\n");
+  }
 }

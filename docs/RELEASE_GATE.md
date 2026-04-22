@@ -28,6 +28,14 @@ O gate executa uma suíte agregada com foco em:
 - memory candidates
 - briefing profiles
 - external reasoning bypass
+- human model
+- account linking foundation
+- destination registry e privacy/sharing
+- command center
+- life domains core
+- mission system
+- research desk
+- knowledge graph incremental
 - fluxo e2e crítico
 
 ## Política operacional

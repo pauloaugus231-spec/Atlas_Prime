@@ -33,14 +33,23 @@ import type { FileAccessPolicy } from "../file-access-policy.js";
 import type { FounderOpsService } from "../founder-ops.js";
 import type { GoalStore } from "../goal-store.js";
 import type { GrowthOpsStore } from "../growth-ops.js";
+import type { EntityStore } from "../knowledge-graph/entity-store.js";
+import type { GraphIngestionService } from "../knowledge-graph/graph-ingestion.js";
+import type { GraphQueryService } from "../knowledge-graph/graph-query.js";
+import type { RelationshipStore as KnowledgeRelationshipStore } from "../knowledge-graph/relationship-store.js";
 import type { AccountLinkingService } from "../account-linking/account-linking-service.js";
 import type { AccountConnectionStore } from "../account-linking/account-connection-store.js";
 import type { ConnectionSessionStore } from "../account-linking/connection-session-store.js";
 import type { OauthProviderRegistry } from "../account-linking/oauth-provider-registry.js";
 import type { ProviderPermissions } from "../account-linking/provider-permissions.js";
 import type { TokenVault } from "../account-linking/token-vault.js";
+import type { FinanceStore } from "../finance/finance-store.js";
+import type { FinanceReviewService } from "../finance/finance-review-service.js";
 import type { IntentRouter } from "../intent-router.js";
 import type { MemoryEntityStore } from "../memory-entity-store.js";
+import type { MissionReviewService } from "../missions/mission-review.js";
+import type { MissionService } from "../missions/mission-service.js";
+import type { MissionStore } from "../missions/mission-store.js";
 import type { OperationalMemoryStore } from "../operational-memory.js";
 import type { PersonalOperationalMemoryStore } from "../personal-operational-memory.js";
 import type { PersonalOSService } from "../personal-os.js";
@@ -48,11 +57,17 @@ import type { ProjectOpsService } from "../project-ops.js";
 import type { ProfessionBootstrapService } from "../profession-bootstrap-service.js";
 import type { ProfessionPackService } from "../profession-pack-service.js";
 import type { ReasoningEngine } from "../reasoning-engine.js";
+import type { RelationshipService } from "../relationship/relationship-service.js";
+import type { RelationshipStore } from "../relationship/relationship-store.js";
+import type { ResearchDeskService } from "../research/research-desk-service.js";
+import type { ResearchMemoryStore } from "../research/research-memory-store.js";
+import type { SourcePolicy } from "../research/source-policy.js";
 import type { RequestOrchestrator } from "../request-orchestrator.js";
 import type { ResponseOS } from "../response-os.js";
 import type { SafeExecService } from "../safe-exec.js";
 import type { SharedBriefingComposer } from "../shared-briefing-composer.js";
 import type { SocialAssistantStore } from "../social-assistant.js";
+import type { TimeOsService } from "../time-os-service.js";
 import type { ToolPluginRegistry } from "../plugin-registry.js";
 import type { UserRoleProfileService } from "../user-role-profile-service.js";
 import type { UserModelTracker } from "../user-model-tracker.js";
@@ -98,6 +113,12 @@ export interface StorageLayer {
   memoryEntities: MemoryEntityStore;
   whatsappMessages: WhatsAppMessageStore;
   workflows: WorkflowOrchestratorStore;
+  financeStore: FinanceStore;
+  relationshipStore: RelationshipStore;
+  missionStore: MissionStore;
+  researchMemory: ResearchMemoryStore;
+  knowledgeEntities: EntityStore;
+  knowledgeRelationships: KnowledgeRelationshipStore;
 }
 
 export interface AutonomyLayer {
@@ -123,6 +144,10 @@ export interface IntelligenceLayer {
   decisionsLoader: DecisionsLoader;
   intentRouter: IntentRouter;
   responseOs: ResponseOS;
+  sourcePolicy: SourcePolicy;
+  researchDesk: ResearchDeskService;
+  graphIngestion: GraphIngestionService;
+  graphQuery: GraphQueryService;
 }
 
 export interface IntegrationsLayer {
@@ -168,6 +193,11 @@ export interface OsLayer {
   briefingPrivacyPolicy: BriefingPrivacyPolicy;
   sharedBriefingComposer: SharedBriefingComposer;
   commandCenter: CommandCenterService;
+  timeOs: TimeOsService;
+  financeReview: FinanceReviewService;
+  relationships: RelationshipService;
+  missions: MissionService;
+  missionReview: MissionReviewService;
 }
 
 export interface RuntimeLayer {

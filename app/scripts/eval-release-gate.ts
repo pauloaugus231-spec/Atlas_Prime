@@ -13,6 +13,10 @@ const checks = [
   "eval:account-linking",
   "eval:destination-privacy",
   "eval:command-center",
+  "eval:life-domains",
+  "eval:missions",
+  "eval:research-desk",
+  "eval:knowledge-graph",
   "e2e:critical",
 ];
 

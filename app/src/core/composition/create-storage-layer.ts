@@ -4,11 +4,17 @@ import { ApprovalInboxStore } from "../approval-inbox.js";
 import { ClarificationInboxStore } from "../clarification-inbox.js";
 import { ContactIntelligenceStore } from "../contact-intelligence.js";
 import { ContentOpsStore } from "../content-ops.js";
+import { FinanceStore } from "../finance/finance-store.js";
 import { GoalStore } from "../goal-store.js";
 import { GrowthOpsStore } from "../growth-ops.js";
+import { EntityStore } from "../knowledge-graph/entity-store.js";
+import { RelationshipStore as KnowledgeRelationshipStore } from "../knowledge-graph/relationship-store.js";
 import { MemoryEntityStore } from "../memory-entity-store.js";
+import { MissionStore } from "../missions/mission-store.js";
 import { OperationalMemoryStore } from "../operational-memory.js";
 import { PersonalOperationalMemoryStore } from "../personal-operational-memory.js";
+import { RelationshipStore } from "../relationship/relationship-store.js";
+import { ResearchMemoryStore } from "../research/research-memory-store.js";
 import { SocialAssistantStore } from "../social-assistant.js";
 import { UserPreferencesStore } from "../user-preferences.js";
 import { WhatsAppMessageStore } from "../whatsapp-message-store.js";
@@ -68,6 +74,30 @@ export function createStorageLayer(config: AppConfig, logger: Logger): StorageLa
     workflows: new WorkflowOrchestratorStore(
       config.paths.workflowDbPath,
       logger.child({ scope: "workflow-orchestrator" }),
+    ),
+    financeStore: new FinanceStore(
+      config.paths.financeDbPath,
+      logger.child({ scope: "finance-store" }),
+    ),
+    relationshipStore: new RelationshipStore(
+      config.paths.relationshipDbPath,
+      logger.child({ scope: "relationship-store" }),
+    ),
+    missionStore: new MissionStore(
+      config.paths.missionDbPath,
+      logger.child({ scope: "mission-store" }),
+    ),
+    researchMemory: new ResearchMemoryStore(
+      config.paths.researchDbPath,
+      logger.child({ scope: "research-memory" }),
+    ),
+    knowledgeEntities: new EntityStore(
+      config.paths.knowledgeGraphDbPath,
+      logger.child({ scope: "knowledge-entities" }),
+    ),
+    knowledgeRelationships: new KnowledgeRelationshipStore(
+      config.paths.knowledgeGraphDbPath,
+      logger.child({ scope: "knowledge-relationships" }),
     ),
   };
 }

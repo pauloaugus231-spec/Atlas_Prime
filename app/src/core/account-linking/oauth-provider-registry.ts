@@ -2,6 +2,13 @@ import type { GoogleWorkspaceAuthService } from "../../integrations/google/googl
 import type { IntegrationProvider, IntegrationProviderId } from "../../types/integration-provider.js";
 import { ProviderPermissions } from "./provider-permissions.js";
 
+export interface ProviderAuthorizationResult {
+  providerAccountId: string;
+  providerEmail?: string;
+  grantedScopes: string[];
+  tokenPayload: unknown;
+}
+
 export interface ProviderRuntimeStatus {
   ready: boolean;
   configured: boolean;
@@ -63,6 +70,24 @@ export class OauthProviderRegistry {
         return this.googleAuth.createAuthUrl(scopes);
       default:
         return undefined;
+    }
+  }
+
+  async exchangeCode(provider: IntegrationProviderId, code: string): Promise<ProviderAuthorizationResult> {
+    switch (provider) {
+      case "google": {
+        const tokens = await this.googleAuth.exchangeCodeForTokens(code);
+        const grantedScopes = typeof tokens.scope === "string"
+          ? tokens.scope.split(/\s+/).map((item) => item.trim()).filter(Boolean)
+          : [];
+        return {
+          providerAccountId: "google-primary",
+          grantedScopes,
+          tokenPayload: tokens,
+        };
+      }
+      default:
+        throw new Error("Provider não suportado.");
     }
   }
 }

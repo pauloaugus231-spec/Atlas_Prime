@@ -106,6 +106,16 @@ export class ConnectionSessionStore {
     return mapRow(row);
   }
 
+  getById(id: string): ConnectionSession | undefined {
+    const row = this.db.prepare(`
+      SELECT *
+      FROM account_connection_sessions
+      WHERE id = ?
+      LIMIT 1
+    `).get(id) as SessionRow | undefined;
+    return mapRow(row);
+  }
+
   listRecent(userId: string, limit = 10): ConnectionSession[] {
     const rows = this.db.prepare(`
       SELECT *
