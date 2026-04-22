@@ -1,4 +1,5 @@
 import type { ApprovalInboxItemRecord } from "../types/approval-inbox.js";
+import type { PersonalOperationalProfile } from "../types/personal-operational-memory.js";
 import type { BriefingProfile, BriefingSectionKey } from "../types/briefing-profile.js";
 import type {
   ExecutiveBriefAutonomySuggestion,
@@ -8,7 +9,8 @@ import type {
   ExecutiveBriefWorkflow,
   ExecutiveMorningBrief,
 } from "./personal-os.js";
-import { DEFAULT_SELF_BRIEFING_SECTIONS } from "./briefing-profile-helpers.js";
+import { DEFAULT_SELF_BRIEFING_SECTIONS, createDefaultBriefingProfile } from "./briefing-profile-helpers.js";
+import { MorningBriefRenderer } from "./morning-brief-renderer.js";
 
 const INSTITUTIONAL_TERMS = ["cras", "creas", "caps", "domiciliados"];
 const HIGH_PRIORITIES = new Set(["alta", "urgent", "urgente"]);
@@ -210,29 +212,56 @@ function addSection(lines: string[], title: string, content: string[], maxLines:
 }
 
 export class BriefRenderer {
+  private readonly morningRenderer = new MorningBriefRenderer();
+
   render(brief: ExecutiveMorningBrief): string {
-    return this.renderInternal(brief, {
-      sections: DEFAULT_SELF_BRIEFING_SECTIONS,
-      compact: brief.overloadLevel === "pesado",
+    const profile = createDefaultBriefingProfile({
+      time: "06:00",
+      timezone: brief.timezone,
+      audience: "self",
+      style: brief.overloadLevel === "pesado" ? "compact" : "executive",
     });
+    return this.renderForProfile(brief, profile);
   }
 
   renderCompact(brief: ExecutiveMorningBrief): string {
-    return this.renderInternal(brief, {
-      sections: DEFAULT_SELF_BRIEFING_SECTIONS,
-      compact: true,
+    const profile = createDefaultBriefingProfile({
+      time: "06:00",
+      timezone: brief.timezone,
+      audience: "self",
+      style: "compact",
     });
+    return this.renderForProfile(brief, profile, undefined, { compact: true });
   }
 
-  renderForProfile(brief: ExecutiveMorningBrief, profile: BriefingProfile): string {
-    return this.renderInternal(brief, {
+  renderForProfile(
+    brief: ExecutiveMorningBrief,
+    profile: BriefingProfile,
+    personalProfile?: PersonalOperationalProfile,
+    options?: {
+      compact?: boolean;
+      operationalMode?: "field" | null;
+    },
+  ): string {
+    const purpose = profile.purpose ?? (profile.audience === "team" ? "team_update" : "daily_prep");
+    if (purpose === "daily_prep") {
+      return this.morningRenderer.render({
+        brief,
+        profile,
+        personalProfile,
+        compact: options?.compact,
+        operationalMode: options?.operationalMode,
+      });
+    }
+
+    return this.renderLegacyInternal(brief, {
       sections: profile.sections,
-      compact: profile.style === "compact" || (profile.style === "auto" && brief.overloadLevel === "pesado"),
+      compact: options?.compact === true || profile.style === "compact" || (profile.style === "auto" && brief.overloadLevel === "pesado"),
       preferDetailed: profile.style === "detailed",
     });
   }
 
-  private renderInternal(
+  private renderLegacyInternal(
     brief: ExecutiveMorningBrief,
     options: {
       sections: BriefingSectionKey[];

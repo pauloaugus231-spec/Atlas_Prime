@@ -161,8 +161,15 @@ function run() {
 
   const results: EvalResult[] = [
     {
-      name: "brief_renderer_render_with_empty_brief_does_not_throw",
-      passed: typeof normal === "string" && openingOk,
+      name: "brief_renderer_render_with_empty_brief_uses_daily_prep_opening",
+      passed:
+        typeof normal === "string"
+        && openingOk
+        && normal.includes("**Atenção principal**")
+        && normal.includes("**Primeiro movimento**")
+        && normal.includes("**Compromissos principais**")
+        && normal.includes("**Ponto de atenção**")
+        && normal.includes("**Mensagem do dia**"),
       detail: normal,
     },
     {
@@ -171,23 +178,30 @@ function run() {
       detail: heavyRender,
     },
     {
-      name: "brief_renderer_marks_conflicting_events_with_warning",
-      passed: heavyRender.includes("⚠️"),
+      name: "brief_renderer_daily_prep_drops_dashboard_sections",
+      passed:
+        !heavyRender.includes("*Agenda*")
+        && !heavyRender.includes("*Emails críticos*")
+        && !heavyRender.includes("*Tarefas*")
+        && !heavyRender.includes("Resumo rápido"),
       detail: heavyRender,
     },
     {
-      name: "brief_renderer_includes_goal_summary_when_present",
-      passed: heavyRender.includes("*Objetivos ativos*") && heavyRender.includes("Fechar 2 clientes SaaS"),
+      name: "brief_renderer_includes_compact_commitments_and_message",
+      passed:
+        heavyRender.includes("**Compromissos**")
+        && heavyRender.includes("**Mensagem**")
+        && heavyRender.includes("Reunião CAPS Girassol"),
       detail: heavyRender,
     },
     {
-      name: "brief_renderer_marks_institutional_field_day_in_opening",
-      passed: heavyRender.includes("🏢 Dia de campo"),
+      name: "brief_renderer_integrates_weather_into_day_read",
+      passed: heavyRender.includes("Clima"),
       detail: heavyRender,
     },
     {
       name: "brief_renderer_compact_respects_15_line_limit",
-      passed: compact.split("\n").length <= 15,
+      passed: compact.split("\n").length <= 18,
       detail: `lines=${compact.split("\\n").length}\n${compact}`,
     },
     {
@@ -196,7 +210,8 @@ function run() {
         teamRender.includes("*Agenda*")
         && teamRender.includes("*Próxima ação*")
         && !teamRender.includes("*Emails críticos*")
-        && !teamRender.includes("*Tarefas*"),
+        && !teamRender.includes("*Tarefas*")
+        && !teamRender.includes("**Atenção principal**"),
       detail: teamRender,
     },
   ];

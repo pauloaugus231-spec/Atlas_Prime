@@ -95,7 +95,7 @@ export class BriefingProfileService {
           personalProfile,
         })
       : undefined;
-    const reply = sharedResult?.reply ?? this.renderer.renderForProfile(brief, profile);
+    const reply = sharedResult?.reply ?? this.renderer.renderForProfile(brief, profile, personalProfile);
 
     this.logger.debug("Rendered briefing profile", {
       profileId: profile.id,

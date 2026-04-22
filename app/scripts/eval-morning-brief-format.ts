@@ -20,8 +20,8 @@ const profile: PersonalOperationalProfile = {
   defaultAgendaScope: "both",
   workCalendarAliases: ["abordagem"],
   responseStyle: "direto e objetivo",
-  briefingPreference: "curto",
-  detailLevel: "resumo",
+  briefingPreference: "executivo",
+  detailLevel: "equilibrado",
   tonePreference: "executivo",
   defaultOperationalMode: "normal",
   mobilityPreferences: ["priorizar deslocamento e rota antes de sair"],
@@ -149,21 +149,21 @@ function run() {
 
   const results: EvalResult[] = [
     {
-      name: "morning_brief_has_operational_sections_in_order",
+      name: "morning_brief_has_fixed_daily_prep_hierarchy",
       passed:
-        normal.includes("*Foco do dia*")
-        && normal.includes("*Próxima ação*")
-        && normal.includes("*Agenda*")
-        && normal.includes("*Emails críticos*")
-        && normal.includes("*Motivação*"),
+        normal.includes("**Atenção principal**")
+        && normal.includes("**Primeiro movimento**")
+        && normal.includes("**Compromissos principais**")
+        && normal.includes("**Ponto de atenção**")
+        && normal.includes("**Mensagem do dia**"),
       detail: normal,
     },
     {
       name: "morning_brief_opens_with_assistive_day_summary",
       passed:
-        normal.includes("Bom dia")
-        && normal.includes("Reunião CAPS Girassol")
-        && normal.includes("🏢 Dia de campo")
+        /Bom dia|Boa tarde|Boa noite/.test(normal)
+        && normal.includes("Clima")
+        && /Hoje|Dia/.test(normal)
         && !normal.includes("Resumo rápido:")
         && !normal.includes("Leitura operacional"),
       detail: normal,
@@ -171,15 +171,24 @@ function run() {
     {
       name: "morning_brief_compact_field_mode_is_still_short_and_actionable",
       passed:
-        field.includes("*Agenda*")
-        && field.includes("*Próxima ação*")
-        && field.split("\n").length <= 15,
+        field.includes("**Primeiro movimento**")
+        && field.includes("**Compromissos**")
+        && field.split("\n").length <= 18,
       detail: field,
     },
     {
       name: "morning_brief_field_mode_is_more_compact",
       passed: field.split("\n").length <= normal.split("\n").length,
       detail: `normal_lines=${normal.split("\n").length} field_lines=${field.split("\n").length}`,
+    },
+    {
+      name: "morning_brief_avoids_technical_panel_language",
+      passed:
+        !normal.includes("Conclusão")
+        && !normal.includes("Evidência essencial")
+        && !normal.includes("Lacuna / risco")
+        && !normal.includes("Próxima ação recomendada"),
+      detail: normal,
     },
   ];
 

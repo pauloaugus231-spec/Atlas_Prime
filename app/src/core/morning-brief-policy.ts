@@ -59,14 +59,15 @@ function formatTime(value: string | null | undefined, timezone: string): string 
 }
 
 function getPresentation(profile: BriefingProfile): Required<BriefingPresentationConfig> {
+  const sections = new Set(profile.sections ?? []);
   return {
     hierarchy: profile.presentation?.hierarchy ?? "daily_prep_v1",
     tone: profile.presentation?.tone ?? (profile.style === "compact" ? "compact_direct" : "human_firm"),
     maxPrimaryCommitments: profile.presentation?.maxPrimaryCommitments ?? 3,
-    weatherMode: profile.presentation?.weatherMode ?? "inline",
-    workflowMode: profile.presentation?.workflowMode ?? "if_priority",
-    emailMode: profile.presentation?.emailMode ?? "if_critical",
-    approvalMode: profile.presentation?.approvalMode ?? "if_urgent",
+    weatherMode: profile.presentation?.weatherMode ?? (sections.has("weather") ? "inline" : "hidden"),
+    workflowMode: profile.presentation?.workflowMode ?? (sections.has("workflows") ? "if_priority" : "hidden"),
+    emailMode: profile.presentation?.emailMode ?? (sections.has("emails") ? "if_critical" : "hidden"),
+    approvalMode: profile.presentation?.approvalMode ?? (sections.has("approvals") ? "if_urgent" : "hidden"),
     watchpointMode: profile.presentation?.watchpointMode ?? "operational_risk_first",
     compactWhenFieldMode: profile.presentation?.compactWhenFieldMode ?? true,
   };
@@ -165,19 +166,28 @@ function buildDayRead(
   return [base, weatherRead].filter(Boolean).join(" ");
 }
 
-function buildAttention(brief: ExecutiveMorningBrief): string {
+function buildAttention(
+  brief: ExecutiveMorningBrief,
+  presentation: Required<BriefingPresentationConfig>,
+): string {
   const pendingApprovals = brief.approvals.filter((item) => item.status === "pending");
   if (brief.conflictSummary.overlaps > 0) {
     return "Resolve primeiro os conflitos de agenda antes de assumir novas frentes.";
   }
-  if (pendingApprovals.length > 0) {
+  if (presentation.approvalMode !== "hidden" && pendingApprovals.length > 0) {
     return "Resolve primeiro o que depende da tua aprovação para não travar o resto do dia.";
   }
   if (brief.taskBuckets.overdue.length > 0) {
     return "Protege cedo a pendência atrasada que pode contaminar teu ritmo do dia.";
   }
-  if (hasUrgentEmail(brief)) {
+  if (presentation.emailMode !== "hidden" && hasUrgentEmail(brief)) {
     return "Responde cedo o ponto sensível que pode virar atraso se ficar para depois.";
+  }
+  if (presentation.workflowMode !== "hidden") {
+    const activeWorkflow = brief.workflows.find((item) => normalize(item.status) !== "concluido" && normalize(item.status) !== "completed");
+    if (activeWorkflow) {
+      return `Mantém visível o fluxo ${truncate(activeWorkflow.title, 72)} para ele não perder tração hoje.`;
+    }
   }
   if (hasFieldDay(brief)) {
     return "Prepara cedo o que exige rua, deslocamento ou material antes de abrir outras frentes.";
@@ -237,8 +247,10 @@ function rankEvent(event: ExecutiveBriefEvent): number {
     score += 3;
   }
   if (event.start) {
-    const time = Date.parse(event.start);
-    score += Number.isFinite(time) ? Math.max(0, 2 - Math.floor(time / (1000 * 60 * 60 * 8))) : 0;
+    const hour = Number.parseInt(event.start.slice(11, 13), 10);
+    if (Number.isFinite(hour)) {
+      score += hour <= 10 ? 2 : hour <= 14 ? 1 : 0;
+    }
   }
   return score;
 }
@@ -269,10 +281,10 @@ function buildWatchpoint(
   if (brief.taskBuckets.overdue.length > 0) {
     return `Há ${brief.taskBuckets.overdue.length} pendência(s) atrasada(s) que podem pesar teu ritmo se ficarem para mais tarde.`;
   }
-  if (pendingApprovals.length > 0) {
+  if (presentation.approvalMode !== "hidden" && pendingApprovals.length > 0) {
     return `Há ${pendingApprovals.length} aprovação(ões) pendente(s) que podem travar teu andamento se ficarem para depois.`;
   }
-  const urgentEmail = pickUrgentEmail(brief);
+  const urgentEmail = presentation.emailMode !== "hidden" ? pickUrgentEmail(brief) : undefined;
   if (urgentEmail) {
     return `Existe uma resposta importante esperando teu retorno: ${truncate(urgentEmail.subject, 72)}.`;
   }
@@ -308,7 +320,7 @@ export class MorningBriefPolicy {
     operationalMode?: "field" | null;
   }): MorningBriefPlan {
     const presentation = getPresentation(input.profile);
-    const fieldMode = input.operationalMode === "field" || hasFieldDay(input.brief) || input.personalProfile?.defaultOperationalMode === "field";
+    const fieldMode = input.operationalMode === "field" || input.personalProfile?.defaultOperationalMode === "field";
     const prefersCompact = input.profile.style === "compact"
       || input.personalProfile?.briefingPreference === "curto"
       || (input.profile.style === "auto" && input.brief.overloadLevel === "pesado");
@@ -321,7 +333,7 @@ export class MorningBriefPolicy {
       variant,
       greeting: buildGreeting(input.brief, input.personalProfile),
       dayRead: buildDayRead(input.brief, presentation),
-      attention: buildAttention(input.brief),
+      attention: buildAttention(input.brief, presentation),
       firstMove: buildFirstMove(input.brief),
       commitments: buildCommitments(input.brief, {
         ...presentation,

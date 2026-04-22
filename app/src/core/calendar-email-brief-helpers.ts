@@ -3,6 +3,11 @@ import type { EmailMessageSummary } from "../integrations/email/email-reader.js"
 import type { CalendarListSummary, DailyOperationalBrief, TaskSummary } from "../integrations/google/google-workspace.js";
 import type { GoogleWorkspaceService } from "../integrations/google/google-workspace.js";
 import { BriefRenderer } from "./brief-renderer.js";
+import {
+  createDefaultBriefingProfile,
+  findDefaultBriefingProfile,
+  syncBriefingProfilesWithLegacyProfile,
+} from "./briefing-profile-helpers.js";
 import type { FounderOpsSnapshot } from "./founder-ops.js";
 import { isGoogleEventCreatePrompt, isGoogleTaskCreatePrompt } from "./google-draft-utils.js";
 import {
@@ -1623,6 +1628,20 @@ export function buildMorningBriefReply(
   },
 ): string {
   const renderer = new BriefRenderer();
+  if (options?.profile) {
+    const profiles = syncBriefingProfilesWithLegacyProfile(options.profile);
+    const profile = findDefaultBriefingProfile(profiles)
+      ?? createDefaultBriefingProfile({
+        time: options.profile.morningBriefTime ?? "06:30",
+        timezone: options.profile.timezone,
+        style: options.compact === true || options.operationalMode === "field" ? "compact" : "executive",
+        audience: "self",
+      });
+    return renderer.renderForProfile(input, profile, options.profile, {
+      compact: options.compact,
+      operationalMode: options.operationalMode,
+    });
+  }
   if (options?.compact === true || options?.operationalMode === "field") {
     return renderer.renderCompact(input);
   }
